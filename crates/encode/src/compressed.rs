@@ -7,7 +7,8 @@ use burli_core::{
 };
 
 const MAX_LITERAL_ONLY_QUALITY: u8 = 5;
-const COMMAND_INSERT_ONE_COPY_TWO: u16 = 8;
+const MAX_META_BLOCK_SIZE: usize = 1 << 24;
+const CODE_LENGTH_ORDER: [u8; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
     if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
@@ -23,8 +24,8 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
         return Ok(writer.into_bytes());
     }
 
-    for &byte in input {
-        write_compressed_literal_meta_block(&mut writer, byte)?;
+    for chunk in input.chunks(MAX_META_BLOCK_SIZE) {
+        write_compressed_literal_meta_block(&mut writer, chunk)?;
     }
     write_last_empty_meta_block(&mut writer)?;
 
@@ -32,7 +33,9 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
 }
 
 fn max_literal_only_size(input_len: usize) -> usize {
-    input_len.saturating_mul(12).saturating_add(2)
+    input_len
+        .saturating_add(input_len / 1024)
+        .saturating_add(64)
 }
 
 fn write_window_bits(writer: &mut BitWriter, window_bits: u8) -> Result<(), CompressError> {
@@ -55,9 +58,16 @@ fn write_window_bits(writer: &mut BitWriter, window_bits: u8) -> Result<(), Comp
 
 fn write_compressed_literal_meta_block(
     writer: &mut BitWriter,
-    literal: u8,
+    input: &[u8],
 ) -> Result<(), CompressError> {
-    write_meta_block_len(writer, 1)?;
+    if input.is_empty() || input.len() > MAX_META_BLOCK_SIZE {
+        return Err(BurliError::Format("invalid compressed Brotli block size"));
+    }
+
+    let insert = insert_length_code(input.len())?;
+    let command_symbol = command_symbol_for_insert(insert.code)?;
+
+    write_meta_block_len(writer, input.len())?;
     write_var_len_u8(writer, 0)?;
     write_var_len_u8(writer, 0)?;
     write_var_len_u8(writer, 0)?;
@@ -66,9 +76,14 @@ fn write_compressed_literal_meta_block(
     writer.write_bits(2, 0)?;
     write_var_len_u8(writer, 0)?;
     write_var_len_u8(writer, 0)?;
-    write_simple_prefix_code_single(writer, 256, u16::from(literal))?;
-    write_simple_prefix_code_single(writer, 704, COMMAND_INSERT_ONE_COPY_TWO)?;
-    write_simple_prefix_code_single(writer, 64, 0)
+    write_fixed_literal_prefix_code(writer)?;
+    write_simple_prefix_code_single(writer, 704, command_symbol)?;
+    write_simple_prefix_code_single(writer, 64, 0)?;
+    writer.write_bits(insert.extra_bits, insert.extra)?;
+    for &literal in input {
+        writer.write_bits(8, u64::from(reverse_bits(literal, 8)))?;
+    }
+    Ok(())
 }
 
 fn write_meta_block_len(writer: &mut BitWriter, len: usize) -> Result<(), CompressError> {
@@ -95,6 +110,84 @@ fn write_var_len_u8(writer: &mut BitWriter, value: usize) -> Result<(), Compress
     writer.write_bits(1, 1)?;
     writer.write_bits(3, u64::from(width))?;
     writer.write_bits(width as u8, (value - (1_usize << width)) as u64)
+}
+
+fn write_fixed_literal_prefix_code(writer: &mut BitWriter) -> Result<(), CompressError> {
+    writer.write_bits(2, 0)?;
+    for symbol in CODE_LENGTH_ORDER {
+        let len = if symbol == 8 { 1 } else { 0 };
+        write_code_length_code_len(writer, len)?;
+    }
+    Ok(())
+}
+
+fn write_code_length_code_len(writer: &mut BitWriter, len: u8) -> Result<(), CompressError> {
+    match len {
+        0 => writer.write_bits(2, 0),
+        1 => writer.write_bits(4, 7),
+        _ => Err(BurliError::Format("unsupported Brotli code length code")),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct InsertLengthCode {
+    code: usize,
+    extra_bits: u8,
+    extra: u64,
+}
+
+fn insert_length_code(len: usize) -> Result<InsertLengthCode, CompressError> {
+    for code in 0..=23 {
+        let (base, extra_bits) = insert_length_prefix(code)?;
+        let span = 1_usize << extra_bits;
+        if (base..base + span).contains(&len) {
+            return Ok(InsertLengthCode {
+                code,
+                extra_bits,
+                extra: (len - base) as u64,
+            });
+        }
+    }
+    Err(BurliError::Format("Brotli insert length exceeds range"))
+}
+
+fn insert_length_prefix(code: usize) -> Result<(usize, u8), CompressError> {
+    match code {
+        0..=5 => Ok((code, 0)),
+        6..=7 => Ok((6 + (code - 6) * 2, 1)),
+        8..=9 => Ok((10 + (code - 8) * 4, 2)),
+        10..=11 => Ok((18 + (code - 10) * 8, 3)),
+        12..=13 => Ok((34 + (code - 12) * 16, 4)),
+        14..=15 => Ok((66 + (code - 14) * 32, 5)),
+        16 => Ok((130, 6)),
+        17 => Ok((194, 7)),
+        18 => Ok((322, 8)),
+        19 => Ok((578, 9)),
+        20 => Ok((1090, 10)),
+        21 => Ok((2114, 12)),
+        22 => Ok((6210, 14)),
+        23 => Ok((22594, 24)),
+        _ => Err(BurliError::Format("invalid Brotli insert length code")),
+    }
+}
+
+fn command_symbol_for_insert(insert_code: usize) -> Result<u16, CompressError> {
+    let symbol = match insert_code {
+        0..=7 => insert_code * 8,
+        8..=15 => 256 + (insert_code - 8) * 8,
+        16..=23 => 448 + (insert_code - 16) * 8,
+        _ => return Err(BurliError::Format("invalid Brotli insert length code")),
+    };
+    Ok(symbol as u16)
+}
+
+fn reverse_bits(value: u8, width: u8) -> u8 {
+    let mut reversed = 0;
+    for bit in 0..width {
+        reversed <<= 1;
+        reversed |= (value >> bit) & 1;
+    }
+    reversed
 }
 
 fn write_simple_prefix_code_single(
@@ -136,5 +229,23 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), b"x");
+    }
+
+    #[test]
+    fn q1_round_trips_mixed_literals() {
+        let input = b"function demo(){return 42;}";
+        let encoded =
+            compress_with_options(input, &Options::default().quality(1).unwrap()).unwrap();
+
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q5_round_trips_long_literal_run() {
+        let input = vec![b'a'; 3000];
+        let encoded =
+            compress_with_options(&input, &Options::default().quality(5).unwrap()).unwrap();
+
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 }
