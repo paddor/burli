@@ -167,7 +167,13 @@ fn stream_decoder_empty_read_does_not_consume_input() {
 #[test]
 #[cfg(feature = "std")]
 fn stream_decoder_emits_before_consuming_full_input() {
-    let input = vec![42_u8; (1 << 16) * 3 + 4096];
+    let mut state = 0x1234_5678_u32;
+    let input = (0..((1 << 16) * 3 + 4096))
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 24) as u8
+        })
+        .collect::<Vec<_>>();
     let options = Options::default()
         .quality(0)
         .unwrap()

@@ -103,6 +103,8 @@ struct Config {
 #[derive(Clone, Deserialize)]
 struct BenchRow {
     codec: String,
+    encoded_by: Option<String>,
+    decoded_by: Option<String>,
     input: String,
     quality: u8,
     input_size: usize,
@@ -534,6 +536,9 @@ fn load_rows_from_path(
             continue;
         };
         if row.codec != codec {
+            continue;
+        }
+        if row.encoded_by.as_deref() != Some(codec) || row.decoded_by.as_deref() != Some(codec) {
             continue;
         }
         if quality.is_some_and(|quality| row.quality != quality) {
@@ -2296,4 +2301,44 @@ fn small_envelope(
         hi.push((map_x(SMALL_SIZES[i]), map_y(max)));
     }
     (lo, hi)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn chart_loader_requires_same_codec_encode_decode_provenance() -> Result<(), Box<dyn Error>> {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        path.push(format!(
+            "burli_chart_provenance_{}_{}.jsonl",
+            std::process::id(),
+            nanos
+        ));
+        let old_row = row_json("", "", 1);
+        let cross_row = row_json(
+            r#""encoded_by":"google-brotli","#,
+            r#""decoded_by":"burli","#,
+            2,
+        );
+        let good_row = row_json(r#""encoded_by":"burli","#, r#""decoded_by":"burli","#, 3);
+        std::fs::write(&path, format!("{old_row}\n{cross_row}\n{good_row}\n"))?;
+
+        let mut out = BTreeMap::new();
+        load_rows_from_path(&path, "burli", Some(5), Some(false), None, &mut out);
+        let _ = std::fs::remove_file(&path);
+
+        let rows = out.get("burli").expect("accepted row");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].timestamp_secs, 3);
+        Ok(())
+    }
+
+    fn row_json(encoded_by: &str, decoded_by: &str, timestamp_secs: u64) -> String {
+        format!(
+            r#"{{"codec":"burli",{encoded_by}{decoded_by}"input":"jquery","quality":5,"input_size":1000,"compressed_size":500,"compress_ns":10.0,"decompress_ns":20.0,"is_small":false,"timestamp_secs":{timestamp_secs}}}"#
+        )
+    }
 }

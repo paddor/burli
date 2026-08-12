@@ -55,6 +55,8 @@ struct BenchInput {
 #[derive(Serialize)]
 struct BenchResult {
     codec: String,
+    encoded_by: String,
+    decoded_by: String,
     input: String,
     quality: u8,
     input_size: usize,
@@ -385,8 +387,11 @@ fn bench_codec(
         _ => unreachable!(),
     });
 
+    let codec = codec_label(codec);
     Ok(Some(BenchResult {
-        codec: codec_label(codec),
+        codec: codec.clone(),
+        encoded_by: codec.clone(),
+        decoded_by: codec.clone(),
         input: input.name.clone(),
         quality,
         input_size: input.data.len(),

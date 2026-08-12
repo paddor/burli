@@ -11,8 +11,11 @@ const MAX_META_BLOCK_SIZE: usize = 1 << 24;
 const MIN_MATCH_BYTES: usize = 4;
 const LITERAL_ALPHABET_SIZE: usize = 256;
 const COMMAND_ALPHABET_SIZE: usize = 704;
+const CODE_LENGTH_ALPHABET_SIZE: usize = 18;
+const MAX_CODE_BITS: u8 = 15;
 const CODE_LENGTH_ORDER: [u8; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const MAX_SIMPLE_PREFIX_SYMBOLS: usize = 4;
+const INITIAL_LAST_DISTANCE: usize = 4;
 
 pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
     if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
@@ -33,7 +36,7 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
 
     let compressed = writer.into_bytes();
     let stored_options = options.clone().quality(0)?;
-    let stored = crate::stored::compress_with_options(input, &stored_options)?;
+    let stored = crate::stored::compress_stored_with_options(input, &stored_options)?;
     if stored.len() < compressed.len() {
         Ok(stored)
     } else {
@@ -106,8 +109,12 @@ fn write_compressed_meta_blocks(
     input: &[u8],
     options: &Options,
 ) -> Result<(), CompressError> {
-    let block_bits = options.block_bits_value().unwrap_or(MIN_BLOCK_BITS);
-    let block_size = (1_usize << block_bits).min(MAX_META_BLOCK_SIZE);
+    let block_size = match options.block_bits_value() {
+        Some(bits) => 1_usize << bits,
+        None if options.quality_value() == 0 => MAX_META_BLOCK_SIZE,
+        None => 1_usize << MIN_BLOCK_BITS,
+    }
+    .min(MAX_META_BLOCK_SIZE);
     let max_backward_distance = (1_usize << options.window_bits_value()) - 16;
 
     for chunk in input.chunks(block_size) {
@@ -145,6 +152,7 @@ struct Token {
     insert_len: usize,
     copy_len: usize,
     distance: usize,
+    use_last_distance: bool,
 }
 
 impl Token {
@@ -167,7 +175,7 @@ fn collect_tokens(input: &[u8], quality: u8, max_backward_distance: usize) -> Ve
     let mut insert_start = 0;
 
     while pos + MIN_MATCH_BYTES <= input.len() {
-        let key = hash4(input, pos) & table_mask;
+        let key = hash_key(input, pos, quality) & table_mask;
         let previous = table[key];
         table[key] = pos;
 
@@ -184,7 +192,16 @@ fn collect_tokens(input: &[u8], quality: u8, max_backward_distance: usize) -> Ve
                     insert_len: pos - insert_start,
                     copy_len,
                     distance: pos - previous,
+                    use_last_distance: false,
                 });
+                store_match_range(
+                    input,
+                    quality,
+                    &mut table,
+                    table_mask,
+                    pos + 1,
+                    copy_len.saturating_sub(1),
+                );
                 pos += copy_len;
                 insert_start = pos;
                 continue;
@@ -200,10 +217,51 @@ fn collect_tokens(input: &[u8], quality: u8, max_backward_distance: usize) -> Ve
             insert_len: input.len() - insert_start,
             copy_len: 0,
             distance: 0,
+            use_last_distance: false,
         });
     }
 
+    mark_last_distance_tokens(&mut tokens);
     tokens
+}
+
+fn store_match_range(
+    input: &[u8],
+    quality: u8,
+    table: &mut [usize],
+    table_mask: usize,
+    start: usize,
+    copy_len: usize,
+) {
+    let end = start
+        .saturating_add(copy_len)
+        .min(input.len().saturating_sub(MIN_MATCH_BYTES - 1));
+    for pos in start..end {
+        let key = hash_key(input, pos, quality) & table_mask;
+        table[key] = pos;
+    }
+}
+
+fn mark_last_distance_tokens(tokens: &mut [Token]) {
+    let mut last_distance = INITIAL_LAST_DISTANCE;
+    for token in tokens {
+        if !token.is_copy() {
+            continue;
+        }
+        token.use_last_distance =
+            token.distance == last_distance && token_supports_last_distance(*token);
+        last_distance = token.distance;
+    }
+}
+
+fn token_supports_last_distance(token: Token) -> bool {
+    let Ok(insert) = insert_length_code(token.insert_len) else {
+        return false;
+    };
+    let Ok(copy) = copy_length_code(token.copy_len) else {
+        return false;
+    };
+    insert.code < 8 && copy.code < 16
 }
 
 fn write_token_batches(
@@ -221,42 +279,24 @@ fn write_token_batches(
 }
 
 fn token_batch_end(tokens: &[Token]) -> usize {
-    let mut command_symbols = Vec::new();
-    let mut distance_symbols = Vec::new();
     let mut block_len = 0_usize;
 
     for (index, &token) in tokens.iter().enumerate() {
-        let Ok(command_symbol) = token_command_symbol(token) else {
+        if token_command_symbol(token).is_err() {
             return index.max(1);
-        };
-        let distance_symbol = if token.is_copy() {
-            match distance_code(token.distance) {
-                Ok(distance) => Some(distance.symbol),
-                Err(_) => return index.max(1),
-            }
-        } else {
-            None
-        };
+        }
+        if token.is_copy() && distance_code(token.distance).is_err() {
+            return index.max(1);
+        }
         let next_len = block_len.saturating_add(token.block_len());
-        if next_len > MAX_META_BLOCK_SIZE
-            || would_exceed_unique(&command_symbols, command_symbol)
-            || distance_symbol.is_some_and(|symbol| would_exceed_unique(&distance_symbols, symbol))
-        {
+        if next_len > MAX_META_BLOCK_SIZE {
             return index.max(1);
         }
 
-        push_unique(&mut command_symbols, command_symbol);
-        if let Some(symbol) = distance_symbol {
-            push_unique(&mut distance_symbols, symbol);
-        }
         block_len = next_len;
     }
 
     tokens.len()
-}
-
-fn would_exceed_unique(symbols: &[u16], symbol: u16) -> bool {
-    !symbols.contains(&symbol) && symbols.len() == MAX_SIMPLE_PREFIX_SYMBOLS
 }
 
 fn push_unique(symbols: &mut Vec<u16>, symbol: u16) {
@@ -267,7 +307,8 @@ fn push_unique(symbols: &mut Vec<u16>, symbol: u16) {
 
 fn min_match_len(quality: u8) -> usize {
     match quality {
-        0 | 1 => 64,
+        0 => 5,
+        1 => 64,
         2 => 48,
         3 => 32,
         4 => 24,
@@ -278,10 +319,10 @@ fn min_match_len(quality: u8) -> usize {
 fn hash_table_size(quality: u8) -> usize {
     1_usize
         << match quality {
-            0 | 1 => 12,
+            0 | 4 => 15,
+            1 => 12,
             2 => 13,
             3 => 14,
-            4 => 15,
             _ => 16,
         }
 }
@@ -289,6 +330,23 @@ fn hash_table_size(quality: u8) -> usize {
 fn hash4(input: &[u8], pos: usize) -> usize {
     let word = u32::from_le_bytes([input[pos], input[pos + 1], input[pos + 2], input[pos + 3]]);
     ((word.wrapping_mul(0x1e35_a7bd)) >> 16) as usize
+}
+
+fn hash_key(input: &[u8], pos: usize, quality: u8) -> usize {
+    if quality == 0 && pos + 8 <= input.len() {
+        let word = u64::from_le_bytes([
+            input[pos],
+            input[pos + 1],
+            input[pos + 2],
+            input[pos + 3],
+            input[pos + 4],
+            input[pos + 5],
+            input[pos + 6],
+            input[pos + 7],
+        ]);
+        return (((word << 24).wrapping_mul(0x1e35_a7bd)) >> 49) as usize;
+    }
+    hash4(input, pos)
 }
 
 fn match_len(input: &[u8], previous: usize, pos: usize, max_len: usize) -> usize {
@@ -312,7 +370,12 @@ fn write_compressed_literal_meta_block(
 
     write_meta_block_len(writer, input.len())?;
     write_block_and_context_header(writer)?;
-    let literal_codes = write_literal_prefix_code(writer, core::slice::from_ref(&input))?;
+    let literal_symbols = input
+        .iter()
+        .map(|&literal| u16::from(literal))
+        .collect::<Vec<_>>();
+    let literal_codes =
+        write_prefix_code_from_symbols(writer, LITERAL_ALPHABET_SIZE, &literal_symbols)?;
     write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, command_symbol)?;
     write_simple_prefix_code_single(writer, 64, 0)?;
     writer.write_bits(insert.extra_bits, insert.extra)?;
@@ -332,12 +395,18 @@ fn write_token_batch(
         return Err(BurliError::Format("invalid compressed Brotli block size"));
     }
 
+    let mut literal_symbols = Vec::new();
     let mut command_symbols = Vec::new();
     let mut distance_symbols = Vec::new();
     for &token in tokens {
-        push_unique(&mut command_symbols, token_command_symbol(token)?);
-        if token.is_copy() {
-            push_unique(&mut distance_symbols, distance_code(token.distance)?.symbol);
+        literal_symbols.extend(
+            input[token.insert_start..token.insert_start + token.insert_len]
+                .iter()
+                .map(|&literal| u16::from(literal)),
+        );
+        command_symbols.push(token_command_symbol(token)?);
+        if token.is_copy() && !token.use_last_distance {
+            distance_symbols.push(distance_code(token.distance)?.symbol);
         }
     }
     if distance_symbols.is_empty() {
@@ -346,10 +415,11 @@ fn write_token_batch(
 
     write_meta_block_len(writer, block_len)?;
     write_block_and_context_header(writer)?;
-    let literal_codes = write_batch_literal_prefix_code(writer, input, tokens)?;
+    let literal_codes =
+        write_prefix_code_from_symbols(writer, LITERAL_ALPHABET_SIZE, &literal_symbols)?;
     let command_codes =
-        write_simple_prefix_code_symbols(writer, COMMAND_ALPHABET_SIZE, &command_symbols)?;
-    let distance_codes = write_simple_prefix_code_symbols(writer, 64, &distance_symbols)?;
+        write_prefix_code_from_symbols(writer, COMMAND_ALPHABET_SIZE, &command_symbols)?;
+    let distance_codes = write_prefix_code_from_symbols(writer, 64, &distance_symbols)?;
 
     for &token in tokens {
         let insert = insert_length_code(token.insert_len)?;
@@ -370,7 +440,7 @@ fn write_token_batch(
             write_literal(writer, &literal_codes, literal)?;
         }
 
-        if token.is_copy() {
+        if token.is_copy() && !token.use_last_distance {
             let distance = distance_code(token.distance)?;
             let distance_code = symbol_code(&distance_codes, distance.symbol)?;
             writer.write_bits(distance_code.len, u64::from(distance_code.bits))?;
@@ -434,90 +504,233 @@ fn write_var_len_u8(writer: &mut BitWriter, value: usize) -> Result<(), Compress
     writer.write_bits(width as u8, (value - (1_usize << width)) as u64)
 }
 
-fn write_fixed_literal_prefix_code(writer: &mut BitWriter) -> Result<(), CompressError> {
-    writer.write_bits(2, 0)?;
-    for symbol in CODE_LENGTH_ORDER {
-        let len = if symbol == 8 { 1 } else { 0 };
-        write_code_length_code_len(writer, len)?;
-    }
-    Ok(())
-}
-
 fn write_code_length_code_len(writer: &mut BitWriter, len: u8) -> Result<(), CompressError> {
     match len {
         0 => writer.write_bits(2, 0),
         1 => writer.write_bits(4, 7),
+        2 => writer.write_bits(3, 3),
+        3 => writer.write_bits(2, 2),
+        4 => writer.write_bits(2, 1),
+        5 => writer.write_bits(4, 15),
         _ => Err(BurliError::Format("unsupported Brotli code length code")),
     }
 }
 
+fn write_prefix_code_from_symbols(
+    writer: &mut BitWriter,
+    alphabet_size: usize,
+    symbols: &[u16],
+) -> Result<Vec<SymbolCode>, CompressError> {
+    if symbols.is_empty() {
+        return write_simple_prefix_code_symbols(writer, alphabet_size, &[0]);
+    }
+
+    let mut frequencies = vec![0_usize; alphabet_size];
+    for &symbol in symbols {
+        let index = usize::from(symbol);
+        if index >= alphabet_size {
+            return Err(BurliError::Format("Brotli prefix symbol exceeds alphabet"));
+        }
+        frequencies[index] += 1;
+    }
+
+    let mut used = frequencies
+        .iter()
+        .enumerate()
+        .filter_map(|(symbol, &frequency)| (frequency != 0).then_some((symbol as u16, frequency)))
+        .collect::<Vec<_>>();
+    if used.len() <= MAX_SIMPLE_PREFIX_SYMBOLS {
+        let symbols = used.iter().map(|&(symbol, _)| symbol).collect::<Vec<_>>();
+        return write_simple_prefix_code_symbols(writer, alphabet_size, &symbols);
+    }
+
+    let lengths = huffman_code_lengths(&frequencies, MAX_CODE_BITS)
+        .unwrap_or_else(|| balanced_code_lengths(alphabet_size, &mut used, MAX_CODE_BITS));
+
+    write_complex_prefix_code_lengths(writer, &lengths)?;
+    Ok(symbol_codes_from_lengths(&lengths))
+}
+
+fn balanced_code_lengths(alphabet_size: usize, used: &mut [(u16, usize)], max_bits: u8) -> Vec<u8> {
+    used.sort_by(
+        |&(left_symbol, left_frequency), &(right_symbol, right_frequency)| {
+            right_frequency
+                .cmp(&left_frequency)
+                .then_with(|| left_symbol.cmp(&right_symbol))
+        },
+    );
+
+    let mut lengths = vec![0_u8; alphabet_size];
+    let base_bits = ceil_log2(used.len()).unwrap().min(max_bits);
+    let short_count = (1_usize << base_bits) - used.len();
+    for (rank, &(symbol, _)) in used.iter().enumerate() {
+        lengths[usize::from(symbol)] = if rank < short_count {
+            base_bits - 1
+        } else {
+            base_bits
+        };
+    }
+    lengths
+}
+
 #[derive(Clone, Debug)]
-enum LiteralCodes {
-    Fixed,
-    Simple(Vec<SymbolCode>),
+struct HuffmanNode {
+    frequency: u64,
+    min_symbol: u16,
+    parent: Option<usize>,
 }
 
-fn write_batch_literal_prefix_code(
-    writer: &mut BitWriter,
-    input: &[u8],
-    tokens: &[Token],
-) -> Result<LiteralCodes, CompressError> {
-    let mut symbols = Vec::new();
-    for token in tokens {
-        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            push_unique(&mut symbols, u16::from(literal));
-            if symbols.len() > MAX_SIMPLE_PREFIX_SYMBOLS {
-                write_fixed_literal_prefix_code(writer)?;
-                return Ok(LiteralCodes::Fixed);
-            }
+fn huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Option<Vec<u8>> {
+    let mut nodes = Vec::new();
+    let mut active = Vec::new();
+    let mut leaves = Vec::new();
+
+    for (symbol, &frequency) in frequencies.iter().enumerate() {
+        if frequency == 0 {
+            continue;
         }
+        let index = nodes.len();
+        nodes.push(HuffmanNode {
+            frequency: frequency as u64,
+            min_symbol: symbol as u16,
+            parent: None,
+        });
+        active.push(index);
+        leaves.push((symbol, index));
     }
-    if symbols.is_empty() {
-        symbols.push(0);
+
+    if leaves.len() <= 1 {
+        return None;
     }
-    Ok(LiteralCodes::Simple(write_simple_prefix_code_symbols(
-        writer,
-        LITERAL_ALPHABET_SIZE,
-        &symbols,
-    )?))
+
+    while active.len() > 1 {
+        active.sort_by(|&left, &right| {
+            nodes[left]
+                .frequency
+                .cmp(&nodes[right].frequency)
+                .then_with(|| nodes[left].min_symbol.cmp(&nodes[right].min_symbol))
+        });
+        let first = active.remove(0);
+        let second = active.remove(0);
+        let parent = nodes.len();
+        nodes.push(HuffmanNode {
+            frequency: nodes[first].frequency + nodes[second].frequency,
+            min_symbol: nodes[first].min_symbol.min(nodes[second].min_symbol),
+            parent: None,
+        });
+        nodes[first].parent = Some(parent);
+        nodes[second].parent = Some(parent);
+        active.push(parent);
+    }
+
+    let mut lengths = vec![0_u8; frequencies.len()];
+    for (symbol, node_index) in leaves {
+        let mut depth = 0_u8;
+        let mut cursor = node_index;
+        while let Some(parent) = nodes[cursor].parent {
+            depth = depth.checked_add(1)?;
+            cursor = parent;
+        }
+        if depth == 0 || depth > max_bits {
+            return None;
+        }
+        lengths[symbol] = depth;
+    }
+
+    Some(lengths)
 }
 
-fn write_literal_prefix_code(
+fn write_complex_prefix_code_lengths(
     writer: &mut BitWriter,
-    inputs: &[&[u8]],
-) -> Result<LiteralCodes, CompressError> {
-    let mut symbols = Vec::new();
-    for input in inputs {
-        for &literal in *input {
-            push_unique(&mut symbols, u16::from(literal));
-            if symbols.len() > MAX_SIMPLE_PREFIX_SYMBOLS {
-                write_fixed_literal_prefix_code(writer)?;
-                return Ok(LiteralCodes::Fixed);
-            }
+    lengths: &[u8],
+) -> Result<(), CompressError> {
+    writer.write_bits(2, 0)?;
+
+    let mut length_frequencies = [0_usize; CODE_LENGTH_ALPHABET_SIZE];
+    for &len in lengths {
+        if len > MAX_CODE_BITS {
+            return Err(BurliError::Format("Brotli Huffman code length exceeds 15"));
+        }
+        length_frequencies[usize::from(len)] += 1;
+    }
+
+    let mut used_lengths = length_frequencies
+        .iter()
+        .enumerate()
+        .filter_map(|(symbol, &frequency)| (frequency != 0).then_some((symbol as u16, frequency)))
+        .collect::<Vec<_>>();
+    used_lengths.sort_by(
+        |&(left_symbol, left_frequency), &(right_symbol, right_frequency)| {
+            right_frequency
+                .cmp(&left_frequency)
+                .then_with(|| left_symbol.cmp(&right_symbol))
+        },
+    );
+
+    let mut code_length_lengths = [0_u8; CODE_LENGTH_ALPHABET_SIZE];
+    if used_lengths.len() == 1 {
+        code_length_lengths[usize::from(used_lengths[0].0)] = 1;
+    } else {
+        let base_bits = ceil_log2(used_lengths.len())?;
+        let short_count = (1_usize << base_bits) - used_lengths.len();
+        for (rank, &(symbol, _)) in used_lengths.iter().enumerate() {
+            code_length_lengths[usize::from(symbol)] = if rank < short_count {
+                base_bits - 1
+            } else {
+                base_bits
+            };
         }
     }
-    if symbols.is_empty() {
-        symbols.push(0);
+
+    let entries_to_write = code_length_entries_to_write(&code_length_lengths);
+    for &symbol in CODE_LENGTH_ORDER.iter().take(entries_to_write) {
+        write_code_length_code_len(writer, code_length_lengths[usize::from(symbol)])?;
     }
-    Ok(LiteralCodes::Simple(write_simple_prefix_code_symbols(
-        writer,
-        LITERAL_ALPHABET_SIZE,
-        &symbols,
-    )?))
+
+    if used_lengths.len() != 1 {
+        let code_length_codes = symbol_codes_from_lengths(&code_length_lengths);
+        let entries_to_write = lengths
+            .iter()
+            .rposition(|&len| len != 0)
+            .map_or(lengths.len(), |index| index + 1);
+        for &len in lengths.iter().take(entries_to_write) {
+            let code = symbol_code(&code_length_codes, u16::from(len))?;
+            writer.write_bits(code.len, u64::from(code.bits))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn code_length_entries_to_write(code_length_lengths: &[u8; CODE_LENGTH_ALPHABET_SIZE]) -> usize {
+    let non_zero = code_length_lengths.iter().filter(|&&len| len != 0).count();
+    if non_zero <= 1 {
+        return CODE_LENGTH_ORDER.len();
+    }
+
+    CODE_LENGTH_ORDER
+        .iter()
+        .rposition(|&symbol| code_length_lengths[usize::from(symbol)] != 0)
+        .map_or(CODE_LENGTH_ORDER.len(), |index| index + 1)
+}
+
+fn ceil_log2(value: usize) -> Result<u8, CompressError> {
+    if value == 0 {
+        return Err(BurliError::Format("invalid Brotli prefix symbol count"));
+    }
+    if value == 1 {
+        return Ok(0);
+    }
+    Ok((usize::BITS - (value - 1).leading_zeros()) as u8)
 }
 
 fn write_literal(
     writer: &mut BitWriter,
-    codes: &LiteralCodes,
+    codes: &[SymbolCode],
     literal: u8,
 ) -> Result<(), CompressError> {
-    match codes {
-        LiteralCodes::Fixed => writer.write_bits(8, u64::from(reverse_bits(literal, 8))),
-        LiteralCodes::Simple(codes) => {
-            let code = symbol_code(codes, u16::from(literal))?;
-            writer.write_bits(code.len, u64::from(code.bits))
-        }
-    }
+    let code = symbol_code(codes, u16::from(literal))?;
+    writer.write_bits(code.len, u64::from(code.bits))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -616,6 +829,7 @@ fn command_symbol_for_insert(insert_code: usize) -> Result<u16, CompressError> {
 fn command_symbol_for_insert_copy(
     insert_code: usize,
     copy_code: usize,
+    use_last_distance: bool,
 ) -> Result<u16, CompressError> {
     let insert_group = insert_code / 8;
     let copy_group = copy_code / 8;
@@ -633,6 +847,15 @@ fn command_symbol_for_insert_copy(
         (2, 2) => 10,
         _ => return Err(BurliError::Format("invalid Brotli command length code")),
     };
+    let cell = if use_last_distance {
+        match cell {
+            2 => 0,
+            3 => 1,
+            _ => return Err(BurliError::Format("invalid Brotli last-distance command")),
+        }
+    } else {
+        cell
+    };
     Ok((cell * 64 + insert_low * 8 + copy_low) as u16)
 }
 
@@ -642,7 +865,7 @@ fn token_command_symbol(token: Token) -> Result<u16, CompressError> {
         return command_symbol_for_insert(insert.code);
     }
     let copy = copy_length_code(token.copy_len)?;
-    command_symbol_for_insert_copy(insert.code, copy.code)
+    command_symbol_for_insert_copy(insert.code, copy.code, token.use_last_distance)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -674,6 +897,7 @@ fn distance_code(distance: usize) -> Result<DistanceCode, CompressError> {
     Err(BurliError::Format("Brotli distance exceeds range"))
 }
 
+#[cfg(kani)]
 fn reverse_bits(value: u8, width: u8) -> u8 {
     let mut reversed = 0;
     for bit in 0..width {
@@ -760,8 +984,25 @@ fn simple_symbol_codes(symbols: &[u16]) -> Vec<SymbolCode> {
         4 => vec![2, 2, 2, 2],
         _ => unreachable!(),
     };
+    symbol_codes_from_lengths_and_symbols(&lengths, symbols)
+}
+
+fn symbol_codes_from_lengths(lengths: &[u8]) -> Vec<SymbolCode> {
+    let symbols = lengths
+        .iter()
+        .enumerate()
+        .filter_map(|(symbol, &len)| (len != 0).then_some(symbol as u16))
+        .collect::<Vec<_>>();
+    let lengths = symbols
+        .iter()
+        .map(|&symbol| lengths[usize::from(symbol)])
+        .collect::<Vec<_>>();
+    symbol_codes_from_lengths_and_symbols(&lengths, &symbols)
+}
+
+fn symbol_codes_from_lengths_and_symbols(lengths: &[u8], symbols: &[u16]) -> Vec<SymbolCode> {
     let mut counts = [0_u16; 16];
-    for &len in &lengths {
+    for &len in lengths {
         if len != 0 {
             counts[usize::from(len)] += 1;
         }
@@ -775,7 +1016,7 @@ fn simple_symbol_codes(symbols: &[u16]) -> Vec<SymbolCode> {
     }
 
     let mut codes = Vec::with_capacity(symbols.len());
-    for (&symbol, &len) in symbols.iter().zip(&lengths) {
+    for (&symbol, &len) in symbols.iter().zip(lengths) {
         let code = if len == 0 {
             0
         } else {
@@ -823,9 +1064,37 @@ mod tests {
 
         assert_ne!(
             encoded,
-            crate::stored::compress_with_options(&input, &Options::default().quality(0).unwrap())
-                .unwrap()
+            crate::stored::compress_stored_with_options(
+                &input,
+                &Options::default().quality(0).unwrap()
+            )
+            .unwrap()
         );
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q0_emits_compressed_stream_for_repeated_payload() {
+        let input = b"function demo(){return demo_value;} ".repeat(256);
+        let encoded =
+            compress_with_options(&input, &Options::default().quality(0).unwrap()).unwrap();
+        let stored = crate::stored::compress_stored_with_options(
+            &input,
+            &Options::default().quality(0).unwrap(),
+        )
+        .unwrap();
+
+        assert!(encoded.len() < stored.len());
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q0_compresses_long_repetitive_payload() {
+        let input = br#"{"name":"burli","kind":"brotli","safe":true}"#.repeat(4096);
+        let encoded =
+            compress_with_options(&input, &Options::default().quality(0).unwrap()).unwrap();
+
+        assert!(encoded.len() * 20 < input.len());
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 

@@ -9,10 +9,19 @@ use burli_core::{
 const MAX_META_BLOCK_SIZE: usize = 1 << 24;
 
 pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
-    if options.quality_value() != 0 {
+    if options.quality_value() <= 5 {
         return crate::compressed::compress_with_options(input, options);
     }
 
+    Err(BurliError::Unsupported(
+        "only q0..q5 Brotli encoding is implemented yet",
+    ))
+}
+
+pub(crate) fn compress_stored_with_options(
+    input: &[u8],
+    options: &Options,
+) -> Result<Vec<u8>, CompressError> {
     let block_bits = options.block_bits_value().unwrap_or(MIN_BLOCK_BITS);
     let block_size = 1_usize << block_bits;
     let mut writer = BitWriter::with_capacity(max_stored_size(input.len(), block_size));
@@ -133,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn q1_to_q5_use_stored_fallback() {
+    fn q1_to_q5_round_trip_through_encode_entrypoint() {
         for quality in 1..=5 {
             let encoded = compress_with_options(
                 b"stored fallback",
