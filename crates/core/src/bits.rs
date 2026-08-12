@@ -57,6 +57,19 @@ impl<'a> BitReader<'a> {
         self.bit_pos = (self.bit_pos + 7) & !7;
     }
 
+    pub fn read_zero_padding_to_byte(&mut self) -> Result<()> {
+        let padding = (8 - (self.bit_pos % 8)) % 8;
+        if padding == 0 {
+            return Ok(());
+        }
+
+        if self.read_bits(padding as u8)? != 0 {
+            return Err(BurliError::Format("non-zero Brotli byte padding"));
+        }
+
+        Ok(())
+    }
+
     pub fn read_aligned_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
         if !self.is_byte_aligned() {
             return Err(BurliError::Format("Brotli reader is not byte aligned"));
@@ -195,8 +208,19 @@ mod tests {
         let encoded = writer.into_bytes();
         let mut reader = BitReader::new(&encoded);
         assert_eq!(reader.read_bits(3).unwrap(), 0b111);
-        assert_eq!(reader.read_bits(5).unwrap(), 0);
+        reader.read_zero_padding_to_byte().unwrap();
         assert_eq!(reader.read_aligned_bytes(2).unwrap(), b"ok");
+    }
+
+    #[test]
+    fn rejects_non_zero_byte_padding() {
+        let mut reader = BitReader::new(&[0b0000_1000]);
+
+        assert_eq!(reader.read_bits(3).unwrap(), 0);
+        assert!(matches!(
+            reader.read_zero_padding_to_byte(),
+            Err(BurliError::Format("non-zero Brotli byte padding"))
+        ));
     }
 }
 

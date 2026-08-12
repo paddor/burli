@@ -18,13 +18,22 @@ fn validates_window_bits() {
 }
 
 #[test]
-fn codec_paths_return_unsupported() {
+fn encoder_path_returns_unsupported() {
     assert!(matches!(
         burli::compress(b"hello", 5),
         Err(BurliError::Unsupported(_))
     ));
+}
+
+#[test]
+fn decoder_handles_empty_stream() {
+    assert_eq!(burli::decompress(&[0x06]).unwrap(), b"");
+}
+
+#[test]
+fn decoder_rejects_invalid_input() {
     assert!(matches!(
         burli::decompress(b"not brotli"),
-        Err(BurliError::Unsupported(_))
+        Err(BurliError::Format(_) | BurliError::InvalidWindowBits(_))
     ));
 }

@@ -10,6 +10,9 @@ pub mod context;
 #[cfg(feature = "std")]
 pub mod streaming;
 
+#[cfg(feature = "alloc")]
+mod stored;
+
 pub use burli_core::{DecompressError, format::DEFAULT_MAX_OUTPUT_SIZE};
 
 #[cfg(feature = "alloc")]
@@ -19,12 +22,10 @@ pub fn decompress(input: &[u8]) -> Result<alloc::vec::Vec<u8>, DecompressError> 
 
 #[cfg(feature = "alloc")]
 pub fn decompress_with_limit(
-    _input: &[u8],
-    _max_output_size: usize,
+    input: &[u8],
+    max_output_size: usize,
 ) -> Result<alloc::vec::Vec<u8>, DecompressError> {
-    Err(DecompressError::Unsupported(
-        "burli decoder not implemented yet",
-    ))
+    stored::decompress_with_limit(input, max_output_size)
 }
 
 #[cfg(feature = "alloc")]
