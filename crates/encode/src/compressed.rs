@@ -1,13 +1,14 @@
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 use burli_core::{
     BurliError, CompressError, Options,
     bits::BitWriter,
-    format::{MAX_WINDOW_BITS, MIN_WINDOW_BITS},
+    format::{MAX_WINDOW_BITS, MIN_BLOCK_BITS, MIN_WINDOW_BITS},
 };
 
 const MAX_LITERAL_ONLY_QUALITY: u8 = 5;
 const MAX_META_BLOCK_SIZE: usize = 1 << 24;
+const MIN_MATCH_BYTES: usize = 4;
 const CODE_LENGTH_ORDER: [u8; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
@@ -24,9 +25,7 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
         return Ok(writer.into_bytes());
     }
 
-    for chunk in input.chunks(MAX_META_BLOCK_SIZE) {
-        write_compressed_literal_meta_block(&mut writer, chunk)?;
-    }
+    write_compressed_meta_blocks(&mut writer, input, options)?;
     write_last_empty_meta_block(&mut writer)?;
 
     Ok(writer.into_bytes())
@@ -35,7 +34,7 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
 fn max_literal_only_size(input_len: usize) -> usize {
     input_len
         .saturating_add(input_len / 1024)
-        .saturating_add(64)
+        .saturating_add(256)
 }
 
 fn write_window_bits(writer: &mut BitWriter, window_bits: u8) -> Result<(), CompressError> {
@@ -56,6 +55,113 @@ fn write_window_bits(writer: &mut BitWriter, window_bits: u8) -> Result<(), Comp
     }
 }
 
+fn write_compressed_meta_blocks(
+    writer: &mut BitWriter,
+    input: &[u8],
+    options: &Options,
+) -> Result<(), CompressError> {
+    let block_bits = options.block_bits_value().unwrap_or(MIN_BLOCK_BITS);
+    let block_size = (1_usize << block_bits).min(MAX_META_BLOCK_SIZE);
+    let max_backward_distance = (1_usize << options.window_bits_value()) - 16;
+
+    for chunk in input.chunks(block_size) {
+        write_compressed_chunk(
+            writer,
+            chunk,
+            options.quality_value(),
+            max_backward_distance.min(chunk.len()),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn write_compressed_chunk(
+    writer: &mut BitWriter,
+    input: &[u8],
+    quality: u8,
+    max_backward_distance: usize,
+) -> Result<(), CompressError> {
+    if input.len() < min_match_len(quality) {
+        return write_compressed_literal_meta_block(writer, input);
+    }
+
+    let table_size = hash_table_size(quality);
+    let mut table = vec![usize::MAX; table_size];
+    let table_mask = table_size - 1;
+    let min_match = min_match_len(quality);
+    let mut pos = 0;
+    let mut insert_start = 0;
+
+    while pos + MIN_MATCH_BYTES <= input.len() {
+        let key = hash4(input, pos) & table_mask;
+        let previous = table[key];
+        table[key] = pos;
+
+        if previous != usize::MAX
+            && pos - previous <= max_backward_distance
+            && pos + min_match <= input.len()
+            && input[previous..previous + MIN_MATCH_BYTES] == input[pos..pos + MIN_MATCH_BYTES]
+        {
+            let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
+            let copy_len = match_len(input, previous, pos, max_copy_len);
+            if copy_len >= min_match {
+                write_compressed_copy_meta_block(
+                    writer,
+                    &input[insert_start..pos],
+                    copy_len,
+                    pos - previous,
+                )?;
+                pos += copy_len;
+                insert_start = pos;
+                continue;
+            }
+        }
+
+        pos += 1;
+    }
+
+    if insert_start < input.len() {
+        write_compressed_literal_meta_block(writer, &input[insert_start..])?;
+    }
+
+    Ok(())
+}
+
+fn min_match_len(quality: u8) -> usize {
+    match quality {
+        0 | 1 => 64,
+        2 => 48,
+        3 => 32,
+        4 => 24,
+        _ => 16,
+    }
+}
+
+fn hash_table_size(quality: u8) -> usize {
+    1_usize
+        << match quality {
+            0 | 1 => 12,
+            2 => 13,
+            3 => 14,
+            4 => 15,
+            _ => 16,
+        }
+}
+
+fn hash4(input: &[u8], pos: usize) -> usize {
+    let word = u32::from_le_bytes([input[pos], input[pos + 1], input[pos + 2], input[pos + 3]]);
+    ((word.wrapping_mul(0x1e35_a7bd)) >> 16) as usize
+}
+
+fn match_len(input: &[u8], previous: usize, pos: usize, max_len: usize) -> usize {
+    let mut len = 0;
+    while len < max_len && input[previous + len] == input[pos + len] {
+        len += 1;
+    }
+    len
+}
+
 fn write_compressed_literal_meta_block(
     writer: &mut BitWriter,
     input: &[u8],
@@ -68,14 +174,7 @@ fn write_compressed_literal_meta_block(
     let command_symbol = command_symbol_for_insert(insert.code)?;
 
     write_meta_block_len(writer, input.len())?;
-    write_var_len_u8(writer, 0)?;
-    write_var_len_u8(writer, 0)?;
-    write_var_len_u8(writer, 0)?;
-    writer.write_bits(2, 0)?;
-    writer.write_bits(4, 0)?;
-    writer.write_bits(2, 0)?;
-    write_var_len_u8(writer, 0)?;
-    write_var_len_u8(writer, 0)?;
+    write_block_and_context_header(writer)?;
     write_fixed_literal_prefix_code(writer)?;
     write_simple_prefix_code_single(writer, 704, command_symbol)?;
     write_simple_prefix_code_single(writer, 64, 0)?;
@@ -84,6 +183,46 @@ fn write_compressed_literal_meta_block(
         writer.write_bits(8, u64::from(reverse_bits(literal, 8)))?;
     }
     Ok(())
+}
+
+fn write_compressed_copy_meta_block(
+    writer: &mut BitWriter,
+    insert_literals: &[u8],
+    copy_len: usize,
+    distance: usize,
+) -> Result<(), CompressError> {
+    let len = insert_literals.len() + copy_len;
+    if len == 0 || len > MAX_META_BLOCK_SIZE {
+        return Err(BurliError::Format("invalid compressed Brotli block size"));
+    }
+
+    let insert = insert_length_code(insert_literals.len())?;
+    let copy = copy_length_code(copy_len)?;
+    let command_symbol = command_symbol_for_insert_copy(insert.code, copy.code)?;
+    let distance = distance_code(distance)?;
+
+    write_meta_block_len(writer, len)?;
+    write_block_and_context_header(writer)?;
+    write_fixed_literal_prefix_code(writer)?;
+    write_simple_prefix_code_single(writer, 704, command_symbol)?;
+    write_simple_prefix_code_single(writer, 64, distance.symbol)?;
+    writer.write_bits(insert.extra_bits, insert.extra)?;
+    writer.write_bits(copy.extra_bits, copy.extra)?;
+    for &literal in insert_literals {
+        writer.write_bits(8, u64::from(reverse_bits(literal, 8)))?;
+    }
+    writer.write_bits(distance.extra_bits, distance.extra)
+}
+
+fn write_block_and_context_header(writer: &mut BitWriter) -> Result<(), CompressError> {
+    write_var_len_u8(writer, 0)?;
+    write_var_len_u8(writer, 0)?;
+    write_var_len_u8(writer, 0)?;
+    writer.write_bits(2, 0)?;
+    writer.write_bits(4, 0)?;
+    writer.write_bits(2, 0)?;
+    write_var_len_u8(writer, 0)?;
+    write_var_len_u8(writer, 0)
 }
 
 fn write_meta_block_len(writer: &mut BitWriter, len: usize) -> Result<(), CompressError> {
@@ -187,6 +326,47 @@ fn insert_length_prefix(code: usize) -> Result<(usize, u8), CompressError> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CopyLengthCode {
+    code: usize,
+    extra_bits: u8,
+    extra: u64,
+}
+
+fn copy_length_code(len: usize) -> Result<CopyLengthCode, CompressError> {
+    for code in 0..=23 {
+        let (base, extra_bits) = copy_length_prefix(code)?;
+        let span = 1_usize << extra_bits;
+        if (base..base + span).contains(&len) {
+            return Ok(CopyLengthCode {
+                code,
+                extra_bits,
+                extra: (len - base) as u64,
+            });
+        }
+    }
+    Err(BurliError::Format("Brotli copy length exceeds range"))
+}
+
+fn copy_length_prefix(code: usize) -> Result<(usize, u8), CompressError> {
+    match code {
+        0..=7 => Ok((code + 2, 0)),
+        8..=9 => Ok((10 + (code - 8) * 2, 1)),
+        10..=11 => Ok((14 + (code - 10) * 4, 2)),
+        12..=13 => Ok((22 + (code - 12) * 8, 3)),
+        14..=15 => Ok((38 + (code - 14) * 16, 4)),
+        16 => Ok((70, 5)),
+        17 => Ok((102, 5)),
+        18 => Ok((134, 6)),
+        19 => Ok((198, 7)),
+        20 => Ok((326, 8)),
+        21 => Ok((582, 9)),
+        22 => Ok((1094, 10)),
+        23 => Ok((2118, 24)),
+        _ => Err(BurliError::Format("invalid Brotli copy length code")),
+    }
+}
+
 fn command_symbol_for_insert(insert_code: usize) -> Result<u16, CompressError> {
     let symbol = match insert_code {
         0..=7 => insert_code * 8,
@@ -195,6 +375,58 @@ fn command_symbol_for_insert(insert_code: usize) -> Result<u16, CompressError> {
         _ => return Err(BurliError::Format("invalid Brotli insert length code")),
     };
     Ok(symbol as u16)
+}
+
+fn command_symbol_for_insert_copy(
+    insert_code: usize,
+    copy_code: usize,
+) -> Result<u16, CompressError> {
+    let insert_group = insert_code / 8;
+    let copy_group = copy_code / 8;
+    let insert_low = insert_code % 8;
+    let copy_low = copy_code % 8;
+    let cell = match (insert_group, copy_group) {
+        (0, 0) => 2,
+        (0, 1) => 3,
+        (1, 0) => 4,
+        (1, 1) => 5,
+        (0, 2) => 6,
+        (2, 0) => 7,
+        (1, 2) => 8,
+        (2, 1) => 9,
+        (2, 2) => 10,
+        _ => return Err(BurliError::Format("invalid Brotli command length code")),
+    };
+    Ok((cell * 64 + insert_low * 8 + copy_low) as u16)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DistanceCode {
+    symbol: u16,
+    extra_bits: u8,
+    extra: u64,
+}
+
+fn distance_code(distance: usize) -> Result<DistanceCode, CompressError> {
+    if distance == 0 {
+        return Err(BurliError::Format("invalid Brotli zero distance"));
+    }
+
+    for bits in 1..=24 {
+        for parity in 0..=1 {
+            let base = ((2 + parity) << bits) - 3;
+            let span = 1_usize << bits;
+            if (base..base + span).contains(&distance) {
+                return Ok(DistanceCode {
+                    symbol: (16 + 2 * (bits - 1) + parity) as u16,
+                    extra_bits: bits as u8,
+                    extra: (distance - base) as u64,
+                });
+            }
+        }
+    }
+
+    Err(BurliError::Format("Brotli distance exceeds range"))
 }
 
 fn reverse_bits(value: u8, width: u8) -> u8 {
@@ -271,6 +503,27 @@ mod tests {
         let encoded =
             compress_with_options(&input, &Options::default().quality(5).unwrap()).unwrap();
 
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q5_compresses_repeated_payload() {
+        let input = b"0123456789abcdef".repeat(128);
+        let encoded =
+            compress_with_options(&input, &Options::default().quality(5).unwrap()).unwrap();
+
+        assert!(encoded.len() < input.len());
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q1_compresses_long_repeated_payload() {
+        let input =
+            b"abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789".repeat(64);
+        let encoded =
+            compress_with_options(&input, &Options::default().quality(1).unwrap()).unwrap();
+
+        assert!(encoded.len() < input.len());
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 }
