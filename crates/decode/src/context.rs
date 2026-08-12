@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use burli_core::{DecompressError, format::DEFAULT_MAX_OUTPUT_SIZE};
 
 #[derive(Clone, Debug)]

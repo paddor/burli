@@ -1,4 +1,6 @@
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(feature = "std")]
+use std::io::Write;
 
 use burli::{BurliError, Options, Quality};
 
@@ -80,6 +82,7 @@ fn stateful_api_appends_into_existing_buffers() {
 }
 
 #[test]
+#[cfg(feature = "std")]
 fn stream_api_round_trips_stored_streams() {
     let input = b"stream stored payload";
     let mut encoder = burli::StreamEncoder::new(Vec::new(), 0).unwrap();

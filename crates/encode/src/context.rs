@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use burli_core::{CompressError, Options};
 
 #[derive(Clone, Debug)]

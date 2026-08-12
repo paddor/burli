@@ -269,4 +269,25 @@ mod verification {
 
         assert_eq!(actual, expected);
     }
+
+    #[kani::proof]
+    #[kani::unwind(17)]
+    fn peek_bits_matches_read_bits_without_advancing() {
+        let bytes = [kani::any::<u8>(), kani::any::<u8>()];
+        let start = kani::any::<u8>();
+        let width = kani::any::<u8>();
+        kani::assume(start <= 15);
+        kani::assume(width <= 16 - start);
+
+        let mut reader = BitReader::new(&bytes);
+        let _ = reader.drop_bits(start).unwrap();
+        let before = reader.consumed_bits();
+        let peeked = reader.peek_bits(width).unwrap();
+
+        assert_eq!(reader.consumed_bits(), before);
+
+        let read = reader.read_bits(width).unwrap();
+        assert_eq!(peeked, read);
+        assert_eq!(reader.consumed_bits(), before + usize::from(width));
+    }
 }

@@ -24,7 +24,16 @@ cargo kani -p burli-core --output-format terse
 ```
 
 Proofs are per-primitive with targeted bounds. Current harness covers
-LSB-first bit extraction.
+LSB-first bit extraction plus peek/drop reader invariants.
+
+## Fuzz
+
+Requires cargo-fuzz:
+
+```bash
+cargo fuzz run decode
+cargo fuzz run stored_roundtrip
+```
 
 ## Bench
 
