@@ -1,6 +1,6 @@
 use std::io::Read;
 #[cfg(feature = "std")]
-use std::io::Write;
+use std::io::{Cursor, Write};
 
 use burli::{BurliError, Options, Quality};
 
@@ -122,6 +122,30 @@ fn stream_api_round_trips_stored_streams() {
     decoder.read_to_end(&mut decoded).unwrap();
 
     assert_eq!(decoded, input);
+}
+
+#[test]
+#[cfg(feature = "std")]
+fn stream_decoder_with_limit_reports_invalid_data() {
+    let encoded = burli::compress(b"too large", 0).unwrap();
+    let mut decoder = burli::StreamDecoder::with_limit(encoded.as_slice(), 4);
+    let mut decoded = Vec::new();
+
+    let error = decoder.read_to_end(&mut decoded).unwrap_err();
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+#[cfg(feature = "std")]
+fn stream_decoder_empty_read_does_not_consume_input() {
+    let encoded = burli::compress(b"x", 0).unwrap();
+    let cursor = Cursor::new(encoded.as_slice());
+    let mut decoder = burli::StreamDecoder::new(cursor);
+    let mut empty = [];
+
+    assert_eq!(decoder.read(&mut empty).unwrap(), 0);
+    assert_eq!(decoder.into_inner().position(), 0);
 }
 
 #[test]
