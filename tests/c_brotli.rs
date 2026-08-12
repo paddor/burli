@@ -1,5 +1,4 @@
-use std::ffi::c_int;
-use std::path::Path;
+use std::{ffi::c_int, io::Read, path::Path};
 
 const DEFAULT_WINDOW_BITS: c_int = 22;
 const BROTLI_MODE_GENERIC: c_int = 0;
@@ -101,6 +100,34 @@ fn local_web_corpus_c_brotli_q0_to_q5_decode_through_burli() {
     }
 }
 
+#[test]
+#[ignore = "uses local benchmark corpus if already downloaded"]
+fn local_web_corpus_c_brotli_q0_to_q11_decode_through_burli() {
+    for (entry, input) in local_web_corpus_representative_inputs() {
+        for quality in 0..=11 {
+            let encoded = c_brotli_compress(&input, quality);
+
+            let decoded = burli::decompress(&encoded)
+                .unwrap_or_else(|error| panic!("C q{quality} {entry} failed: {error:?}"));
+            assert_bytes_eq(&decoded, &input, &format!("C q{quality} {entry}"));
+        }
+    }
+}
+
+#[test]
+#[ignore = "uses local benchmark corpus if already downloaded"]
+fn local_web_corpus_rust_brotli_q0_to_q11_decode_through_burli() {
+    for (entry, input) in local_web_corpus_representative_inputs() {
+        for quality in 0..=11 {
+            let encoded = rust_brotli_compress(&input, quality);
+
+            let decoded = burli::decompress(&encoded)
+                .unwrap_or_else(|error| panic!("rust-brotli q{quality} {entry} failed: {error:?}"));
+            assert_bytes_eq(&decoded, &input, &format!("rust-brotli q{quality} {entry}"));
+        }
+    }
+}
+
 fn assert_bytes_eq(actual: &[u8], expected: &[u8], label: &str) {
     if actual == expected {
         return;
@@ -151,6 +178,28 @@ fn web_fixture_slices() -> Vec<Vec<u8>> {
     ]
 }
 
+fn local_web_corpus_representative_inputs() -> Vec<(String, Vec<u8>)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/corpus/web");
+    let entries = [
+        "bootstrap-5.3.3.css",
+        "citm-catalog.json",
+        "jquery-3.7.1.js",
+        "mdn-document-structure.html",
+    ];
+    if !root.exists() {
+        return Vec::new();
+    }
+
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let path = root.join(entry);
+            path.exists()
+                .then(|| (entry.to_owned(), std::fs::read(path).unwrap()))
+        })
+        .collect()
+}
+
 fn c_brotli_compress(input: &[u8], quality: u8) -> Vec<u8> {
     let mut output_size = unsafe { BrotliEncoderMaxCompressedSize(input.len()) };
     let mut output = vec![0; output_size];
@@ -167,6 +216,13 @@ fn c_brotli_compress(input: &[u8], quality: u8) -> Vec<u8> {
     };
     assert_eq!(ok, 1, "C Brotli compression failed");
     output.truncate(output_size);
+    output
+}
+
+fn rust_brotli_compress(input: &[u8], quality: u32) -> Vec<u8> {
+    let mut encoder = rust_brotli::CompressorReader::new(input, 4096, quality, 22);
+    let mut output = Vec::new();
+    encoder.read_to_end(&mut output).unwrap();
     output
 }
 
