@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 
 use burli_core::{BurliError, DecompressError, bits::BitReader};
@@ -116,22 +117,32 @@ pub(crate) fn decode_meta_block(
     if header.literal_block_types != 1
         || header.command_block_types != 1
         || header.distance_block_types != 1
-        || header.literal_trees != 1
-        || header.distance_trees != 1
     {
         return Err(BurliError::Unsupported(
-            "compressed Brotli block switching and context maps not implemented yet",
+            "compressed Brotli block switching not implemented yet",
         ));
     }
 
-    let literal_code = PrefixCode::read(reader, LITERAL_ALPHABET_SIZE)?;
+    let literal_codes =
+        read_prefix_codes(reader, header.literal_tree_count(), LITERAL_ALPHABET_SIZE)?;
     let command_code = PrefixCode::read(reader, COMMAND_ALPHABET_SIZE)?;
-    let distance_code = PrefixCode::read(reader, header.distance_alphabet_size)?;
+    let distance_codes = read_prefix_codes(
+        reader,
+        header.distance_tree_count(),
+        header.distance_alphabet_size,
+    )?;
     let window_size = (1_usize << window_bits) - 16;
 
     while output.len() < needed {
         let command = read_command(reader, &command_code)?;
-        copy_literals(reader, output, needed, command.insert_len, &literal_code)?;
+        copy_literals(
+            reader,
+            output,
+            needed,
+            command.insert_len,
+            &literal_codes,
+            &header,
+        )?;
         if output.len() == needed {
             break;
         }
@@ -142,7 +153,9 @@ pub(crate) fn decode_meta_block(
         let distance_symbol = if command.reuse_last_distance {
             0
         } else {
-            distance_code.decode(reader)? as usize
+            let context = distance_context(command.copy_len);
+            let tree_index = header.distance_context_map[context];
+            distance_codes[tree_index].decode(reader)? as usize
         };
         let distance = read_distance(
             reader,
@@ -172,9 +185,20 @@ struct CompressedHeader {
     distance_block_types: usize,
     npostfix: u8,
     ndirect: usize,
-    literal_trees: usize,
-    distance_trees: usize,
+    context_modes: Vec<u8>,
+    literal_context_map: Vec<usize>,
+    distance_context_map: Vec<usize>,
     distance_alphabet_size: usize,
+}
+
+impl CompressedHeader {
+    fn literal_tree_count(&self) -> usize {
+        self.literal_context_map.iter().copied().max().unwrap_or(0) + 1
+    }
+
+    fn distance_tree_count(&self) -> usize {
+        self.distance_context_map.iter().copied().max().unwrap_or(0) + 1
+    }
 }
 
 fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, DecompressError> {
@@ -184,23 +208,16 @@ fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, Decompres
     let npostfix = reader.read_bits(2)? as u8;
     let ndirect = (reader.read_bits(4)? as usize) << npostfix;
 
+    let mut context_modes = Vec::with_capacity(literal_block_types);
     for _ in 0..literal_block_types {
-        let _context_mode = reader.read_bits(2)?;
+        context_modes.push(reader.read_bits(2)? as u8);
     }
 
     let literal_trees = read_var_len_u8(reader)? + 1;
-    if literal_trees >= 2 {
-        return Err(BurliError::Unsupported(
-            "Brotli literal context maps not implemented yet",
-        ));
-    }
+    let literal_context_map = read_context_map(reader, literal_block_types * 64, literal_trees)?;
 
     let distance_trees = read_var_len_u8(reader)? + 1;
-    if distance_trees >= 2 {
-        return Err(BurliError::Unsupported(
-            "Brotli distance context maps not implemented yet",
-        ));
-    }
+    let distance_context_map = read_context_map(reader, distance_block_types * 4, distance_trees)?;
 
     let distance_alphabet_size = 16 + ndirect + (48 << npostfix);
     Ok(CompressedHeader {
@@ -209,8 +226,9 @@ fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, Decompres
         distance_block_types,
         npostfix,
         ndirect,
-        literal_trees,
-        distance_trees,
+        context_modes,
+        literal_context_map,
+        distance_context_map,
         distance_alphabet_size,
     })
 }
@@ -237,6 +255,91 @@ fn read_var_len_u8(reader: &mut BitReader<'_>) -> Result<usize, DecompressError>
 
     let extra = reader.read_bits(width)?;
     Ok((1_usize << width) + extra as usize)
+}
+
+fn read_prefix_codes(
+    reader: &mut BitReader<'_>,
+    count: usize,
+    alphabet_size: usize,
+) -> Result<Vec<PrefixCode>, DecompressError> {
+    let mut codes = Vec::with_capacity(count);
+    for _ in 0..count {
+        codes.push(PrefixCode::read(reader, alphabet_size)?);
+    }
+    Ok(codes)
+}
+
+fn read_context_map(
+    reader: &mut BitReader<'_>,
+    size: usize,
+    tree_count: usize,
+) -> Result<Vec<usize>, DecompressError> {
+    if tree_count == 0 || tree_count > 256 {
+        return Err(BurliError::Format("invalid Brotli context tree count"));
+    }
+    if tree_count == 1 {
+        return Ok(vec![0; size]);
+    }
+
+    let rlemax = read_context_rlemax(reader)?;
+    let code = PrefixCode::read(reader, tree_count + rlemax)?;
+    let mut map = Vec::with_capacity(size);
+    while map.len() < size {
+        let symbol = code.decode(reader)? as usize;
+        if rlemax != 0 && (1..=rlemax).contains(&symbol) {
+            let repeat = (1_usize << symbol) + reader.read_bits(symbol as u8)? as usize;
+            let end = map
+                .len()
+                .checked_add(repeat)
+                .ok_or(BurliError::Format("Brotli context map repeat overflow"))?;
+            if end > size {
+                return Err(BurliError::Format("Brotli context map repeat exceeds size"));
+            }
+            map.resize(end, 0);
+        } else {
+            let value = if rlemax == 0 {
+                symbol
+            } else {
+                symbol.saturating_sub(rlemax)
+            };
+            if value >= tree_count {
+                return Err(BurliError::Format("invalid Brotli context map value"));
+            }
+            map.push(value);
+        }
+    }
+
+    if reader.read_bit()? {
+        inverse_move_to_front(&mut map)?;
+    }
+    Ok(map)
+}
+
+fn read_context_rlemax(reader: &mut BitReader<'_>) -> Result<usize, DecompressError> {
+    if !reader.read_bit()? {
+        return Ok(0);
+    }
+    Ok(reader.read_bits(4)? as usize + 1)
+}
+
+fn inverse_move_to_front(map: &mut [usize]) -> Result<(), DecompressError> {
+    let mut mtf = [0_usize; 256];
+    for (index, slot) in mtf.iter_mut().enumerate() {
+        *slot = index;
+    }
+
+    for value in map {
+        let index = *value;
+        let Some(&resolved) = mtf.get(index) else {
+            return Err(BurliError::Format("invalid Brotli move-to-front index"));
+        };
+        for shift in (1..=index).rev() {
+            mtf[shift] = mtf[shift - 1];
+        }
+        mtf[0] = resolved;
+        *value = resolved;
+    }
+    Ok(())
 }
 
 fn read_block_count(
@@ -374,7 +477,8 @@ fn copy_literals(
     output: &mut Vec<u8>,
     needed: usize,
     count: usize,
-    literal_code: &PrefixCode,
+    literal_codes: &[PrefixCode],
+    header: &CompressedHeader,
 ) -> Result<(), DecompressError> {
     let end = output
         .len()
@@ -387,13 +491,40 @@ fn copy_literals(
     }
 
     for _ in 0..count {
-        let literal = literal_code.decode(reader)?;
+        let context = literal_context(output, header)?;
+        let tree_index = header.literal_context_map[context];
+        let literal = literal_codes[tree_index].decode(reader)?;
         if literal > u16::from(u8::MAX) {
             return Err(BurliError::Format("invalid Brotli literal symbol"));
         }
         output.push(literal as u8);
     }
     Ok(())
+}
+
+fn literal_context(output: &[u8], header: &CompressedHeader) -> Result<usize, DecompressError> {
+    let p1 = output.last().copied().unwrap_or(0);
+    let mode = header.context_modes[0];
+    let context = match mode {
+        0 => p1 & 0x3f,
+        1 => p1 >> 2,
+        _ if header.literal_tree_count() == 1 => 0,
+        _ => {
+            return Err(BurliError::Unsupported(
+                "Brotli UTF8 and signed literal contexts not implemented yet",
+            ));
+        }
+    };
+    Ok(usize::from(context))
+}
+
+fn distance_context(copy_len: usize) -> usize {
+    match copy_len {
+        2 => 0,
+        3 => 1,
+        4 => 2,
+        _ => 3,
+    }
 }
 
 fn read_distance(
