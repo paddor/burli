@@ -249,3 +249,45 @@ mod tests {
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 }
+
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    #[kani::proof]
+    #[kani::unwind(9)]
+    fn reverse_bits_width_8_is_involution() {
+        let value = kani::any::<u8>();
+
+        assert_eq!(reverse_bits(reverse_bits(value, 8), 8), value);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(25)]
+    fn insert_length_code_covers_meta_block_range() {
+        let raw_len = kani::any::<u32>();
+        kani::assume(raw_len > 0);
+        kani::assume(raw_len <= MAX_META_BLOCK_SIZE as u32);
+
+        let len = raw_len as usize;
+        let insert = insert_length_code(len).unwrap();
+        let (base, extra_bits) = insert_length_prefix(insert.code).unwrap();
+        let command_symbol = command_symbol_for_insert(insert.code).unwrap();
+
+        assert_eq!(base + insert.extra as usize, len);
+        assert!(insert.extra < (1_u64 << extra_bits));
+        assert!(usize::from(command_symbol) < 704);
+        assert_eq!(decode_insert_code(command_symbol), insert.code);
+    }
+
+    fn decode_insert_code(symbol: u16) -> usize {
+        let code = usize::from(symbol);
+        let high = (code >> 3) & 0b111;
+        match code >> 6 {
+            0 => high,
+            4 => 8 + high,
+            7 => 16 + high,
+            _ => usize::MAX,
+        }
+    }
+}
