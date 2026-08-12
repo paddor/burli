@@ -76,9 +76,7 @@ const SMALL_PREFIXES: &[&str] = &["bootstrap-js", "bootstrap-css", "json-citm"];
 const SMALL_SUFFIXES: &[&str] = &[
     "_512", "_1k", "_2k", "_4k", "_8k", "_16k", "_32k", "_64k", "_128k",
 ];
-const SMALL_SIZES: &[usize] = &[
-    512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072,
-];
+const SMALL_SIZES: &[usize] = &[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072];
 const SIZE_LABELS: &[&str] = &["512", "1K", "2K", "4K", "8K", "16K", "32K", "64K", "128K"];
 
 #[derive(Clone)]
@@ -104,6 +102,7 @@ struct Config {
 
 #[derive(Clone, Deserialize)]
 struct BenchRow {
+    codec: String,
     input: String,
     quality: u8,
     input_size: usize,
@@ -218,57 +217,17 @@ impl Config {
             target: std::env::consts::ARCH.into(),
             hw_label: detect_hardware(),
             codecs: vec![
-                codec(
-                    "google-brotli",
-                    google_brotli_label(),
-                    0x2563eb,
-                    0x1d4ed8,
-                ),
+                codec("google-brotli", google_brotli_label(), 0x2563eb, 0x1d4ed8),
                 codec("burli", "burli", 0xf87171, 0xc45050),
                 codec("burli paranoid", "burli paranoid", 0xf472b6, 0xc05a92),
-                codec(
-                    "rust-brotli",
-                    "rust-brotli 8.0.4",
-                    0x4ade80,
-                    0x3aaf60,
-                ),
+                codec("rust-brotli", "rust-brotli 8.0.4", 0x4ade80, 0x3aaf60),
             ],
-            scatter_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-            ],
-            summary_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-            ],
-            pipeline_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-            ],
-            matrix_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-            ],
-            small_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-            ],
-            small_decode_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-            ],
+            scatter_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            summary_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            pipeline_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            matrix_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            small_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            small_decode_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
         }
     }
 
@@ -568,6 +527,9 @@ fn load_rows_from_path(
         let Ok(row) = serde_json::from_str::<BenchRow>(line) else {
             continue;
         };
+        if row.codec != codec {
+            continue;
+        }
         if quality.is_some_and(|quality| row.quality != quality) {
             continue;
         }
@@ -1308,10 +1270,7 @@ fn compute_scatter_points(
     points
 }
 
-fn scatter_y_range(
-    points: &BTreeMap<(String, u8, String), (f64, f64)>,
-    group: &str,
-) -> (f64, f64) {
+fn scatter_y_range(points: &BTreeMap<(String, u8, String), (f64, f64)>, group: &str) -> (f64, f64) {
     let mut min_ratio = f64::INFINITY;
     let mut max_ratio: f64 = 0.0;
     for ((_, _, point_group), (_, ratio)) in points {
@@ -1357,8 +1316,7 @@ fn draw_scatter_panel(
     )?;
     let map_x = |mbs: f64| {
         x_left
-            + (mbs.max(0.01).log10() - SCATTER_LOG_X_MIN)
-                / (SCATTER_LOG_X_MAX - SCATTER_LOG_X_MIN)
+            + (mbs.max(0.01).log10() - SCATTER_LOG_X_MIN) / (SCATTER_LOG_X_MAX - SCATTER_LOG_X_MIN)
                 * (x_right - x_left)
     };
     let clip_x = |x: f64| x.clamp(x_left, x_right);
@@ -1779,11 +1737,7 @@ fn draw_matrix(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
                     .iter()
                     .copied()
                     .filter(|codec| {
-                        stacks.contains_key(&(
-                            (*codec).to_string(),
-                            *quality,
-                            (*group).to_string(),
-                        ))
+                        stacks.contains_key(&((*codec).to_string(), *quality, (*group).to_string()))
                     })
                     .count()
             })
@@ -1839,8 +1793,7 @@ fn draw_matrix(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
     draw_legend(
         &area,
         cfg,
-        &cfg
-            .matrix_codecs
+        &cfg.matrix_codecs
             .iter()
             .copied()
             .filter(|codec| data.contains_key(*codec))
@@ -2003,11 +1956,9 @@ fn draw_small_encode(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>>
             if codec_qualities.is_empty() {
                 continue;
             }
-            for quality in codec_qualities
-                .iter()
-                .copied()
-                .filter(|quality| *quality != codec_qualities[0] && *quality != *codec_qualities.last().unwrap())
-            {
+            for quality in codec_qualities.iter().copied().filter(|quality| {
+                *quality != codec_qualities[0] && *quality != *codec_qualities.last().unwrap()
+            }) {
                 let pts = small_points(&rows, prefix, quality, map_x, map_y);
                 polyline(&area, &pts, style.color, 1, 0.35, false)?;
                 if quality == LABEL_QUALITY

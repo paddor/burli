@@ -190,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for input in &inputs {
                 match bench_codec(&codec, input, *quality) {
                     Ok(Some(result)) => {
-                        append_result(&cache, &codec, &result)?;
+                        append_result(&cache, &result)?;
                         println!(
                             "{} q{} {}: {} -> {} bytes",
                             result.codec,
@@ -254,8 +254,9 @@ fn parse_quality_list(value: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>
     for item in value.split(',') {
         let quality: u8 = item.parse()?;
         if quality > MAX_BENCH_QUALITY {
-            return Err(format!("benchmark qualities are limited to q0..q{MAX_BENCH_QUALITY}")
-                .into());
+            return Err(
+                format!("benchmark qualities are limited to q0..q{MAX_BENCH_QUALITY}").into(),
+            );
         }
         burli::Quality::new(quality)?;
         qualities.push(quality);
@@ -451,10 +452,7 @@ fn google_brotli_decompress(
     Ok(output)
 }
 
-fn rust_brotli_compress(
-    input: &[u8],
-    quality: u8,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn rust_brotli_compress(input: &[u8], quality: u8) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut reader = rust_brotli::CompressorReader::new(
         input,
         4096,
@@ -505,12 +503,8 @@ fn cpu_nanos() -> u64 {
     ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
 }
 
-fn append_result(
-    cache: &Path,
-    codec: &str,
-    result: &BenchResult,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let path = cache.join(format!("{}.jsonl", codec.replace([' ', '-'], "_")));
+fn append_result(cache: &Path, result: &BenchResult) -> Result<(), Box<dyn std::error::Error>> {
+    let path = cache.join(format!("{}.jsonl", result.codec.replace([' ', '-'], "_")));
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     serde_json::to_writer(&mut file, result)?;
     writeln!(file)?;
