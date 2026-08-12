@@ -168,16 +168,24 @@ impl BitWriter {
             .bit_len
             .checked_add(width)
             .ok_or(BurliError::Format("Brotli output bit length overflow"))?;
-        let target_len = target_bits.div_ceil(8);
+        let bit_offset = self.bit_len & 7;
+        let byte_pos = self.bit_len >> 3;
+        let bytes = (bit_offset + width + 7) >> 3;
+        let target_len = byte_pos
+            .checked_add(bytes)
+            .ok_or(BurliError::Format("Brotli output byte length overflow"))?;
         if self.output.len() < target_len {
             self.output.resize(target_len, 0);
         }
 
-        let bit_offset = self.bit_len & 7;
-        let byte_pos = self.bit_len >> 3;
-        let bytes = (bit_offset + width).div_ceil(8);
         let mask = (1_u64 << width) - 1;
         let mut chunk = (value & mask) << bit_offset;
+        if bytes == 1 {
+            self.output[byte_pos] |= chunk as u8;
+            self.bit_len = target_bits;
+            return Ok(());
+        }
+
         for offset in 0..bytes {
             self.output[byte_pos + offset] |= chunk as u8;
             chunk >>= 8;
