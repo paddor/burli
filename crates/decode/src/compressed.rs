@@ -135,8 +135,8 @@ pub(crate) fn decode_meta_block_with_base(
             0
         } else {
             let distance_block_type = header.distances.current_type(reader)?;
-            let context = distance_context(command.copy_len);
-            let tree_index = header.distance_context_map[distance_block_type * 4 + context];
+            let tree_index =
+                header.distance_context_map[distance_block_type * 4 + command.distance_context];
             header.distances.consume_one();
             distance_codes[tree_index].decode(reader)? as usize
         };
@@ -533,6 +533,7 @@ struct Command {
     insert_len: usize,
     copy_len: usize,
     reuse_last_distance: bool,
+    distance_context: usize,
 }
 
 fn read_command(
@@ -540,7 +541,7 @@ fn read_command(
     command_code: &PrefixCode,
 ) -> Result<Command, DecompressError> {
     let code = command_code.decode(reader)? as usize;
-    let (insert_code, copy_code, reuse_last_distance) = command_code_parts(code)?;
+    let (insert_code, copy_code, reuse_last_distance, distance_context) = command_code_parts(code)?;
     let (insert_base, insert_extra_bits) = insert_length_prefix(insert_code)?;
     let (copy_base, copy_extra_bits) = copy_length_prefix(copy_code)?;
     let insert_len = insert_base + reader.read_bits(insert_extra_bits)? as usize;
@@ -550,10 +551,11 @@ fn read_command(
         insert_len,
         copy_len,
         reuse_last_distance,
+        distance_context,
     })
 }
 
-fn command_code_parts(code: usize) -> Result<(usize, usize, bool), DecompressError> {
+fn command_code_parts(code: usize) -> Result<(usize, usize, bool, usize), DecompressError> {
     if code >= COMMAND_ALPHABET_SIZE {
         return Err(BurliError::Format("invalid Brotli command code"));
     }
@@ -575,7 +577,18 @@ fn command_code_parts(code: usize) -> Result<(usize, usize, bool), DecompressErr
         _ => return Err(BurliError::Format("invalid Brotli command code")),
     };
 
-    Ok((insert_base + high, copy_base + low, reuse_last_distance))
+    let distance_context = if matches!(cell, 0 | 2 | 4 | 7) && low <= 2 {
+        low
+    } else {
+        3
+    };
+
+    Ok((
+        insert_base + high,
+        copy_base + low,
+        reuse_last_distance,
+        distance_context,
+    ))
 }
 
 fn insert_length_prefix(code: usize) -> Result<(usize, u8), DecompressError> {
@@ -654,12 +667,17 @@ fn literal_context(
     header: &CompressedHeader,
     block_type: usize,
 ) -> Result<usize, DecompressError> {
+    literal_context_for_mode(output, header.context_modes[block_type])
+}
+
+fn literal_context_for_mode(output: &[u8], mode: u8) -> Result<usize, DecompressError> {
     let p1 = output.last().copied().unwrap_or(0);
     let p2 = output
-        .get(output.len().saturating_sub(2))
+        .len()
+        .checked_sub(2)
+        .and_then(|index| output.get(index))
         .copied()
         .unwrap_or(0);
-    let mode = header.context_modes[block_type];
     let context = match mode {
         0 => p1 & 0x3f,
         1 => p1 >> 2,
@@ -674,15 +692,6 @@ fn literal_context(
         _ => return Err(BurliError::Format("invalid Brotli literal context mode")),
     };
     Ok(usize::from(context))
-}
-
-fn distance_context(copy_len: usize) -> usize {
-    match copy_len {
-        2 => 0,
-        3 => 1,
-        4 => 2,
-        _ => 3,
-    }
 }
 
 fn read_distance(
@@ -772,6 +781,21 @@ mod tests {
 
         let mut reader = BitReader::new(&[]);
         assert_eq!(read_distance(&mut reader, 1, 0, 0, &distances).unwrap(), 11);
+    }
+
+    #[test]
+    fn command_distance_context_comes_from_command_prefix() {
+        assert_eq!(command_code_parts(0).unwrap().3, 0);
+        assert_eq!(command_code_parts(2).unwrap().3, 2);
+        assert_eq!(command_code_parts(3).unwrap().3, 3);
+        assert_eq!(command_code_parts(64).unwrap().3, 3);
+        assert_eq!(command_code_parts(256 + 2).unwrap().3, 2);
+    }
+
+    #[test]
+    fn literal_context_uses_zero_second_previous_byte_until_two_bytes_exist() {
+        assert_eq!(literal_context_for_mode(b"\r", 3).unwrap(), 8);
+        assert_eq!(literal_context_for_mode(b"\r\n", 3).unwrap(), 9);
     }
 }
 
