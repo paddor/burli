@@ -15,6 +15,17 @@ cargo test --no-default-features --features alloc
 cargo test --features paranoid
 ```
 
+## Kani
+
+Requires Kani:
+
+```bash
+cargo kani -p burli-core --output-format terse
+```
+
+Proofs are per-primitive with targeted bounds. Current harness covers
+LSB-first bit extraction.
+
 ## Bench
 
 Bench crate is excluded from the workspace:
