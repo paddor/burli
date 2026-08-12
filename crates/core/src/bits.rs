@@ -16,6 +16,13 @@ impl<'a> BitReader<'a> {
         Self { input, bit_pos: 0 }
     }
 
+    pub fn with_bit_pos(input: &'a [u8], bit_pos: usize) -> Result<Self> {
+        if bit_pos > input.len() * 8 {
+            return Err(BurliError::Format("Brotli bit position exceeds input"));
+        }
+        Ok(Self { input, bit_pos })
+    }
+
     pub const fn consumed_bits(&self) -> usize {
         self.bit_pos
     }

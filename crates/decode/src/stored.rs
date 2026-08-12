@@ -10,7 +10,7 @@ use burli_core::{
 const MAX_META_BLOCK_SIZE: usize = 1 << 24;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MetaBlockHeader {
+pub(crate) enum MetaBlockHeader {
     LastEmpty,
     Metadata { len: usize, is_last: bool },
     Uncompressed { len: usize },
@@ -71,7 +71,7 @@ pub fn decompress_with_limit(
     }
 }
 
-fn read_window_bits(reader: &mut BitReader<'_>) -> Result<u8, DecompressError> {
+pub(crate) fn read_window_bits(reader: &mut BitReader<'_>) -> Result<u8, DecompressError> {
     if !reader.read_bit()? {
         return Ok(16);
     }
@@ -98,7 +98,9 @@ fn read_window_bits(reader: &mut BitReader<'_>) -> Result<u8, DecompressError> {
     Ok(17)
 }
 
-fn read_meta_block_header(reader: &mut BitReader<'_>) -> Result<MetaBlockHeader, DecompressError> {
+pub(crate) fn read_meta_block_header(
+    reader: &mut BitReader<'_>,
+) -> Result<MetaBlockHeader, DecompressError> {
     let is_last = reader.read_bit()?;
     if is_last && reader.read_bit()? {
         return Ok(MetaBlockHeader::LastEmpty);
@@ -168,7 +170,7 @@ fn read_metadata_len(reader: &mut BitReader<'_>) -> Result<usize, DecompressErro
     Ok(len_minus_one + 1)
 }
 
-fn finish_stream(reader: &BitReader<'_>) -> Result<(), DecompressError> {
+pub(crate) fn finish_stream(reader: &BitReader<'_>) -> Result<(), DecompressError> {
     if reader.remaining_bits() >= 8 {
         return Err(BurliError::Format("trailing bytes after Brotli stream"));
     }

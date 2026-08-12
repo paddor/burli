@@ -149,6 +149,26 @@ fn stream_decoder_empty_read_does_not_consume_input() {
 }
 
 #[test]
+#[cfg(feature = "std")]
+fn stream_decoder_emits_before_consuming_full_input() {
+    let input = vec![42_u8; (1 << 16) * 3 + 4096];
+    let options = Options::default()
+        .quality(0)
+        .unwrap()
+        .block_bits(Some(16))
+        .unwrap();
+    let encoded = burli::compress_with_options(&input, &options).unwrap();
+    let cursor = Cursor::new(encoded.as_slice());
+    let mut decoder = burli::StreamDecoder::new(cursor);
+    let mut decoded = [0_u8; 1];
+
+    assert_eq!(decoder.read(&mut decoded).unwrap(), 1);
+
+    assert_eq!(decoded[0], input[0]);
+    assert!((decoder.into_inner().position() as usize) < encoded.len());
+}
+
+#[test]
 fn q0_output_decodes_with_rust_brotli() {
     let input = b"rust-brotli should decode burli stored streams";
     let encoded = burli::compress(input, 0).unwrap();
