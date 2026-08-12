@@ -8,6 +8,7 @@ use crate::{
 };
 
 const READ_CHUNK_SIZE: usize = 8 * 1024;
+const MIN_STREAM_WINDOW_SIZE: usize = (1 << 10) - 16;
 
 pub struct StreamDecoder<R> {
     inner: R,
@@ -18,6 +19,7 @@ pub struct StreamDecoder<R> {
     distances: DistanceRing,
     output: Vec<u8>,
     output_pos: usize,
+    output_base: usize,
     state: State,
 }
 
@@ -49,6 +51,7 @@ impl<R: Read> StreamDecoder<R> {
             distances: DistanceRing::new(),
             output: Vec::new(),
             output_pos: 0,
+            output_base: 0,
             state: State::Reading,
         }
     }
@@ -67,11 +70,40 @@ impl<R: Read> StreamDecoder<R> {
         Ok(true)
     }
 
+    fn compact_encoded(&mut self) {
+        let bytes = self.bit_pos / 8;
+        if bytes == 0 {
+            return;
+        }
+        self.encoded.drain(..bytes);
+        self.bit_pos -= bytes * 8;
+    }
+
+    fn window_size(&self) -> usize {
+        self.window_bits
+            .map_or(MIN_STREAM_WINDOW_SIZE, |bits| (1_usize << bits) - 16)
+    }
+
+    fn compact_output(&mut self) {
+        let keep_from = self.output.len().saturating_sub(self.window_size());
+        let drain = self.output_pos.min(keep_from);
+        if drain == 0 {
+            return;
+        }
+        self.output.drain(..drain);
+        self.output_pos -= drain;
+        self.output_base += drain;
+    }
+
     fn decode_next_step(&mut self) -> Result<DecodeStep, DecompressError> {
-        match self.try_decode_next_step() {
+        let step = match self.try_decode_next_step() {
             Err(BurliError::Format("unexpected end of Brotli input")) => Ok(DecodeStep::NeedMore),
             result => result,
+        }?;
+        if step != DecodeStep::NeedMore {
+            self.compact_encoded();
         }
+        Ok(step)
     }
 
     fn try_decode_next_step(&mut self) -> Result<DecodeStep, DecompressError> {
@@ -113,11 +145,18 @@ impl<R: Read> StreamDecoder<R> {
                 })
             }
             MetaBlockHeader::Uncompressed { len } => {
-                let needed = output.len().saturating_add(len);
-                if needed > self.max_output_size {
+                let needed = output
+                    .len()
+                    .checked_add(len)
+                    .ok_or(BurliError::Format("Brotli output length overflow"))?;
+                let global_needed = self
+                    .output_base
+                    .checked_add(needed)
+                    .ok_or(BurliError::Format("Brotli output length overflow"))?;
+                if global_needed > self.max_output_size {
                     return Err(BurliError::OutputLimitExceeded {
                         limit: self.max_output_size,
-                        needed,
+                        needed: global_needed,
                     });
                 }
 
@@ -133,9 +172,10 @@ impl<R: Read> StreamDecoder<R> {
                 })
             }
             MetaBlockHeader::Compressed { len, is_last } => {
-                crate::compressed::decode_meta_block(
+                crate::compressed::decode_meta_block_with_base(
                     &mut reader,
                     &mut output,
+                    self.output_base,
                     len,
                     self.max_output_size,
                     window_bits,
@@ -164,6 +204,7 @@ impl<R: Read> StreamDecoder<R> {
         let count = available.min(buf.len());
         buf[..count].copy_from_slice(&self.output[self.output_pos..self.output_pos + count]);
         self.output_pos += count;
+        self.compact_output();
         count
     }
 }
@@ -197,5 +238,32 @@ impl<R: Read> Read for StreamDecoder<R> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use burli_core::Options;
+
+    #[test]
+    fn decoder_retains_only_window_history_after_drain() {
+        let input = vec![7_u8; (1 << 16) * 4 + 123];
+        let options = Options::default()
+            .quality(0)
+            .unwrap()
+            .window_bits(16)
+            .unwrap()
+            .block_bits(Some(16))
+            .unwrap();
+        let encoded = burli::compress_with_options(&input, &options).unwrap();
+        let mut decoder = StreamDecoder::new(encoded.as_slice());
+        let mut decoded = Vec::new();
+
+        decoder.read_to_end(&mut decoded).unwrap();
+
+        assert_eq!(decoded, input);
+        assert!(decoder.output.len() <= (1 << 16) - 16);
+        assert_eq!(decoder.output_pos, decoder.output.len());
     }
 }

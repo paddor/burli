@@ -66,12 +66,37 @@ pub(crate) fn decode_meta_block(
     window_bits: u8,
     distances: &mut DistanceRing,
 ) -> Result<(), DecompressError> {
+    decode_meta_block_with_base(
+        reader,
+        output,
+        0,
+        len,
+        max_output_size,
+        window_bits,
+        distances,
+    )
+}
+
+pub(crate) fn decode_meta_block_with_base(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    output_base: usize,
+    len: usize,
+    max_output_size: usize,
+    window_bits: u8,
+    distances: &mut DistanceRing,
+) -> Result<(), DecompressError> {
     let start = output.len();
-    let needed = start.saturating_add(len);
-    if needed > max_output_size {
+    let needed = start
+        .checked_add(len)
+        .ok_or(BurliError::Format("Brotli output length overflow"))?;
+    let global_needed = output_base
+        .checked_add(needed)
+        .ok_or(BurliError::Format("Brotli output length overflow"))?;
+    if global_needed > max_output_size {
         return Err(BurliError::OutputLimitExceeded {
             limit: max_output_size,
-            needed,
+            needed: global_needed,
         });
     }
 
@@ -128,6 +153,7 @@ pub(crate) fn decode_meta_block(
                 meta_block_start: start,
                 needed,
                 window_size,
+                output_base,
                 distance,
                 len: command.copy_len,
                 push_distance: distance_symbol != 0,
@@ -144,6 +170,7 @@ struct CopyRequest {
     meta_block_start: usize,
     needed: usize,
     window_size: usize,
+    output_base: usize,
     distance: usize,
     len: usize,
     push_distance: bool,
@@ -155,7 +182,11 @@ fn copy_from_distance(
     distances: &mut DistanceRing,
 ) -> Result<(), DecompressError> {
     let produced = output.len();
-    let max_allowed_distance = request.window_size.min(produced);
+    let global_produced = request
+        .output_base
+        .checked_add(produced)
+        .ok_or(BurliError::Format("Brotli output length overflow"))?;
+    let max_allowed_distance = request.window_size.min(global_produced);
     if request.distance > max_allowed_distance {
         let word = crate::dictionary::lookup(request.distance, max_allowed_distance, request.len)?;
         let end = produced
@@ -722,6 +753,7 @@ mod tests {
                 meta_block_start: 0,
                 needed: 20,
                 window_size: 1 << 16,
+                output_base: 0,
                 distance: 4,
                 len: 4,
                 push_distance: false,
