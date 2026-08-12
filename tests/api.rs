@@ -20,14 +20,6 @@ fn validates_window_bits() {
 }
 
 #[test]
-fn encoder_path_returns_unsupported() {
-    assert!(matches!(
-        burli::compress(b"hello", 5),
-        Err(BurliError::Unsupported(_))
-    ));
-}
-
-#[test]
 fn decoder_handles_empty_stream() {
     assert_eq!(burli::decompress(&[0x06]).unwrap(), b"");
 }
@@ -38,6 +30,24 @@ fn q0_round_trips_through_burli() {
     let encoded = burli::compress(input, 0).unwrap();
 
     assert_eq!(burli::decompress(&encoded).unwrap(), input);
+}
+
+#[test]
+fn q0_to_q5_round_trip_through_burli() {
+    let input = b"small web payload across scoped qualities";
+
+    for quality in 0..=5 {
+        let encoded = burli::compress(input, quality).unwrap();
+        assert_eq!(burli::decompress(&encoded).unwrap(), input);
+    }
+}
+
+#[test]
+fn q6_encoder_path_returns_unsupported() {
+    assert!(matches!(
+        burli::compress(b"hello", 6),
+        Err(BurliError::Unsupported(_))
+    ));
 }
 
 #[test]
@@ -92,6 +102,20 @@ fn q0_output_decodes_with_rust_brotli() {
 
     decoder.read_to_end(&mut decoded).unwrap();
     assert_eq!(decoded, input);
+}
+
+#[test]
+fn q0_to_q5_outputs_decode_with_rust_brotli() {
+    let input = b"rust-brotli should decode all scoped stored qualities";
+
+    for quality in 0..=5 {
+        let encoded = burli::compress(input, quality).unwrap();
+        let mut decoder = rust_brotli::Decompressor::new(encoded.as_slice(), 4096);
+        let mut decoded = Vec::new();
+
+        decoder.read_to_end(&mut decoded).unwrap();
+        assert_eq!(decoded, input);
+    }
 }
 
 #[test]

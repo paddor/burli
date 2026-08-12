@@ -7,11 +7,12 @@ use burli_core::{
 };
 
 const MAX_META_BLOCK_SIZE: usize = 1 << 24;
+const MAX_STORED_FALLBACK_QUALITY: u8 = 5;
 
 pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
-    if options.quality_value() != 0 {
+    if options.quality_value() > MAX_STORED_FALLBACK_QUALITY {
         return Err(BurliError::Unsupported(
-            "only the q0 stored Brotli encoder is implemented yet",
+            "only q0..q5 stored Brotli encoding is implemented yet",
         ));
     }
 
@@ -132,9 +133,25 @@ mod tests {
     }
 
     #[test]
-    fn higher_quality_returns_unsupported() {
+    fn q1_to_q5_use_stored_fallback() {
+        for quality in 1..=5 {
+            let encoded = compress_with_options(
+                b"stored fallback",
+                &Options::default().quality(quality).unwrap(),
+            )
+            .unwrap();
+
+            assert_eq!(
+                burli_decode::decompress(&encoded).unwrap(),
+                b"stored fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn q6_returns_unsupported() {
         assert!(matches!(
-            compress_with_options(b"hello", &Options::default().quality(1).unwrap()),
+            compress_with_options(b"hello", &Options::default().quality(6).unwrap()),
             Err(BurliError::Unsupported(_))
         ));
     }
