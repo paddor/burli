@@ -1,0 +1,69 @@
+[workspace]
+members = ["crates/core", "crates/encode", "crates/decode"]
+exclude = ["bench", "fuzz"]
+
+[package]
+name = "burli"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Fast, memory-safe Rust Brotli codec"
+license = "MIT"
+repository = "https://github.com/paddor/burli"
+categories = ["compression"]
+keywords = ["brotli", "compression", "decompression", "web"]
+include = ["src/**/*", "README.md", "LICENSE", "DESIGN.md", "SAFETY.md", "SECURITY.md"]
+
+[features]
+default = ["std", "simd"]
+std = ["alloc", "burli-core/std", "burli-encode/std", "burli-decode/std"]
+alloc = ["burli-core/alloc", "burli-encode/alloc", "burli-decode/alloc"]
+simd = ["burli-encode/simd", "burli-decode/simd"]
+nightly = ["burli-core/nightly", "burli-encode/nightly", "burli-decode/nightly"]
+paranoid = ["burli-core/paranoid", "burli-encode/paranoid", "burli-decode/paranoid"]
+
+[dependencies]
+burli-core = { version = "0.0.0", path = "crates/core", default-features = false }
+burli-encode = { version = "0.0.0", path = "crates/encode", default-features = false }
+burli-decode = { version = "0.0.0", path = "crates/decode", default-features = false }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+proptest = "1"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+cast_precision_loss = "allow"
+ptr_as_ptr = "allow"
+ptr_cast_constness = "allow"
+cast_ptr_alignment = "allow"
+inline_always = "allow"
+too_many_lines = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+similar_names = "allow"
+items_after_statements = "allow"
+wildcard_imports = "allow"
+needless_bitwise_bool = "allow"
+single_match_else = "allow"
+manual_ilog2 = "allow"
+bool_to_int_with_if = "allow"
+if_not_else = "allow"
+option_if_let_else = "allow"
+module_name_repetitions = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+

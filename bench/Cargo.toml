@@ -1,0 +1,24 @@
+[package]
+name = "burli-bench"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[features]
+paranoid = ["burli/paranoid"]
+
+[dependencies]
+burli = { path = ".." }
+rust-brotli = { package = "brotli", version = "8.0.4" }
+oxiarc-brotli = "0.4.1"
+libc = "0.2"
+plotters = { version = "0.3", default-features = false, features = ["svg_backend"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[build-dependencies]
+pkg-config = "0.3"
+
+[[example]]
+name = "burli_bench"

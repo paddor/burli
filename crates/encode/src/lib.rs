@@ -1,0 +1,58 @@
+#![cfg_attr(not(feature = "std"), no_std)]
+#![deny(unsafe_op_in_unsafe_fn)]
+#![cfg_attr(feature = "paranoid", forbid(unsafe_code))]
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+#[cfg(feature = "std")]
+pub mod context;
+#[cfg(feature = "std")]
+pub mod streaming;
+
+pub use burli_core::{CompressError, Options};
+
+#[cfg(feature = "alloc")]
+pub fn compress(input: &[u8], quality: u8) -> Result<alloc::vec::Vec<u8>, CompressError> {
+    let options = Options::default().quality(quality)?;
+    compress_with_options(input, &options)
+}
+
+#[cfg(feature = "alloc")]
+pub fn compress_with_options(
+    _input: &[u8],
+    _options: &Options,
+) -> Result<alloc::vec::Vec<u8>, CompressError> {
+    Err(CompressError::Unsupported(
+        "burli encoder not implemented yet",
+    ))
+}
+
+#[cfg(feature = "alloc")]
+pub fn compress_into(
+    input: &[u8],
+    output: &mut alloc::vec::Vec<u8>,
+    quality: u8,
+) -> Result<usize, CompressError> {
+    let before = output.len();
+    let compressed = compress(input, quality)?;
+    output.extend_from_slice(&compressed);
+    Ok(output.len() - before)
+}
+
+#[cfg(feature = "alloc")]
+pub fn compress_into_slice(
+    input: &[u8],
+    output: &mut [u8],
+    quality: u8,
+) -> Result<usize, CompressError> {
+    let compressed = compress(input, quality)?;
+    if compressed.len() > output.len() {
+        return Err(CompressError::OutputLimitExceeded {
+            limit: output.len(),
+            needed: compressed.len(),
+        });
+    }
+    output[..compressed.len()].copy_from_slice(&compressed);
+    Ok(compressed.len())
+}

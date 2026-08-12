@@ -1,0 +1,20 @@
+[package]
+name = "burli-core"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Shared Brotli types and primitives for burli"
+license = "MIT"
+repository = "https://github.com/paddor/burli"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+nightly = []
+paranoid = []
+

@@ -1,0 +1,10 @@
+.DS_Store
+__pycache__/
+AGENTS.md
+/info/
+/tmp/
+target/
+corpus/
+.chart_hw
+/fuzz/artifacts/
+Cargo.lock

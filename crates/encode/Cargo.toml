@@ -1,0 +1,28 @@
+[package]
+name = "burli-encode"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Brotli encoder for burli"
+license = "MIT"
+repository = "https://github.com/paddor/burli"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = ["std", "simd"]
+std = ["alloc", "burli-core/std"]
+alloc = ["burli-core/alloc"]
+simd = ["dep:fearless_simd"]
+nightly = ["burli-core/nightly"]
+paranoid = ["burli-core/paranoid"]
+
+[dependencies]
+burli-core = { version = "0.0.0", path = "../core", default-features = false }
+fearless_simd = { version = "0.7.0", optional = true }
+
+[dev-dependencies]
+burli = { path = "../.." }
+
