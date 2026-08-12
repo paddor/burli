@@ -722,19 +722,20 @@ pub const kTransforms: [Transform; kNumTransforms as usize] = [
     },
 ];
 
-fn uppercase_one(bytes: &mut [u8]) -> usize {
-    if bytes[0] < 0xc0 {
+fn uppercase_one(bytes: &mut [u8]) -> Option<usize> {
+    let first = *bytes.first()?;
+    if first < 0xc0 {
         if bytes[0].is_ascii_lowercase() {
             bytes[0] ^= 32;
         }
-        return 1;
+        return Some(1);
     }
-    if bytes[0] < 0xe0 {
-        bytes[1] ^= 32;
-        return 2;
+    if first < 0xe0 {
+        *bytes.get_mut(1)? ^= 32;
+        return Some(2);
     }
-    bytes[2] ^= 5;
-    3
+    *bytes.get_mut(2)? ^= 5;
+    Some(3)
 }
 
 fn push_prefix_suffix(output: &mut alloc::vec::Vec<u8>, offset: u8) {
@@ -770,14 +771,41 @@ pub(crate) fn transform_dictionary_word(
     output.extend_from_slice(&word[start..end]);
     let uppercase_len = output.len() - uppercase_start;
     if transform.transform == kUppercaseFirst && uppercase_len != 0 {
-        uppercase_one(&mut output[uppercase_start..]);
+        uppercase_one(&mut output[uppercase_start..])?;
     } else if transform.transform == kUppercaseAll {
         let mut offset = 0_usize;
         while offset < uppercase_len {
-            offset += uppercase_one(&mut output[uppercase_start + offset..]);
+            offset += uppercase_one(&mut output[uppercase_start + offset..])?;
         }
     }
 
     push_prefix_suffix(output, transform.suffix_id);
     Some(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uppercase_one;
+
+    #[test]
+    fn uppercase_one_rejects_truncated_multibyte_words() {
+        assert_eq!(uppercase_one(&mut []), None);
+        assert_eq!(uppercase_one(&mut [0xc0]), None);
+        assert_eq!(uppercase_one(&mut [0xe0, 0x80]), None);
+    }
+
+    #[test]
+    fn uppercase_one_handles_complete_words() {
+        let mut ascii = [b'a'];
+        assert_eq!(uppercase_one(&mut ascii), Some(1));
+        assert_eq!(ascii, [b'A']);
+
+        let mut two_byte = [0xc3, 0xa0];
+        assert_eq!(uppercase_one(&mut two_byte), Some(2));
+        assert_eq!(two_byte, [0xc3, 0x80]);
+
+        let mut three_byte = [0xe2, 0x82, 0xac];
+        assert_eq!(uppercase_one(&mut three_byte), Some(3));
+        assert_eq!(three_byte, [0xe2, 0x82, 0xa9]);
+    }
 }
