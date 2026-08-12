@@ -9,6 +9,7 @@ use burli_core::{
 const MAX_LITERAL_ONLY_QUALITY: u8 = 5;
 const MAX_META_BLOCK_SIZE: usize = 1 << 24;
 const MIN_MATCH_BYTES: usize = 4;
+const LITERAL_ALPHABET_SIZE: usize = 256;
 const COMMAND_ALPHABET_SIZE: usize = 704;
 const CODE_LENGTH_ORDER: [u8; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const MAX_SIMPLE_PREFIX_SYMBOLS: usize = 4;
@@ -30,7 +31,14 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
     write_compressed_meta_blocks(&mut writer, input, options)?;
     write_last_empty_meta_block(&mut writer)?;
 
-    Ok(writer.into_bytes())
+    let compressed = writer.into_bytes();
+    let stored_options = options.clone().quality(0)?;
+    let stored = crate::stored::compress_with_options(input, &stored_options)?;
+    if stored.len() < compressed.len() {
+        Ok(stored)
+    } else {
+        Ok(compressed)
+    }
 }
 
 fn max_literal_only_size(input_len: usize) -> usize {
@@ -268,12 +276,12 @@ fn write_compressed_literal_meta_block(
 
     write_meta_block_len(writer, input.len())?;
     write_block_and_context_header(writer)?;
-    write_fixed_literal_prefix_code(writer)?;
-    write_simple_prefix_code_single(writer, 704, command_symbol)?;
+    let literal_codes = write_literal_prefix_code(writer, core::slice::from_ref(&input))?;
+    write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, command_symbol)?;
     write_simple_prefix_code_single(writer, 64, 0)?;
     writer.write_bits(insert.extra_bits, insert.extra)?;
     for &literal in input {
-        writer.write_bits(8, u64::from(reverse_bits(literal, 8)))?;
+        write_literal(writer, &literal_codes, literal)?;
     }
     Ok(())
 }
@@ -302,7 +310,7 @@ fn write_token_batch(
 
     write_meta_block_len(writer, block_len)?;
     write_block_and_context_header(writer)?;
-    write_fixed_literal_prefix_code(writer)?;
+    let literal_codes = write_batch_literal_prefix_code(writer, input, tokens)?;
     let command_codes =
         write_simple_prefix_code_symbols(writer, COMMAND_ALPHABET_SIZE, &command_symbols)?;
     let distance_codes = write_simple_prefix_code_symbols(writer, 64, &distance_symbols)?;
@@ -323,7 +331,7 @@ fn write_token_batch(
         }
 
         for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            writer.write_bits(8, u64::from(reverse_bits(literal, 8)))?;
+            write_literal(writer, &literal_codes, literal)?;
         }
 
         if token.is_copy() {
@@ -404,6 +412,75 @@ fn write_code_length_code_len(writer: &mut BitWriter, len: u8) -> Result<(), Com
         0 => writer.write_bits(2, 0),
         1 => writer.write_bits(4, 7),
         _ => Err(BurliError::Format("unsupported Brotli code length code")),
+    }
+}
+
+#[derive(Clone, Debug)]
+enum LiteralCodes {
+    Fixed,
+    Simple(Vec<SymbolCode>),
+}
+
+fn write_batch_literal_prefix_code(
+    writer: &mut BitWriter,
+    input: &[u8],
+    tokens: &[Token],
+) -> Result<LiteralCodes, CompressError> {
+    let mut symbols = Vec::new();
+    for token in tokens {
+        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
+            push_unique(&mut symbols, u16::from(literal));
+            if symbols.len() > MAX_SIMPLE_PREFIX_SYMBOLS {
+                write_fixed_literal_prefix_code(writer)?;
+                return Ok(LiteralCodes::Fixed);
+            }
+        }
+    }
+    if symbols.is_empty() {
+        symbols.push(0);
+    }
+    Ok(LiteralCodes::Simple(write_simple_prefix_code_symbols(
+        writer,
+        LITERAL_ALPHABET_SIZE,
+        &symbols,
+    )?))
+}
+
+fn write_literal_prefix_code(
+    writer: &mut BitWriter,
+    inputs: &[&[u8]],
+) -> Result<LiteralCodes, CompressError> {
+    let mut symbols = Vec::new();
+    for input in inputs {
+        for &literal in *input {
+            push_unique(&mut symbols, u16::from(literal));
+            if symbols.len() > MAX_SIMPLE_PREFIX_SYMBOLS {
+                write_fixed_literal_prefix_code(writer)?;
+                return Ok(LiteralCodes::Fixed);
+            }
+        }
+    }
+    if symbols.is_empty() {
+        symbols.push(0);
+    }
+    Ok(LiteralCodes::Simple(write_simple_prefix_code_symbols(
+        writer,
+        LITERAL_ALPHABET_SIZE,
+        &symbols,
+    )?))
+}
+
+fn write_literal(
+    writer: &mut BitWriter,
+    codes: &LiteralCodes,
+    literal: u8,
+) -> Result<(), CompressError> {
+    match codes {
+        LiteralCodes::Fixed => writer.write_bits(8, u64::from(reverse_bits(literal, 8))),
+        LiteralCodes::Simple(codes) => {
+            let code = symbol_code(codes, u16::from(literal))?;
+            writer.write_bits(code.len, u64::from(code.bits))
+        }
     }
 }
 
@@ -703,14 +780,17 @@ mod tests {
 
     #[test]
     fn q1_emits_compressed_stream() {
-        let encoded = compress_with_options(b"x", &Options::default().quality(1).unwrap()).unwrap();
+        let input =
+            b"abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789".repeat(64);
+        let encoded =
+            compress_with_options(&input, &Options::default().quality(1).unwrap()).unwrap();
 
         assert_ne!(
             encoded,
-            crate::stored::compress_with_options(b"x", &Options::default().quality(0).unwrap())
+            crate::stored::compress_with_options(&input, &Options::default().quality(0).unwrap())
                 .unwrap()
         );
-        assert_eq!(burli_decode::decompress(&encoded).unwrap(), b"x");
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 
     #[test]
