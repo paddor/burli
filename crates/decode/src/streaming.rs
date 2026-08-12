@@ -32,6 +32,7 @@ enum State {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DecodeStep {
     NeedMore,
+    MadeProgress,
     MadeOutput,
     Done,
 }
@@ -141,7 +142,7 @@ impl<R: Read> StreamDecoder<R> {
                 Ok(if self.state == State::Done {
                     DecodeStep::Done
                 } else {
-                    DecodeStep::NeedMore
+                    DecodeStep::MadeProgress
                 })
             }
             MetaBlockHeader::Uncompressed { len } => {
@@ -227,7 +228,7 @@ impl<R: Read> Read for StreamDecoder<R> {
                 .decode_next_step()
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
             {
-                DecodeStep::MadeOutput | DecodeStep::Done => {}
+                DecodeStep::MadeOutput | DecodeStep::MadeProgress | DecodeStep::Done => {}
                 DecodeStep::NeedMore => {
                     if !self.read_more_encoded()? {
                         return Err(io::Error::new(

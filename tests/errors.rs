@@ -56,6 +56,20 @@ fn malformed_inputs_return_errors_without_panics() {
 }
 
 #[test]
+fn stream_decoder_matches_one_shot_on_fuzz_empty_metadata_prefix() {
+    let input = [0x0c, 0x03];
+    let one_shot = burli::decompress(&input);
+    let mut decoder = burli::StreamDecoder::new(input.as_slice());
+    let mut streamed = Vec::new();
+    let stream = decoder.read_to_end(&mut streamed);
+
+    assert_eq!(stream.is_ok(), one_shot.is_ok());
+    if let Ok(decoded) = one_shot {
+        assert_eq!(streamed, decoded);
+    }
+}
+
+#[test]
 fn truncated_valid_streams_return_errors_without_panics() {
     let input =
         b"function render(items){return items.map((item)=>item.name).join(',')};".repeat(512);
