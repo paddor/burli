@@ -9,6 +9,7 @@ const LITERAL_ALPHABET_SIZE: usize = 256;
 const COMMAND_ALPHABET_SIZE: usize = 704;
 const BLOCK_LENGTH_ALPHABET_SIZE: usize = 26;
 const LAST_DISTANCES: [usize; 4] = [16, 15, 11, 4];
+const CHUNKED_COPY_MIN_DISTANCE: usize = 8;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DistanceRing {
@@ -207,10 +208,20 @@ fn copy_from_distance(
 
     checked_backward_copy_end(produced, request)?;
 
-    for _ in 0..request.len {
-        let src = output.len() - request.distance;
-        let byte = output[src];
-        output.push(byte);
+    if request.distance < CHUNKED_COPY_MIN_DISTANCE {
+        for _ in 0..request.len {
+            let src = output.len() - request.distance;
+            let byte = output[src];
+            output.push(byte);
+        }
+    } else {
+        let mut remaining = request.len;
+        while remaining != 0 {
+            let src = output.len() - request.distance;
+            let chunk = request.distance.min(remaining);
+            output.extend_from_within(src..src + chunk);
+            remaining -= chunk;
+        }
     }
     if request.push_distance {
         distances.push(request.distance);
