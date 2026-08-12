@@ -62,6 +62,7 @@ impl PrefixCode {
     pub(crate) fn from_lengths(lengths: &[u8]) -> Result<Self, DecompressError> {
         let mut counts = [0_u16; MAX_CODE_BITS as usize + 1];
         let mut non_zero = 0_usize;
+        let mut max_bits = 0_u8;
 
         for &len in lengths {
             if len > MAX_CODE_BITS {
@@ -70,6 +71,7 @@ impl PrefixCode {
             if len != 0 {
                 counts[usize::from(len)] += 1;
                 non_zero += 1;
+                max_bits = max_bits.max(len);
             }
         }
 
@@ -103,23 +105,22 @@ impl PrefixCode {
         }
 
         let mut entries = Vec::with_capacity(non_zero);
-        let mut max_bits = 0_u8;
+        let fast_bits = max_bits.min(FAST_LOOKUP_BITS);
+        let mut fast = [Lookup::EMPTY; FAST_LOOKUP_SIZE];
         for (symbol, &len) in lengths.iter().enumerate() {
             if len == 0 {
                 continue;
             }
             let code = next_code[usize::from(len)];
             next_code[usize::from(len)] += 1;
-            max_bits = max_bits.max(len);
-            entries.push(Entry {
+            let entry = Entry {
                 symbol: symbol as u16,
                 len,
                 code,
-            });
+            };
+            fill_fast_lookup(&mut fast, fast_bits, entry);
+            entries.push(entry);
         }
-
-        let fast_bits = max_bits.min(FAST_LOOKUP_BITS);
-        let fast = build_fast_lookup(&entries, fast_bits);
 
         Ok(Self {
             entries,
@@ -174,21 +175,17 @@ impl PrefixCode {
     }
 }
 
-fn build_fast_lookup(entries: &[Entry], fast_bits: u8) -> [Lookup; FAST_LOOKUP_SIZE] {
-    let mut fast = [Lookup::EMPTY; FAST_LOOKUP_SIZE];
-    for entry in entries {
-        if entry.len > fast_bits || entry.symbol > Lookup::SYMBOL_MASK {
-            continue;
-        }
-
-        let prefix = reverse_low_bits(entry.code, entry.len);
-        let suffix_bits = fast_bits - entry.len;
-        for suffix in 0..(1_usize << suffix_bits) {
-            let index = usize::from(prefix) | (suffix << entry.len);
-            fast[index] = Lookup::new(entry.symbol, entry.len);
-        }
+fn fill_fast_lookup(fast: &mut [Lookup; FAST_LOOKUP_SIZE], fast_bits: u8, entry: Entry) {
+    if entry.len > fast_bits || entry.symbol > Lookup::SYMBOL_MASK {
+        return;
     }
-    fast
+
+    let prefix = reverse_low_bits(entry.code, entry.len);
+    let suffix_bits = fast_bits - entry.len;
+    for suffix in 0..(1_usize << suffix_bits) {
+        let index = usize::from(prefix) | (suffix << entry.len);
+        fast[index] = Lookup::new(entry.symbol, entry.len);
+    }
 }
 
 fn reverse_low_bits(mut value: u16, width: u8) -> u16 {
