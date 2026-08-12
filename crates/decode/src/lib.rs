@@ -46,3 +46,10 @@ pub fn decompress_into(
     output.extend_from_slice(&decompressed);
     Ok(output.len() - before)
 }
+
+#[cfg(feature = "alloc")]
+pub fn decompress_into_slice(input: &[u8], output: &mut [u8]) -> Result<usize, DecompressError> {
+    let decompressed = decompress_with_limit(input, output.len())?;
+    output[..decompressed.len()].copy_from_slice(&decompressed);
+    Ok(decompressed.len())
+}

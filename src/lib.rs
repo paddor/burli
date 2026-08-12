@@ -54,6 +54,11 @@ pub fn decompress_into(input: &[u8], output: &mut alloc::vec::Vec<u8>) -> Result
 }
 
 #[cfg(feature = "alloc")]
+pub fn decompress_into_slice(input: &[u8], output: &mut [u8]) -> Result<usize> {
+    burli_decode::decompress_into_slice(input, output)
+}
+
+#[cfg(feature = "alloc")]
 pub use burli_decode::context::{DecompressContext, Decompressor};
 #[cfg(feature = "std")]
 pub use burli_decode::streaming::StreamDecoder;

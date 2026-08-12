@@ -40,6 +40,17 @@ impl Decompressor {
         output.extend_from_slice(&decompressed);
         Ok(output.len() - before)
     }
+
+    pub fn decompress_into_slice(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+    ) -> Result<usize, DecompressError> {
+        let limit = self.max_output_size.min(output.len());
+        let decompressed = crate::decompress_with_limit(input, limit)?;
+        output[..decompressed.len()].copy_from_slice(&decompressed);
+        Ok(decompressed.len())
+    }
 }
 
 impl Default for Decompressor {
@@ -83,6 +94,14 @@ impl DecompressContext {
         output: &mut Vec<u8>,
     ) -> Result<usize, DecompressError> {
         self.inner.decompress_into(input, output)
+    }
+
+    pub fn decompress_into_slice(
+        &mut self,
+        input: &[u8],
+        output: &mut [u8],
+    ) -> Result<usize, DecompressError> {
+        self.inner.decompress_into_slice(input, output)
     }
 }
 

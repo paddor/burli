@@ -82,6 +82,34 @@ fn stateful_api_appends_into_existing_buffers() {
 }
 
 #[test]
+fn decode_into_slice_writes_existing_buffer() {
+    let input = b"slice payload";
+    let encoded = burli::compress(input, 0).unwrap();
+    let mut decoded = [0_u8; 32];
+
+    let written = burli::decompress_into_slice(&encoded, &mut decoded).unwrap();
+
+    assert_eq!(written, input.len());
+    assert_eq!(&decoded[..written], input);
+}
+
+#[test]
+fn stateful_decode_into_slice_respects_buffer_size() {
+    let input = b"too large";
+    let encoded = burli::compress(input, 0).unwrap();
+    let mut decompressor = burli::Decompressor::new();
+    let mut decoded = [0_u8; 4];
+
+    assert_eq!(
+        decompressor.decompress_into_slice(&encoded, &mut decoded),
+        Err(BurliError::OutputLimitExceeded {
+            limit: 4,
+            needed: input.len()
+        })
+    );
+}
+
+#[test]
 #[cfg(feature = "std")]
 fn stream_api_round_trips_stored_streams() {
     let input = b"stream stored payload";
