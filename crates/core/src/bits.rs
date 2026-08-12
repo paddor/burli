@@ -54,15 +54,21 @@ impl<'a> BitReader<'a> {
         if self.remaining_bits() < width {
             return Err(BurliError::Format("unexpected end of Brotli input"));
         }
-
-        let mut value = 0_u64;
-        for offset in 0..width {
-            let absolute = self.bit_pos + offset;
-            let bit = (self.input[absolute / 8] >> (absolute % 8)) & 1;
-            value |= u64::from(bit) << offset;
+        if width == 0 {
+            return Ok(0);
         }
 
-        Ok(value)
+        let mut value = 0_u64;
+        let byte_pos = self.bit_pos / 8;
+        let bit_offset = self.bit_pos % 8;
+        let byte_count = (bit_offset + width).div_ceil(8);
+        let bytes = &self.input[byte_pos..byte_pos + byte_count];
+        for (index, &byte) in bytes.iter().enumerate() {
+            value |= u64::from(byte) << (index * 8);
+        }
+
+        value >>= bit_offset;
+        Ok(value & ((1_u64 << width) - 1))
     }
 
     pub fn drop_bits(&mut self, width: u8) -> Result<()> {
