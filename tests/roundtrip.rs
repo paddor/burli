@@ -31,6 +31,7 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(16))]
 
     #[test]
+    #[cfg(feature = "std")]
     fn streaming_encoder_round_trip_arbitrary_bytes(
         input in prop::collection::vec(any::<u8>(), 0..512),
         chunk in 1usize..64,

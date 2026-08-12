@@ -1,7 +1,6 @@
-use std::{
-    io::{self, Read, Write},
-    panic::{self, UnwindSafe},
-};
+#[cfg(feature = "std")]
+use std::io::{self, Read, Write};
+use std::panic::{self, UnwindSafe};
 
 use burli::BurliError;
 
@@ -9,12 +8,14 @@ fn assert_no_panic<T>(f: impl FnOnce() -> T + UnwindSafe) -> T {
     panic::catch_unwind(f).expect("public API panicked")
 }
 
+#[cfg(feature = "std")]
 struct FragmentedRead<'a> {
     input: &'a [u8],
     pos: usize,
     chunk: usize,
 }
 
+#[cfg(feature = "std")]
 impl<'a> FragmentedRead<'a> {
     const fn new(input: &'a [u8], chunk: usize) -> Self {
         Self {
@@ -25,6 +26,7 @@ impl<'a> FragmentedRead<'a> {
     }
 }
 
+#[cfg(feature = "std")]
 impl Read for FragmentedRead<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.pos == self.input.len() {
@@ -56,6 +58,7 @@ fn malformed_inputs_return_errors_without_panics() {
 }
 
 #[test]
+#[cfg(feature = "std")]
 fn stream_decoder_matches_one_shot_on_fuzz_empty_metadata_prefix() {
     let input = [0x0c, 0x03];
     let one_shot = burli::decompress(&input);
@@ -70,6 +73,7 @@ fn stream_decoder_matches_one_shot_on_fuzz_empty_metadata_prefix() {
 }
 
 #[test]
+#[cfg(feature = "std")]
 fn truncated_valid_streams_return_errors_without_panics() {
     let input =
         b"function render(items){return items.map((item)=>item.name).join(',')};".repeat(512);
@@ -127,6 +131,7 @@ fn slice_apis_report_needed_sizes_without_partial_success() {
 }
 
 #[test]
+#[cfg(feature = "std")]
 fn fragmented_stream_decoder_round_trips_all_scoped_qualities() {
     let inputs = [
         b"abc abc abc abc abc abc".repeat(64),
@@ -151,6 +156,7 @@ fn fragmented_stream_decoder_round_trips_all_scoped_qualities() {
 }
 
 #[test]
+#[cfg(feature = "std")]
 fn fragmented_stream_encoder_round_trips_all_scoped_qualities() {
     let input = b"abcdefghijklmnopqrstuvwxyz0123456789".repeat(2048);
 
