@@ -9,49 +9,35 @@ Linux VM on a 2018 Mac Mini, Intel Core i7-8700B @ 3.20GHz, performance governor
 <text x="22" y="188" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#E6EDF3" font-weight="bold" transform="rotate(270, 22, 188)">
 seconds / GB
 </text>
-<polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,271 680,271 "/>
-<text x="62" y="271" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
-100.0
-</text>
-<polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,228 680,228 "/>
-<text x="62" y="228" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
-200.0
+<polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,249 680,249 "/>
+<text x="62" y="249" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
+20.0
 </text>
 <polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,186 680,186 "/>
 <text x="62" y="186" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
-300.0
+40.0
 </text>
-<polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,144 680,144 "/>
-<text x="62" y="144" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
-400.0
-</text>
-<polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,101 680,101 "/>
-<text x="62" y="101" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
-500.0
+<polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,122 680,122 "/>
+<text x="62" y="122" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
+60.0
 </text>
 <polyline fill="none" opacity="1" stroke="#30363D" stroke-width="2" points="70,313 680,313 "/>
-<rect x="167" y="302" width="80" height="11" opacity="1" fill="#2563EB" stroke="none"/>
-<rect x="167" y="301" width="80" height="1" opacity="1" fill="#1D4ED8" stroke="none"/>
-<rect x="167" y="300" width="80" height="1" opacity="1" fill="#2563EB" stroke="none"/>
-<text x="207" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
+<rect x="223" y="228" width="80" height="85" opacity="1" fill="#2563EB" stroke="none"/>
+<rect x="223" y="222" width="80" height="6" opacity="1" fill="#1D4ED8" stroke="none"/>
+<rect x="223" y="213" width="80" height="9" opacity="1" fill="#2563EB" stroke="none"/>
+<text x="263" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
 google-brotli
 </text>
-<rect x="279" y="298" width="80" height="15" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="279" y="295" width="80" height="3" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="279" y="97" width="80" height="198" opacity="1" fill="#F87171" stroke="none"/>
-<text x="319" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
+<rect x="335" y="185" width="80" height="128" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="335" y="166" width="80" height="19" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="335" y="96" width="80" height="70" opacity="1" fill="#F87171" stroke="none"/>
+<text x="375" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
 burli
 </text>
-<rect x="391" y="298" width="80" height="15" opacity="1" fill="#F472B6" stroke="none"/>
-<rect x="391" y="295" width="80" height="3" opacity="1" fill="#C05A92" stroke="none"/>
-<rect x="391" y="96" width="80" height="199" opacity="1" fill="#F472B6" stroke="none"/>
-<text x="431" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
-burli paranoid
-</text>
-<rect x="503" y="294" width="80" height="19" opacity="1" fill="#4ADE80" stroke="none"/>
-<rect x="503" y="293" width="80" height="1" opacity="1" fill="#3AAF60" stroke="none"/>
-<rect x="503" y="291" width="80" height="2" opacity="1" fill="#4ADE80" stroke="none"/>
-<text x="543" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
+<rect x="447" y="173" width="80" height="140" opacity="1" fill="#4ADE80" stroke="none"/>
+<rect x="447" y="166" width="80" height="7" opacity="1" fill="#3AAF60" stroke="none"/>
+<rect x="447" y="148" width="80" height="18" opacity="1" fill="#4ADE80" stroke="none"/>
+<text x="487" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
 rust-brotli
 </text>
 <rect x="115" y="359" width="12" height="12" opacity="1" fill="#2563EB" stroke="none"/>
@@ -62,12 +48,8 @@ Google Brotli C 1.1.0
 <text x="133" y="385" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 burli
 </text>
-<rect x="365" y="359" width="12" height="12" opacity="1" fill="#F472B6" stroke="none"/>
+<rect x="365" y="359" width="12" height="12" opacity="1" fill="#4ADE80" stroke="none"/>
 <text x="383" y="365" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
-burli paranoid
-</text>
-<rect x="365" y="379" width="12" height="12" opacity="1" fill="#4ADE80" stroke="none"/>
-<text x="383" y="385" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 rust-brotli 8.0.4
 </text>
 <text x="140" y="423" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.064516129032258" opacity="1" fill="#E6EDF3">

@@ -127,9 +127,9 @@ Pipeline and matrix charts use stacked seconds/GB:
 - transfer at 100 MB/s
 - decompression CPU
 
-Routine chart refresh after burli code changes should only re-run `burli` and
-`burli paranoid`. Re-run external baselines only when asked or when corpus or
-bench harness changes.
+Routine chart refresh after burli code changes should only re-run `burli`.
+Re-run external baselines only when asked or when corpus or bench harness
+changes.
 
 Benchmark corpus:
 
@@ -146,4 +146,4 @@ Measurement rules:
 - record CPU, compiler flags, target features, corpus list, command, and ratio
 - keep cache append-only
 - compare scalar and SIMD paths separately
-- compare default and `paranoid` builds separately
+- compare `paranoid` builds separately when the default build gains unsafe code
