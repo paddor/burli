@@ -131,6 +131,8 @@ impl<'a> BitReader<'a> {
 #[derive(Clone, Debug, Default)]
 pub struct BitWriter {
     output: Vec<u8>,
+    bit_buffer: u64,
+    bit_count: u8,
     bit_len: usize,
 }
 
@@ -139,6 +141,8 @@ impl BitWriter {
     pub const fn new() -> Self {
         Self {
             output: Vec::new(),
+            bit_buffer: 0,
+            bit_count: 0,
             bit_len: 0,
         }
     }
@@ -146,6 +150,8 @@ impl BitWriter {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             output: Vec::with_capacity(capacity),
+            bit_buffer: 0,
+            bit_count: 0,
             bit_len: 0,
         }
     }
@@ -164,34 +170,19 @@ impl BitWriter {
             return Ok(());
         }
 
-        let target_bits = self
+        self.bit_len = self
             .bit_len
             .checked_add(width)
             .ok_or(BurliError::Format("Brotli output bit length overflow"))?;
-        let bit_offset = self.bit_len & 7;
-        let byte_pos = self.bit_len >> 3;
-        let bytes = (bit_offset + width + 7) >> 3;
-        let target_len = byte_pos
-            .checked_add(bytes)
-            .ok_or(BurliError::Format("Brotli output byte length overflow"))?;
-        if self.output.len() < target_len {
-            self.output.resize(target_len, 0);
-        }
 
         let mask = (1_u64 << width) - 1;
-        let mut chunk = (value & mask) << bit_offset;
-        if bytes == 1 {
-            self.output[byte_pos] |= chunk as u8;
-            self.bit_len = target_bits;
-            return Ok(());
+        self.bit_buffer |= (value & mask) << self.bit_count;
+        self.bit_count += width as u8;
+        while self.bit_count >= 8 {
+            self.output.push(self.bit_buffer as u8);
+            self.bit_buffer >>= 8;
+            self.bit_count -= 8;
         }
-
-        for offset in 0..bytes {
-            self.output[byte_pos + offset] |= chunk as u8;
-            chunk >>= 8;
-        }
-
-        self.bit_len = target_bits;
         Ok(())
     }
 
@@ -202,6 +193,7 @@ impl BitWriter {
 
     pub fn write_aligned_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         self.align_to_byte()?;
+        debug_assert_eq!(self.bit_count, 0);
         self.output.extend_from_slice(bytes);
         self.bit_len = self
             .bit_len
@@ -211,25 +203,14 @@ impl BitWriter {
     }
 
     pub fn take_full_bytes(&mut self) -> Vec<u8> {
-        let full_bytes = self.bit_len / 8;
-        if full_bytes == 0 {
-            return Vec::new();
-        }
-
-        let taken = self.output[..full_bytes].to_vec();
-        if self.bit_len.is_multiple_of(8) {
-            self.output.clear();
-            self.bit_len = 0;
-        } else {
-            let partial = self.output[full_bytes];
-            self.output.clear();
-            self.output.push(partial);
-            self.bit_len %= 8;
-        }
-        taken
+        self.bit_len = usize::from(self.bit_count);
+        core::mem::take(&mut self.output)
     }
 
-    pub fn into_bytes(self) -> Vec<u8> {
+    pub fn into_bytes(mut self) -> Vec<u8> {
+        if self.bit_count != 0 {
+            self.output.push(self.bit_buffer as u8);
+        }
         self.output
     }
 }
