@@ -64,3 +64,18 @@ mod tests {
         ));
     }
 }
+
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    #[kani::proof]
+    fn rejects_lengths_below_dictionary_minimum() {
+        let len = usize::from(kBrotliMinDictionaryWordLength) - 1;
+
+        assert!(matches!(
+            lookup(1, 0, len),
+            Err(BurliError::Format("invalid Brotli dictionary word length"))
+        ));
+    }
+}

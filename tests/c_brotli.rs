@@ -58,6 +58,19 @@ fn burli_q0_to_q5_decode_through_c_brotli() {
 }
 
 #[test]
+fn c_brotli_q0_to_q5_web_fixture_slices_decode_through_burli() {
+    for quality in 0..=5 {
+        for input in web_fixture_slices() {
+            let encoded = c_brotli_compress(&input, quality);
+            let decoded = burli::decompress(&encoded)
+                .unwrap_or_else(|error| panic!("C q{quality} web slice failed: {error:?}"));
+
+            assert_bytes_eq(&decoded, &input, &format!("C q{quality} web slice"));
+        }
+    }
+}
+
+#[test]
 #[ignore = "uses local benchmark corpus if already downloaded"]
 fn local_web_corpus_c_brotli_q0_to_q5_decode_through_burli() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/corpus/web");
@@ -118,6 +131,23 @@ fn representative_inputs() -> Vec<Vec<u8>> {
         b"function render(items){return items.map((item)=>`<li data-id=\"${item.id}\">${item.name}</li>`).join('')} export { render };"
             .repeat(32),
         b"abcdefghijklmnopqrstuvwxyz0123456789".repeat(4096),
+    ]
+}
+
+fn web_fixture_slices() -> Vec<Vec<u8>> {
+    vec![
+        br#"<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Burli fixture</title></head>
+<body><main class="stack"><h1>Compression</h1><p data-id="42">web payloads mix tags, attrs, text, and whitespace.</p></main></body>
+</html>"#
+            .repeat(12),
+        br#".btn{display:inline-flex;align-items:center;gap:.5rem;border:1px solid #0d6efd;background:#fff;color:#0d6efd}.btn:hover{background:#0d6efd;color:#fff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));gap:1rem}"#
+            .repeat(24),
+        br#"export function render(items){return items.map((item,index)=>`<li data-index="${index}" data-id="${item.id}">${item.name}</li>`).join("")}const state={ready:true,count:42,items:["alpha","beta","gamma"]};"#
+            .repeat(24),
+        br#"{"scripts":{"build":"vite build","test":"cargo test --workspace"},"dependencies":{"@vitejs/plugin-react":"latest","typescript":"latest"},"browserslist":[">0.2%","not dead","not op_mini all"]}"#
+            .repeat(24),
     ]
 }
 

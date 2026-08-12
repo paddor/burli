@@ -204,15 +204,7 @@ fn copy_from_distance(
         return Err(BurliError::Format("invalid Brotli backward distance"));
     }
 
-    let end = produced
-        .checked_add(request.len)
-        .ok_or(BurliError::Format("Brotli copy length overflow"))?;
-    if end > request.needed {
-        return Err(BurliError::Format("Brotli copy exceeds meta-block size"));
-    }
-    if end < request.meta_block_start {
-        return Err(BurliError::Format("Brotli copy output position underflow"));
-    }
+    checked_backward_copy_end(produced, request)?;
 
     for _ in 0..request.len {
         let src = output.len() - request.distance;
@@ -223,6 +215,22 @@ fn copy_from_distance(
         distances.push(request.distance);
     }
     Ok(())
+}
+
+fn checked_backward_copy_end(
+    produced: usize,
+    request: CopyRequest,
+) -> Result<usize, DecompressError> {
+    let end = produced
+        .checked_add(request.len)
+        .ok_or(BurliError::Format("Brotli copy length overflow"))?;
+    if end > request.needed {
+        return Err(BurliError::Format("Brotli copy exceeds meta-block size"));
+    }
+    if end < request.meta_block_start {
+        return Err(BurliError::Format("Brotli copy output position underflow"));
+    }
+    Ok(end)
 }
 
 #[derive(Clone, Debug)]
@@ -764,5 +772,46 @@ mod tests {
 
         let mut reader = BitReader::new(&[]);
         assert_eq!(read_distance(&mut reader, 1, 0, 0, &distances).unwrap(), 11);
+    }
+}
+
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    #[kani::proof]
+    fn default_short_distances_are_non_zero() {
+        let symbol = kani::any::<u8>();
+        kani::assume(symbol < 16);
+
+        let distance = DistanceRing::new().resolve(usize::from(symbol)).unwrap();
+
+        assert!(distance > 0);
+    }
+
+    #[kani::proof]
+    fn backward_copy_bound_check_caps_end_at_needed() {
+        let produced = kani::any::<u8>();
+        let distance = kani::any::<u8>();
+        let len = kani::any::<u8>();
+        kani::assume((1..=8).contains(&produced));
+        kani::assume((1..=produced).contains(&distance));
+        kani::assume(len <= 8);
+
+        let produced = usize::from(produced);
+        let request = CopyRequest {
+            meta_block_start: 0,
+            needed: produced + usize::from(len),
+            window_size: 16,
+            output_base: 0,
+            distance: usize::from(distance),
+            len: usize::from(len),
+            push_distance: true,
+        };
+
+        let end = checked_backward_copy_end(produced, request).unwrap();
+
+        assert_eq!(end, request.needed);
+        assert!(end <= request.needed);
     }
 }
