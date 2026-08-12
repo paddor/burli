@@ -99,6 +99,7 @@ pub(crate) fn decode_meta_block_with_base(
             needed: global_needed,
         });
     }
+    output.reserve(needed - output.len());
 
     let mut header = read_header(reader)?;
 

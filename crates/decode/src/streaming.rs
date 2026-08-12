@@ -160,6 +160,7 @@ impl<R: Read> StreamDecoder<R> {
                         needed: global_needed,
                     });
                 }
+                output.reserve(len);
 
                 reader.read_zero_padding_to_byte()?;
                 let bytes = reader.read_aligned_bytes(len)?;
