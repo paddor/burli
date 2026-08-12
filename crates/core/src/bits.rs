@@ -160,6 +160,10 @@ impl BitWriter {
         }
 
         let width = usize::from(width);
+        if width == 0 {
+            return Ok(());
+        }
+
         let target_bits = self
             .bit_len
             .checked_add(width)
@@ -169,11 +173,14 @@ impl BitWriter {
             self.output.resize(target_len, 0);
         }
 
-        for offset in 0..width {
-            if ((value >> offset) & 1) != 0 {
-                let absolute = self.bit_len + offset;
-                self.output[absolute / 8] |= 1 << (absolute % 8);
-            }
+        let bit_offset = self.bit_len & 7;
+        let byte_pos = self.bit_len >> 3;
+        let bytes = (bit_offset + width).div_ceil(8);
+        let mask = (1_u64 << width) - 1;
+        let mut chunk = (value & mask) << bit_offset;
+        for offset in 0..bytes {
+            self.output[byte_pos + offset] |= chunk as u8;
+            chunk >>= 8;
         }
 
         self.bit_len = target_bits;
