@@ -13,6 +13,8 @@ pub mod streaming;
 #[cfg(feature = "alloc")]
 mod compressed;
 #[cfg(feature = "alloc")]
+mod context_lookup;
+#[cfg(feature = "alloc")]
 mod dictionary;
 #[cfg(feature = "alloc")]
 mod huffman;

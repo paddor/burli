@@ -558,16 +558,23 @@ fn literal_context(
     block_type: usize,
 ) -> Result<usize, DecompressError> {
     let p1 = output.last().copied().unwrap_or(0);
+    let p2 = output
+        .get(output.len().saturating_sub(2))
+        .copied()
+        .unwrap_or(0);
     let mode = header.context_modes[block_type];
     let context = match mode {
         0 => p1 & 0x3f,
         1 => p1 >> 2,
-        _ if header.literal_tree_count() == 1 => 0,
-        _ => {
-            return Err(BurliError::Unsupported(
-                "Brotli UTF8 and signed literal contexts not implemented yet",
-            ));
+        2 => {
+            crate::context_lookup::kContextLookup[2][usize::from(p1)]
+                | crate::context_lookup::kContextLookup[2][usize::from(p2) + 256]
         }
+        3 => {
+            crate::context_lookup::kContextLookup[3][usize::from(p1)]
+                | crate::context_lookup::kContextLookup[3][usize::from(p2) + 256]
+        }
+        _ => return Err(BurliError::Format("invalid Brotli literal context mode")),
     };
     Ok(usize::from(context))
 }
