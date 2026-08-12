@@ -486,14 +486,30 @@ fn read_u64_le(input: &[u8], pos: usize) -> u64 {
 #[inline(always)]
 fn match_len(input: &[u8], previous: usize, pos: usize, max_len: usize) -> usize {
     let mut len = 0;
+    if max_len >= 8 {
+        let diff = read_u64_le(input, previous) ^ read_u64_le(input, pos);
+        if diff != 0 {
+            return diff.trailing_zeros() as usize / 8;
+        }
+        len = 8;
+    }
+    if max_len >= 16 {
+        let diff = read_u64_le(input, previous + 8) ^ read_u64_le(input, pos + 8);
+        if diff != 0 {
+            return 8 + diff.trailing_zeros() as usize / 8;
+        }
+        len = 16;
+    }
+    let previous_bytes = &input[previous..previous + max_len];
+    let pos_bytes = &input[pos..pos + max_len];
     while len + 8 <= max_len {
-        let diff = read_u64_le(input, previous + len) ^ read_u64_le(input, pos + len);
+        let diff = read_u64_le(previous_bytes, len) ^ read_u64_le(pos_bytes, len);
         if diff != 0 {
             return len + diff.trailing_zeros() as usize / 8;
         }
         len += 8;
     }
-    while len < max_len && input[previous + len] == input[pos + len] {
+    while len < max_len && previous_bytes[len] == pos_bytes[len] {
         len += 1;
     }
     len
