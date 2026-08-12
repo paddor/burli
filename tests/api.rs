@@ -132,7 +132,11 @@ fn burli_decodes_rust_brotli_empty_stream() {
 
 #[test]
 fn burli_decodes_rust_brotli_small_compressed_streams() {
-    let inputs: &[&[u8]] = &[b"abc abc abc abc"];
+    let inputs: &[&[u8]] = &[
+        b"abc abc abc abc",
+        b"function demo(){return 42;} function demo(){return 42;}",
+        b"{\"name\":\"burli\",\"kind\":\"brotli\",\"kind\":\"brotli\"}",
+    ];
 
     for quality in 1..=5 {
         for input in inputs {

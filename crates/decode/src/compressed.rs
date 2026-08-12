@@ -619,9 +619,17 @@ fn copy_from_distance(
     let produced = output.len();
     let max_allowed_distance = window_size.min(produced);
     if distance > max_allowed_distance {
-        return Err(BurliError::Unsupported(
-            "Brotli static dictionary references not implemented yet",
-        ));
+        let word = crate::dictionary::lookup(distance, max_allowed_distance, copy_len)?;
+        let end = produced
+            .checked_add(word.len())
+            .ok_or(BurliError::Format("Brotli dictionary copy length overflow"))?;
+        if end > needed {
+            return Err(BurliError::Format(
+                "Brotli dictionary copy exceeds meta-block size",
+            ));
+        }
+        output.extend_from_slice(&word);
+        return Ok(());
     }
     if distance == 0 || distance > produced {
         return Err(BurliError::Format("invalid Brotli backward distance"));
