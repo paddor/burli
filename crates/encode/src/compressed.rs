@@ -150,7 +150,7 @@ fn write_compressed_chunk(
         return write_compressed_literal_meta_block(writer, input);
     }
     if quality == 0 {
-        return write_token_batch(writer, input, &tokens);
+        return write_token_batch_with_len(writer, input, &tokens, input.len());
     }
     write_token_batches(writer, input, &tokens)
 }
@@ -553,6 +553,15 @@ fn write_token_batch(
     tokens: &[Token],
 ) -> Result<(), CompressError> {
     let block_len = tokens.iter().map(|token| token.block_len()).sum::<usize>();
+    write_token_batch_with_len(writer, input, tokens, block_len)
+}
+
+fn write_token_batch_with_len(
+    writer: &mut BitWriter,
+    input: &[u8],
+    tokens: &[Token],
+    block_len: usize,
+) -> Result<(), CompressError> {
     if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
         return Err(BurliError::Format("invalid compressed Brotli block size"));
     }
