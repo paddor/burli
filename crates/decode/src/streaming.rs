@@ -1,15 +1,15 @@
-use std::io::{self, Read};
+use std::io::{self, Cursor, Read};
 
 pub struct StreamDecoder<R> {
     inner: R,
-    returned_error: bool,
+    decoded: Option<Cursor<Vec<u8>>>,
 }
 
 impl<R: Read> StreamDecoder<R> {
     pub const fn new(inner: R) -> Self {
         Self {
             inner,
-            returned_error: false,
+            decoded: None,
         }
     }
 
@@ -19,14 +19,15 @@ impl<R: Read> StreamDecoder<R> {
 }
 
 impl<R: Read> Read for StreamDecoder<R> {
-    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
-        if self.returned_error {
-            return Ok(0);
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.decoded.is_none() {
+            let mut encoded = Vec::new();
+            self.inner.read_to_end(&mut encoded)?;
+            let decoded = crate::decompress(&encoded)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            self.decoded = Some(Cursor::new(decoded));
         }
-        self.returned_error = true;
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "burli streaming decoder not implemented yet",
-        ))
+
+        self.decoded.as_mut().expect("decoded above").read(buf)
     }
 }

@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Write};
 
 use burli::{BurliError, Options, Quality};
 
@@ -38,6 +38,49 @@ fn q0_round_trips_through_burli() {
     let encoded = burli::compress(input, 0).unwrap();
 
     assert_eq!(burli::decompress(&encoded).unwrap(), input);
+}
+
+#[test]
+fn stateful_api_round_trips_stored_streams() {
+    let input = b"stateful stored payload";
+    let mut compressor = burli::Compressor::new(0).unwrap();
+    let mut decompressor = burli::Decompressor::new();
+
+    let encoded = compressor.compress(input).unwrap();
+    let decoded = decompressor.decompress(&encoded).unwrap();
+
+    assert_eq!(decoded, input);
+}
+
+#[test]
+fn stateful_api_appends_into_existing_buffers() {
+    let input = b"append payload";
+    let mut compressor = burli::Compressor::new(0).unwrap();
+    let mut decompressor = burli::Decompressor::new();
+    let mut encoded = b"prefix:".to_vec();
+    let written = compressor.compress_into(input, &mut encoded).unwrap();
+    let stream = encoded[encoded.len() - written..].to_vec();
+    let mut decoded = b"decoded:".to_vec();
+
+    let decoded_written = decompressor.decompress_into(&stream, &mut decoded).unwrap();
+
+    assert_eq!(written, stream.len());
+    assert_eq!(decoded_written, input.len());
+    assert_eq!(decoded, b"decoded:append payload");
+}
+
+#[test]
+fn stream_api_round_trips_stored_streams() {
+    let input = b"stream stored payload";
+    let mut encoder = burli::StreamEncoder::new(Vec::new(), 0).unwrap();
+    encoder.write_all(input).unwrap();
+    let encoded = encoder.finish().unwrap();
+    let mut decoder = burli::StreamDecoder::new(encoded.as_slice());
+    let mut decoded = Vec::new();
+
+    decoder.read_to_end(&mut decoded).unwrap();
+
+    assert_eq!(decoded, input);
 }
 
 #[test]
