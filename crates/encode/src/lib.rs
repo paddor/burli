@@ -11,6 +11,8 @@ pub mod context;
 pub mod streaming;
 
 #[cfg(feature = "alloc")]
+mod compressed;
+#[cfg(feature = "alloc")]
 mod stored;
 
 pub use burli_core::{CompressError, Options};

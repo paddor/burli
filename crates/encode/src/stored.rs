@@ -7,13 +7,10 @@ use burli_core::{
 };
 
 const MAX_META_BLOCK_SIZE: usize = 1 << 24;
-const MAX_STORED_FALLBACK_QUALITY: u8 = 5;
 
 pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
-    if options.quality_value() > MAX_STORED_FALLBACK_QUALITY {
-        return Err(BurliError::Unsupported(
-            "only q0..q5 stored Brotli encoding is implemented yet",
-        ));
+    if options.quality_value() != 0 {
+        return crate::compressed::compress_with_options(input, options);
     }
 
     let block_bits = options.block_bits_value().unwrap_or(MIN_BLOCK_BITS);
