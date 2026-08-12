@@ -25,9 +25,12 @@ impl<W: Write> StreamEncoder<W> {
     }
 
     pub fn finish(self) -> Result<W, CompressError> {
-        Err(CompressError::Unsupported(
-            "burli streaming encoder not implemented yet",
-        ))
+        let compressed = crate::compress_with_options(&self.buffered, &self.options)?;
+        let mut inner = self.inner;
+        inner
+            .write_all(&compressed)
+            .map_err(|_| CompressError::Format("failed to write compressed Brotli stream"))?;
+        Ok(inner)
     }
 
     pub fn into_inner(self) -> W {

@@ -32,6 +32,7 @@ workspace = true
 
 [dev-dependencies]
 proptest = "1"
+rust-brotli = { package = "brotli", version = "8.0.4" }
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
@@ -66,4 +67,3 @@ module_name_repetitions = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
-

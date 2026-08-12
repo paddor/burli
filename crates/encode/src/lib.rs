@@ -10,6 +10,9 @@ pub mod context;
 #[cfg(feature = "std")]
 pub mod streaming;
 
+#[cfg(feature = "alloc")]
+mod stored;
+
 pub use burli_core::{CompressError, Options};
 
 #[cfg(feature = "alloc")]
@@ -20,12 +23,10 @@ pub fn compress(input: &[u8], quality: u8) -> Result<alloc::vec::Vec<u8>, Compre
 
 #[cfg(feature = "alloc")]
 pub fn compress_with_options(
-    _input: &[u8],
-    _options: &Options,
+    input: &[u8],
+    options: &Options,
 ) -> Result<alloc::vec::Vec<u8>, CompressError> {
-    Err(CompressError::Unsupported(
-        "burli encoder not implemented yet",
-    ))
+    stored::compress_with_options(input, options)
 }
 
 #[cfg(feature = "alloc")]

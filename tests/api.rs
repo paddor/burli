@@ -1,3 +1,5 @@
+use std::io::Read;
+
 use burli::{BurliError, Options, Quality};
 
 #[test]
@@ -28,6 +30,34 @@ fn encoder_path_returns_unsupported() {
 #[test]
 fn decoder_handles_empty_stream() {
     assert_eq!(burli::decompress(&[0x06]).unwrap(), b"");
+}
+
+#[test]
+fn q0_round_trips_through_burli() {
+    let input = b"small web payload";
+    let encoded = burli::compress(input, 0).unwrap();
+
+    assert_eq!(burli::decompress(&encoded).unwrap(), input);
+}
+
+#[test]
+fn q0_output_decodes_with_rust_brotli() {
+    let input = b"rust-brotli should decode burli stored streams";
+    let encoded = burli::compress(input, 0).unwrap();
+    let mut decoder = rust_brotli::Decompressor::new(encoded.as_slice(), 4096);
+    let mut decoded = Vec::new();
+
+    decoder.read_to_end(&mut decoded).unwrap();
+    assert_eq!(decoded, input);
+}
+
+#[test]
+fn burli_decodes_rust_brotli_empty_stream() {
+    let mut encoder = rust_brotli::CompressorReader::new(&b""[..], 4096, 0, 22);
+    let mut encoded = Vec::new();
+
+    encoder.read_to_end(&mut encoded).unwrap();
+    assert_eq!(burli::decompress(&encoded).unwrap(), b"");
 }
 
 #[test]
