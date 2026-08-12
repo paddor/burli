@@ -142,7 +142,7 @@ fn web_fixture_slices() -> Vec<Vec<u8>> {
 <body><main class="stack"><h1>Compression</h1><p data-id="42">web payloads mix tags, attrs, text, and whitespace.</p></main></body>
 </html>"#
             .repeat(12),
-        br#".btn{display:inline-flex;align-items:center;gap:.5rem;border:1px solid #0d6efd;background:#fff;color:#0d6efd}.btn:hover{background:#0d6efd;color:#fff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));gap:1rem}"#
+        br".btn{display:inline-flex;align-items:center;gap:.5rem;border:1px solid #0d6efd;background:#fff;color:#0d6efd}.btn:hover{background:#0d6efd;color:#fff}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));gap:1rem}"
             .repeat(24),
         br#"export function render(items){return items.map((item,index)=>`<li data-index="${index}" data-id="${item.id}">${item.name}</li>`).join("")}const state={ready:true,count:42,items:["alpha","beta","gamma"]};"#
             .repeat(24),
