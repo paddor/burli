@@ -126,6 +126,22 @@ fn stream_api_round_trips_stored_streams() {
 
 #[test]
 #[cfg(feature = "std")]
+fn stream_encoder_q5_output_decodes_with_rust_brotli() {
+    let input = b"abcdefghijklmnopqrstuvwxyz0123456789".repeat(4096);
+    let mut encoder = burli::StreamEncoder::new(Vec::new(), 5).unwrap();
+    encoder.write_all(&input[..10_000]).unwrap();
+    encoder.write_all(&input[10_000..]).unwrap();
+    let encoded = encoder.finish().unwrap();
+    let mut decoder = rust_brotli::Decompressor::new(encoded.as_slice(), 4096);
+    let mut decoded = Vec::new();
+
+    decoder.read_to_end(&mut decoded).unwrap();
+
+    assert_eq!(decoded, input);
+}
+
+#[test]
+#[cfg(feature = "std")]
 fn stream_decoder_with_limit_reports_invalid_data() {
     let encoded = burli::compress(b"too large", 0).unwrap();
     let mut decoder = burli::StreamDecoder::with_limit(encoded.as_slice(), 4);

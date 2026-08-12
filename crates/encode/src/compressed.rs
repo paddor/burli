@@ -41,6 +41,40 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
     }
 }
 
+pub(crate) fn write_stream_header(
+    writer: &mut BitWriter,
+    options: &Options,
+) -> Result<(), CompressError> {
+    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+        return Err(BurliError::Unsupported(
+            "only q0..q5 Brotli encoding is implemented yet",
+        ));
+    }
+    write_window_bits(writer, options.window_bits_value())
+}
+
+pub(crate) fn write_stream_chunk(
+    writer: &mut BitWriter,
+    input: &[u8],
+    options: &Options,
+) -> Result<(), CompressError> {
+    if input.is_empty() {
+        return Ok(());
+    }
+    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+        return Err(BurliError::Unsupported(
+            "only q0..q5 Brotli encoding is implemented yet",
+        ));
+    }
+    let max_backward_distance = (1_usize << options.window_bits_value()) - 16;
+    write_compressed_chunk(
+        writer,
+        input,
+        options.quality_value(),
+        max_backward_distance.min(input.len()),
+    )
+}
+
 fn max_literal_only_size(input_len: usize) -> usize {
     input_len
         .saturating_add(input_len / 1024)

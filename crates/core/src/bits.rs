@@ -189,6 +189,25 @@ impl BitWriter {
         Ok(())
     }
 
+    pub fn take_full_bytes(&mut self) -> Vec<u8> {
+        let full_bytes = self.bit_len / 8;
+        if full_bytes == 0 {
+            return Vec::new();
+        }
+
+        let taken = self.output[..full_bytes].to_vec();
+        if self.bit_len.is_multiple_of(8) {
+            self.output.clear();
+            self.bit_len = 0;
+        } else {
+            let partial = self.output[full_bytes];
+            self.output.clear();
+            self.output.push(partial);
+            self.bit_len %= 8;
+        }
+        taken
+    }
+
     pub fn into_bytes(self) -> Vec<u8> {
         self.output
     }
@@ -236,6 +255,20 @@ mod tests {
         assert_eq!(reader.read_bits(3).unwrap(), 0b111);
         reader.read_zero_padding_to_byte().unwrap();
         assert_eq!(reader.read_aligned_bytes(2).unwrap(), b"ok");
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn take_full_bytes_keeps_partial_tail() {
+        let mut writer = BitWriter::new();
+        writer.write_bits(12, 0xabc).unwrap();
+
+        let full = writer.take_full_bytes();
+        writer.write_bits(4, 0x0d).unwrap();
+        let rest = writer.into_bytes();
+
+        assert_eq!(full, [0xbc]);
+        assert_eq!(rest, [0xda]);
     }
 
     #[test]

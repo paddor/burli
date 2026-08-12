@@ -38,7 +38,10 @@ fn max_stored_size(input_len: usize, block_size: usize) -> usize {
         .saturating_add(2)
 }
 
-fn write_window_bits(writer: &mut BitWriter, window_bits: u8) -> Result<(), CompressError> {
+pub(crate) fn write_window_bits(
+    writer: &mut BitWriter,
+    window_bits: u8,
+) -> Result<(), CompressError> {
     if !(MIN_WINDOW_BITS..=MAX_WINDOW_BITS).contains(&window_bits) {
         return Err(BurliError::InvalidWindowBits(window_bits));
     }
@@ -56,7 +59,7 @@ fn write_window_bits(writer: &mut BitWriter, window_bits: u8) -> Result<(), Comp
     }
 }
 
-fn write_uncompressed_meta_block(
+pub(crate) fn write_uncompressed_meta_block(
     writer: &mut BitWriter,
     input: &[u8],
 ) -> Result<(), CompressError> {
@@ -88,7 +91,7 @@ fn write_meta_block_len(writer: &mut BitWriter, len: usize) -> Result<(), Compre
     writer.write_bits(1, 1)
 }
 
-fn write_last_empty_meta_block(writer: &mut BitWriter) -> Result<(), CompressError> {
+pub(crate) fn write_last_empty_meta_block(writer: &mut BitWriter) -> Result<(), CompressError> {
     writer.write_bits(1, 1)?;
     writer.write_bits(1, 1)
 }
