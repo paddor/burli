@@ -11,6 +11,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_QUALITY: u8 = 5;
+const MAX_BENCH_QUALITY: u8 = 5;
 const DEFAULT_WINDOW_BITS: u8 = 22;
 const BROTLI_MODE_GENERIC: c_int = 0;
 const BROTLI_DECODER_RESULT_SUCCESS: c_int = 1;
@@ -227,7 +228,6 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
                         "google-brotli".to_owned(),
                         "burli".to_owned(),
                         "rust-brotli".to_owned(),
-                        "oxiarc-brotli".to_owned(),
                     ]
                 } else {
                     value.split(',').map(str::to_owned).collect()
@@ -253,6 +253,10 @@ fn parse_quality_list(value: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>
     let mut qualities = Vec::new();
     for item in value.split(',') {
         let quality: u8 = item.parse()?;
+        if quality > MAX_BENCH_QUALITY {
+            return Err(format!("benchmark qualities are limited to q0..q{MAX_BENCH_QUALITY}")
+                .into());
+        }
         burli::Quality::new(quality)?;
         qualities.push(quality);
     }
@@ -341,7 +345,6 @@ fn bench_codec(
         },
         "google-brotli" => google_brotli_compress(&input.data, quality)?,
         "rust-brotli" => rust_brotli_compress(&input.data, quality)?,
-        "oxiarc-brotli" => oxiarc_brotli_compress(&input.data, quality)?,
         other => return Err(format!("unknown impl: {other}").into()),
     };
 
@@ -349,7 +352,6 @@ fn bench_codec(
         "burli" => burli_decompress(&compressed)?,
         "google-brotli" => google_brotli_decompress(&compressed, input.data.len())?,
         "rust-brotli" => rust_brotli_decompress(&compressed)?,
-        "oxiarc-brotli" => oxiarc_brotli_decompress(&compressed)?,
         _ => unreachable!(),
     };
     if decoded != input.data {
@@ -366,9 +368,6 @@ fn bench_codec(
         "rust-brotli" => {
             let _ = rust_brotli_compress(&input.data, quality);
         }
-        "oxiarc-brotli" => {
-            let _ = oxiarc_brotli_compress(&input.data, quality);
-        }
         _ => unreachable!(),
     });
 
@@ -381,9 +380,6 @@ fn bench_codec(
         }
         "rust-brotli" => {
             let _ = rust_brotli_decompress(&compressed);
-        }
-        "oxiarc-brotli" => {
-            let _ = oxiarc_brotli_decompress(&compressed);
         }
         _ => unreachable!(),
     });
@@ -475,17 +471,6 @@ fn rust_brotli_decompress(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::E
     let mut output = Vec::new();
     reader.read_to_end(&mut output)?;
     Ok(output)
-}
-
-fn oxiarc_brotli_compress(
-    input: &[u8],
-    quality: u8,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    Ok(oxiarc_brotli::compress(input, u32::from(quality))?)
-}
-
-fn oxiarc_brotli_decompress(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    Ok(oxiarc_brotli::decompress(input)?)
 }
 
 fn bench_loop<F: FnMut()>(warmup: usize, target_ns: u64, rounds: usize, mut f: F) -> f64 {

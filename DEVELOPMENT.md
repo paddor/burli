@@ -39,7 +39,7 @@ cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
 cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
   --impl all --qualities 0,3,5
 cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
-  --impl all --qualities 1,5,9,11 \
+  --impl all --qualities 0,1,2,3,4,5 \
   --files bootstrap-js,bootstrap-css,json-citm --small-only
 ```
 
@@ -51,8 +51,8 @@ Default implementation set:
 - `burli`
 - `rust-brotli`
 
-`--impl all` also includes Google Brotli C through system `libbrotli` and
-`oxiarc-brotli`. No CLI baseline.
+`--impl all` also includes Google Brotli C through system `libbrotli`.
+No CLI baseline.
 
 ## Charts
 

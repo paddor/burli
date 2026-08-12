@@ -25,7 +25,7 @@ const QUALITY: u8 = 5;
 const DECODE_QUALITY: u8 = 5;
 const SCATTER_QUALITIES: &[u8] = &[0, 1, 2, 3, 4, 5];
 const MATRIX_QUALITIES: &[u8] = &[0, 3, 5];
-const SMALL_QUALITIES: &[u8] = &[1, 5, 9, 11];
+const SMALL_QUALITIES: &[u8] = &[0, 1, 2, 3, 4, 5];
 const LABEL_QUALITY: u8 = 5;
 const SCATTER_LOG_X_MIN: f64 = 0.5; // 10^0.5 ~= 3 MB/s
 const SCATTER_LOG_X_MAX: f64 = 4.0; // 10^4 = 10000 MB/s
@@ -232,54 +232,42 @@ impl Config {
                     0x4ade80,
                     0x3aaf60,
                 ),
-                codec(
-                    "oxiarc-brotli",
-                    "oxiarc-brotli 0.4.1",
-                    0xc084fc,
-                    0x9966cc,
-                ),
             ],
             scatter_codecs: vec![
                 "google-brotli",
                 "burli",
                 "burli paranoid",
                 "rust-brotli",
-                "oxiarc-brotli",
             ],
             summary_codecs: vec![
                 "google-brotli",
                 "burli",
                 "burli paranoid",
                 "rust-brotli",
-                "oxiarc-brotli",
             ],
             pipeline_codecs: vec![
                 "google-brotli",
                 "burli",
                 "burli paranoid",
                 "rust-brotli",
-                "oxiarc-brotli",
             ],
             matrix_codecs: vec![
                 "google-brotli",
                 "burli",
                 "burli paranoid",
                 "rust-brotli",
-                "oxiarc-brotli",
             ],
             small_codecs: vec![
                 "google-brotli",
                 "burli",
                 "burli paranoid",
                 "rust-brotli",
-                "oxiarc-brotli",
             ],
             small_decode_codecs: vec![
                 "google-brotli",
                 "burli",
                 "burli paranoid",
                 "rust-brotli",
-                "oxiarc-brotli",
             ],
         }
     }
