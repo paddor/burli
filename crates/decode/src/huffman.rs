@@ -29,13 +29,23 @@ struct Entry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Lookup {
-    symbol: u16,
-    len: u8,
-}
+struct Lookup(u16);
 
 impl Lookup {
-    const EMPTY: Self = Self { symbol: 0, len: 0 };
+    const EMPTY: Self = Self(0);
+    const SYMBOL_MASK: u16 = 0x0fff;
+
+    const fn new(symbol: u16, len: u8) -> Self {
+        Self(((len as u16) << 12) | symbol)
+    }
+
+    const fn len(self) -> u8 {
+        (self.0 >> 12) as u8
+    }
+
+    const fn symbol(self) -> u16 {
+        self.0 & Self::SYMBOL_MASK
+    }
 }
 
 impl PrefixCode {
@@ -142,9 +152,9 @@ impl PrefixCode {
 
         if self.fast_bits != 0 && reader.remaining_bits() >= usize::from(self.fast_bits) {
             let lookup = self.fast[reader.peek_bits(self.fast_bits)? as usize];
-            if lookup.len != 0 {
-                reader.drop_bits(lookup.len)?;
-                return Ok(lookup.symbol);
+            if lookup.len() != 0 {
+                reader.drop_bits(lookup.len())?;
+                return Ok(lookup.symbol());
             }
         }
 
@@ -167,7 +177,7 @@ impl PrefixCode {
 fn build_fast_lookup(entries: &[Entry], fast_bits: u8) -> [Lookup; FAST_LOOKUP_SIZE] {
     let mut fast = [Lookup::EMPTY; FAST_LOOKUP_SIZE];
     for entry in entries {
-        if entry.len > fast_bits {
+        if entry.len > fast_bits || entry.symbol > Lookup::SYMBOL_MASK {
             continue;
         }
 
@@ -175,10 +185,7 @@ fn build_fast_lookup(entries: &[Entry], fast_bits: u8) -> [Lookup; FAST_LOOKUP_S
         let suffix_bits = fast_bits - entry.len;
         for suffix in 0..(1_usize << suffix_bits) {
             let index = usize::from(prefix) | (suffix << entry.len);
-            fast[index] = Lookup {
-                symbol: entry.symbol,
-                len: entry.len,
-            };
+            fast[index] = Lookup::new(entry.symbol, entry.len);
         }
     }
     fast
