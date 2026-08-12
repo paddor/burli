@@ -20,8 +20,8 @@ doc = false
 bench = false
 
 [[bin]]
-name = "stored_roundtrip"
-path = "fuzz_targets/stored_roundtrip.rs"
+name = "roundtrip"
+path = "fuzz_targets/roundtrip.rs"
 test = false
 doc = false
 bench = false

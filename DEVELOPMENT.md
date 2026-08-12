@@ -3,16 +3,18 @@
 ## Build
 
 ```bash
-cargo build
-cargo build --no-default-features --features alloc
+cargo build --workspace
+cargo build --workspace --features paranoid
+cargo build -p burli --no-default-features --features alloc
 ```
 
 ## Test
 
 ```bash
-cargo test
-cargo test --no-default-features --features alloc
-cargo test --features paranoid
+cargo test --workspace
+cargo test --workspace --features paranoid
+cargo test -p burli --no-default-features --features alloc
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ## Kani
@@ -21,10 +23,12 @@ Requires Kani:
 
 ```bash
 cargo kani -p burli-core --output-format terse
+cargo kani -p burli-encode --output-format terse
 ```
 
 Proofs are per-primitive with targeted bounds. Current harness covers
-LSB-first bit extraction plus peek/drop reader invariants.
+LSB-first bit extraction, peek/drop reader invariants, and literal encoder
+insert command mapping.
 
 ## Fuzz
 
@@ -32,7 +36,7 @@ Requires cargo-fuzz:
 
 ```bash
 cargo fuzz run decode
-cargo fuzz run stored_roundtrip
+cargo fuzz run roundtrip
 ```
 
 ## Bench
