@@ -179,20 +179,30 @@ struct Args {
     qualities: Vec<u8>,
     files: Option<HashSet<String>>,
     small_only: bool,
+    profile_encode_only: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args()?;
     let inputs = load_inputs(&args)?;
-    let cache = cache_root()?;
-    fs::create_dir_all(&cache)?;
+    let cache = if args.profile_encode_only {
+        None
+    } else {
+        let cache = cache_root()?;
+        fs::create_dir_all(&cache)?;
+        Some(cache)
+    };
 
     for codec in args.impls {
         for quality in &args.qualities {
             for input in &inputs {
+                if args.profile_encode_only {
+                    profile_encode_only(&codec, input, *quality)?;
+                    continue;
+                }
                 match bench_codec(&codec, input, *quality) {
                     Ok(Some(result)) => {
-                        append_result(&cache, &result)?;
+                        append_result(cache.as_deref().unwrap(), &result)?;
                         println!(
                             "{} q{} {}: {} -> {} bytes",
                             result.codec,
@@ -218,6 +228,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         qualities: vec![DEFAULT_QUALITY],
         files: None,
         small_only: false,
+        profile_encode_only: false,
     };
 
     let mut iter = std::env::args().skip(1);
@@ -244,6 +255,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
                 args.files = Some(value.split(',').map(str::to_owned).collect());
             }
             "--small-only" => args.small_only = true,
+            "--profile-encode-only" => args.profile_encode_only = true,
             other => return Err(format!("unknown arg: {other}").into()),
         }
     }
@@ -335,31 +347,40 @@ fn read_corpus_entry(entry: &CorpusEntry) -> Result<Vec<u8>, Box<dyn std::error:
     Ok(data)
 }
 
+fn profile_encode_only(
+    codec: &str,
+    input: &BenchInput,
+    quality: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let compressed = compress_codec(codec, &input.data, quality)?;
+    verify_decodes(codec, &compressed, input)?;
+    let compress_ns = bench_loop(1, 100_000_000, 3, || {
+        let _ = compress_codec(codec, &input.data, quality);
+    });
+    let mbs = input.data.len() as f64 / compress_ns * 1000.0;
+    println!(
+        "{} q{} {}: {} -> {} bytes, encode {:.1} MB/s",
+        codec_label(codec),
+        quality,
+        input.name,
+        input.data.len(),
+        compressed.len(),
+        mbs
+    );
+    Ok(())
+}
+
 fn bench_codec(
     codec: &str,
     input: &BenchInput,
     quality: u8,
 ) -> Result<Option<BenchResult>, Box<dyn std::error::Error>> {
-    let compressed = match codec {
-        "burli" => match burli_compress(&input.data, quality) {
-            Ok(output) => output,
-            Err(burli::BurliError::Unsupported(_)) => return Ok(None),
-            Err(error) => return Err(error.into()),
-        },
-        "google-brotli" => google_brotli_compress(&input.data, quality)?,
-        "rust-brotli" => rust_brotli_compress(&input.data, quality)?,
-        other => return Err(format!("unknown impl: {other}").into()),
+    let compressed = match compress_codec(codec, &input.data, quality) {
+        Ok(output) => output,
+        Err(error) if is_unsupported_burli(error.as_ref()) => return Ok(None),
+        Err(error) => return Err(error),
     };
-
-    let decoded = match codec {
-        "burli" => burli_decompress(&compressed)?,
-        "google-brotli" => google_brotli_decompress(&compressed, input.data.len())?,
-        "rust-brotli" => rust_brotli_decompress(&compressed)?,
-        _ => unreachable!(),
-    };
-    if decoded != input.data {
-        return Err(format!("{codec} roundtrip mismatch on {}", input.name).into());
-    }
+    verify_decodes(codec, &compressed, input)?;
 
     let compress_ns = bench_loop(1, 100_000_000, 3, || match codec {
         "burli" => {
@@ -402,6 +423,42 @@ fn bench_codec(
         is_small: input.is_small,
         timestamp_secs: now_secs(),
     }))
+}
+
+fn compress_codec(
+    codec: &str,
+    input: &[u8],
+    quality: u8,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    match codec {
+        "burli" => burli_compress(input, quality).map_err(Into::into),
+        "google-brotli" => google_brotli_compress(input, quality),
+        "rust-brotli" => rust_brotli_compress(input, quality),
+        other => Err(format!("unknown impl: {other}").into()),
+    }
+}
+
+fn verify_decodes(
+    codec: &str,
+    compressed: &[u8],
+    input: &BenchInput,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let decoded = match codec {
+        "burli" => burli_decompress(compressed)?,
+        "google-brotli" => google_brotli_decompress(compressed, input.data.len())?,
+        "rust-brotli" => rust_brotli_decompress(compressed)?,
+        _ => unreachable!(),
+    };
+    if decoded != input.data {
+        return Err(format!("{codec} roundtrip mismatch on {}", input.name).into());
+    }
+    Ok(())
+}
+
+fn is_unsupported_burli(error: &(dyn std::error::Error + 'static)) -> bool {
+    error
+        .downcast_ref::<burli::BurliError>()
+        .is_some_and(|error| matches!(error, burli::BurliError::Unsupported(_)))
 }
 
 fn burli_compress(input: &[u8], quality: u8) -> Result<Vec<u8>, burli::BurliError> {
