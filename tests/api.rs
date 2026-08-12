@@ -174,6 +174,17 @@ fn q0_to_q5_outputs_decode_with_rust_brotli() {
 }
 
 #[test]
+fn q5_large_output_decodes_with_rust_brotli() {
+    let input = vec![b'x'; 70_000];
+    let encoded = burli::compress(&input, 5).unwrap();
+    let mut decoder = rust_brotli::Decompressor::new(encoded.as_slice(), 4096);
+    let mut decoded = Vec::new();
+
+    decoder.read_to_end(&mut decoded).unwrap();
+    assert_eq!(decoded, input);
+}
+
+#[test]
 fn burli_decodes_rust_brotli_empty_stream() {
     let mut encoder = rust_brotli::CompressorReader::new(&b""[..], 4096, 0, 22);
     let mut encoded = Vec::new();

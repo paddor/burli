@@ -87,10 +87,26 @@ fn write_compressed_literal_meta_block(
 }
 
 fn write_meta_block_len(writer: &mut BitWriter, len: usize) -> Result<(), CompressError> {
+    if len == 0 || len > MAX_META_BLOCK_SIZE {
+        return Err(BurliError::Format("invalid compressed Brotli block size"));
+    }
+
     let len_minus_one = len - 1;
+    let significant_bits = if len == 1 {
+        1
+    } else {
+        usize::BITS - len_minus_one.leading_zeros()
+    };
+    let nibbles = if significant_bits < 16 {
+        4
+    } else {
+        significant_bits.div_ceil(4) as usize
+    };
+    debug_assert!((4..=6).contains(&nibbles));
+
     writer.write_bits(1, 0)?;
-    writer.write_bits(2, 0)?;
-    writer.write_bits(16, len_minus_one as u64)?;
+    writer.write_bits(2, (nibbles - 4) as u64)?;
+    writer.write_bits((nibbles * 4) as u8, len_minus_one as u64)?;
     writer.write_bits(1, 0)
 }
 
@@ -243,6 +259,15 @@ mod tests {
     #[test]
     fn q5_round_trips_long_literal_run() {
         let input = vec![b'a'; 3000];
+        let encoded =
+            compress_with_options(&input, &Options::default().quality(5).unwrap()).unwrap();
+
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q5_round_trips_literal_run_above_64k() {
+        let input = vec![b'x'; 70_000];
         let encoded =
             compress_with_options(&input, &Options::default().quality(5).unwrap()).unwrap();
 
