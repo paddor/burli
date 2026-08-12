@@ -154,6 +154,30 @@ fn burli_decodes_rust_brotli_small_compressed_streams() {
 }
 
 #[test]
+fn burli_decodes_rust_brotli_representative_compressed_streams() {
+    let inputs = [
+        br#"{"packages":[{"name":"burli","kind":"brotli","deps":["alloc","std"]},{"name":"decode","kind":"crate","deps":["core"]}],"ok":true}"#.repeat(32),
+        b"body{font-family:system-ui;margin:0}.card{display:grid;gap:12px;padding:16px;border:1px solid #ddd}.card:hover{border-color:#999}".repeat(32),
+        b"function render(items){return items.map((item)=>`<li data-id=\"${item.id}\">${item.name}</li>`).join('')} export { render };".repeat(32),
+    ];
+
+    for quality in 1..=5 {
+        for input in &inputs {
+            let mut encoder =
+                rust_brotli::CompressorReader::new(input.as_slice(), 4096, quality, 22);
+            let mut encoded = Vec::new();
+
+            encoder.read_to_end(&mut encoded).unwrap();
+            assert_eq!(
+                burli::decompress(&encoded)
+                    .unwrap_or_else(|error| panic!("q{quality} failed: {error:?}")),
+                *input
+            );
+        }
+    }
+}
+
+#[test]
 fn decoder_rejects_invalid_input() {
     assert!(matches!(
         burli::decompress(b"not brotli"),
