@@ -477,10 +477,10 @@ fn next_hash_word(word: u64, next_byte: u8) -> u64 {
 
 #[inline(always)]
 fn read_u64_le(input: &[u8], pos: usize) -> u64 {
-    let bytes: [u8; 8] = input[pos..pos + 8]
-        .try_into()
+    let bytes = input[pos..]
+        .first_chunk::<8>()
         .expect("read_u64_le range checked by caller");
-    u64::from_le_bytes(bytes)
+    u64::from_le_bytes(*bytes)
 }
 
 #[inline(always)]
