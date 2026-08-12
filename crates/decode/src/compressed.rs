@@ -129,6 +129,7 @@ pub(crate) fn decode_meta_block(
             window_size,
             distance,
             command.copy_len,
+            distance_symbol != 0,
             distances,
         )?;
     }
@@ -621,6 +622,7 @@ fn copy_from_distance(
     window_size: usize,
     distance: usize,
     copy_len: usize,
+    push_distance: bool,
     distances: &mut DistanceRing,
 ) -> Result<(), DecompressError> {
     let produced = output.len();
@@ -657,7 +659,9 @@ fn copy_from_distance(
         let byte = output[src];
         output.push(byte);
     }
-    distances.push(distance);
+    if push_distance {
+        distances.push(distance);
+    }
     Ok(())
 }
 
@@ -698,5 +702,16 @@ mod tests {
         assert_eq!(read_var_len_u8(&mut reader).unwrap(), 0);
         assert_eq!(read_var_len_u8(&mut reader).unwrap(), 1);
         assert_eq!(read_var_len_u8(&mut reader).unwrap(), 13);
+    }
+
+    #[test]
+    fn distance_symbol_zero_does_not_update_ring() {
+        let mut output = b"0123456789abcdef".to_vec();
+        let mut distances = DistanceRing::new();
+
+        copy_from_distance(&mut output, 0, 20, 1 << 16, 4, 4, false, &mut distances).unwrap();
+
+        let mut reader = BitReader::new(&[]);
+        assert_eq!(read_distance(&mut reader, 1, 0, 0, &distances).unwrap(), 11);
     }
 }

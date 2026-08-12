@@ -1,4 +1,5 @@
 use std::ffi::c_int;
+use std::path::Path;
 
 const DEFAULT_WINDOW_BITS: c_int = 22;
 const BROTLI_MODE_GENERIC: c_int = 0;
@@ -32,11 +33,9 @@ fn c_brotli_q0_to_q5_decode_through_burli() {
         for input in representative_inputs() {
             let encoded = c_brotli_compress(&input, quality);
 
-            assert_eq!(
-                burli::decompress(&encoded)
-                    .unwrap_or_else(|error| panic!("C q{quality} failed: {error:?}")),
-                input
-            );
+            let decoded = burli::decompress(&encoded)
+                .unwrap_or_else(|error| panic!("C q{quality} failed: {error:?}"));
+            assert_bytes_eq(&decoded, &input, &format!("C q{quality} representative"));
         }
     }
 }
@@ -47,13 +46,65 @@ fn burli_q0_to_q5_decode_through_c_brotli() {
         for input in representative_inputs() {
             let encoded = burli::compress(&input, quality).unwrap();
 
-            assert_eq!(
-                c_brotli_decompress(&encoded, input.len())
-                    .unwrap_or_else(|| panic!("burli q{quality} failed in C decoder")),
-                input
+            let decoded = c_brotli_decompress(&encoded, input.len())
+                .unwrap_or_else(|| panic!("burli q{quality} failed in C decoder"));
+            assert_bytes_eq(
+                &decoded,
+                &input,
+                &format!("burli q{quality} representative"),
             );
         }
     }
+}
+
+#[test]
+#[ignore = "uses local benchmark corpus if already downloaded"]
+fn local_web_corpus_c_brotli_q0_to_q5_decode_through_burli() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/corpus/web");
+    let entries = [
+        "bootstrap-5.3.3.bundle.js",
+        "bootstrap-5.3.3.css",
+        "citm-catalog.json",
+        "jquery-3.7.1.js",
+        "whatwg-html-source",
+    ];
+    if !root.exists() {
+        return;
+    }
+
+    for entry in entries {
+        let path = root.join(entry);
+        if !path.exists() {
+            continue;
+        }
+        let input = std::fs::read(&path).unwrap();
+        for quality in 0..=5 {
+            let encoded = c_brotli_compress(&input, quality);
+
+            let decoded = burli::decompress(&encoded)
+                .unwrap_or_else(|error| panic!("C q{quality} {entry} failed: {error:?}"));
+            assert_bytes_eq(&decoded, &input, &format!("C q{quality} {entry}"));
+        }
+    }
+}
+
+fn assert_bytes_eq(actual: &[u8], expected: &[u8], label: &str) {
+    if actual == expected {
+        return;
+    }
+
+    let first_diff = actual
+        .iter()
+        .zip(expected)
+        .position(|(left, right)| left != right)
+        .unwrap_or_else(|| actual.len().min(expected.len()));
+    panic!(
+        "{label} mismatch: actual_len={}, expected_len={}, first_diff={first_diff}, actual_byte={:?}, expected_byte={:?}",
+        actual.len(),
+        expected.len(),
+        actual.get(first_diff),
+        expected.get(first_diff)
+    );
 }
 
 fn representative_inputs() -> Vec<Vec<u8>> {
