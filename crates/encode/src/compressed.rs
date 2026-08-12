@@ -149,6 +149,9 @@ fn write_compressed_chunk(
     if tokens.iter().all(|token| token.copy_len == 0) {
         return write_compressed_literal_meta_block(writer, input);
     }
+    if quality == 0 {
+        return write_token_batch(writer, input, &tokens);
+    }
     write_token_batches(writer, input, &tokens)
 }
 
