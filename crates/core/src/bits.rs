@@ -160,6 +160,7 @@ impl BitWriter {
         self.bit_len
     }
 
+    #[inline(always)]
     pub fn write_bits(&mut self, width: u8, value: u64) -> Result<()> {
         if width > MAX_BITS_PER_OP {
             return Err(BurliError::Format("bit write width exceeds 56 bits"));
@@ -170,10 +171,24 @@ impl BitWriter {
             return Ok(());
         }
 
-        self.bit_len = self
-            .bit_len
+        self.bit_len
             .checked_add(width)
             .ok_or(BurliError::Format("Brotli output bit length overflow"))?;
+        self.write_bits_trusted(width as u8, value);
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn write_bits_trusted(&mut self, width: u8, value: u64) {
+        debug_assert!(width <= MAX_BITS_PER_OP);
+        let width = usize::from(width);
+        if width == 0 {
+            return;
+        }
+        debug_assert!(self.bit_len.checked_add(width).is_some());
+
+        self.bit_len = self.bit_len.wrapping_add(width);
 
         let mask = (1_u64 << width) - 1;
         self.bit_buffer |= (value & mask) << self.bit_count;
@@ -183,7 +198,6 @@ impl BitWriter {
             self.bit_buffer >>= 8;
             self.bit_count -= 8;
         }
-        Ok(())
     }
 
     pub fn align_to_byte(&mut self) -> Result<()> {
@@ -271,6 +285,31 @@ mod tests {
 
         assert_eq!(full, [0xbc]);
         assert_eq!(rest, [0xda]);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn trusted_writer_matches_checked_writer() {
+        let writes = [
+            (0, 0),
+            (1, 1),
+            (7, 0x7a),
+            (8, 0xa5),
+            (15, 0x5a5a),
+            (24, 0x00ad_beef),
+            (56, 0x00c0_ffee_d15c_a11e),
+            (3, 0b101),
+        ];
+        let mut checked = BitWriter::new();
+        let mut trusted = BitWriter::new();
+
+        for (width, value) in writes {
+            checked.write_bits(width, value).unwrap();
+            trusted.write_bits_trusted(width, value);
+            assert_eq!(trusted.written_bits(), checked.written_bits());
+        }
+
+        assert_eq!(trusted.into_bytes(), checked.into_bytes());
     }
 
     #[test]

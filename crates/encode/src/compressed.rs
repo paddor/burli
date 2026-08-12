@@ -540,7 +540,7 @@ fn write_compressed_literal_meta_block(
     let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
     write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, command_symbol)?;
     write_simple_prefix_code_single(writer, 64, 0)?;
-    writer.write_bits(insert.extra_bits, insert.extra)?;
+    writer.write_bits_trusted(insert.extra_bits, insert.extra);
     for &literal in input {
         write_literal(writer, &literal_code_map, literal)?;
     }
@@ -604,10 +604,10 @@ fn write_token_batch_with_len(
         let insert = prepared_token.insert;
         let copy = prepared_token.copy;
         let command_code = symbol_code(&command_code_map, prepared_token.command_symbol)?;
-        writer.write_bits(command_code.len, u64::from(command_code.bits))?;
-        writer.write_bits(insert.extra_bits, insert.extra)?;
+        writer.write_bits_trusted(command_code.len, u64::from(command_code.bits));
+        writer.write_bits_trusted(insert.extra_bits, insert.extra);
         if let Some(copy) = copy {
-            writer.write_bits(copy.extra_bits, copy.extra)?;
+            writer.write_bits_trusted(copy.extra_bits, copy.extra);
         }
 
         for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
@@ -616,8 +616,8 @@ fn write_token_batch_with_len(
 
         if let Some(distance) = prepared_token.distance {
             let distance_code = symbol_code(&distance_code_map, distance.symbol)?;
-            writer.write_bits(distance_code.len, u64::from(distance_code.bits))?;
-            writer.write_bits(distance.extra_bits, distance.extra)?;
+            writer.write_bits_trusted(distance_code.len, u64::from(distance_code.bits));
+            writer.write_bits_trusted(distance.extra_bits, distance.extra);
         }
     }
 
@@ -936,7 +936,8 @@ fn write_literal(
     literal: u8,
 ) -> Result<(), CompressError> {
     let code = symbol_code(codes, u16::from(literal))?;
-    writer.write_bits(code.len, u64::from(code.bits))
+    writer.write_bits_trusted(code.len, u64::from(code.bits));
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug)]
