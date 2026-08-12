@@ -1,0 +1,25 @@
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 3, grace-period = "10s" }
+
+[profile.ci]
+inherits = "default"
+fail-fast = false
+failure-output = "immediate-final"
+status-level = "slow"
+final-status-level = "slow"
+
+[profile.conformance]
+inherits = "ci"
+slow-timeout = { period = "10m", terminate-after = 2, grace-period = "10s" }
+
+[profile.soak]
+inherits = "conformance"
+slow-timeout = { period = "30m", terminate-after = 6, grace-period = "10s" }
+
+[[profile.conformance.overrides]]
+filter = 'binary(google_conformance) or binary(c_brotli)'
+threads-required = "num-test-threads"
+
+[[profile.soak.overrides]]
+filter = 'binary(google_conformance) or binary(c_brotli)'
+threads-required = "num-test-threads"

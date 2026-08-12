@@ -11,10 +11,35 @@ cargo build -p burli --no-default-features --features alloc
 ## Test
 
 ```bash
-cargo test --workspace
+cargo nextest run --workspace
 cargo test --workspace --features paranoid
 cargo test -p burli --no-default-features --features alloc
 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Long decoder conformance tests are ignored by default:
+
+```bash
+cargo nextest run --profile conformance --release --test google_conformance \
+  --run-ignored ignored-only
+cargo nextest run --profile conformance --release --test c_brotli \
+  --run-ignored ignored-only
+```
+
+Focused upstream case:
+
+```bash
+BURLI_GOOGLE_BROTLI_CASE=alice29.txt.compressed \
+  cargo nextest run --profile conformance --release --test google_conformance \
+  --run-ignored ignored-only
+```
+
+Exhaustive byte-fragmented upstream stream soak:
+
+```bash
+BURLI_GOOGLE_BROTLI_FRAGMENTED_EXHAUSTIVE=1 \
+  cargo nextest run --profile soak --release --test google_conformance \
+  --run-ignored ignored-only
 ```
 
 ## Kani
