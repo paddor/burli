@@ -33,6 +33,12 @@ impl<'a> BitReader<'a> {
     }
 
     pub fn read_bits(&mut self, width: u8) -> Result<u64> {
+        let value = self.peek_bits(width)?;
+        self.drop_bits(width)?;
+        Ok(value)
+    }
+
+    pub fn peek_bits(&self, width: u8) -> Result<u64> {
         if width > MAX_BITS_PER_OP {
             return Err(BurliError::Format("bit read width exceeds 56 bits"));
         }
@@ -49,8 +55,21 @@ impl<'a> BitReader<'a> {
             value |= u64::from(bit) << offset;
         }
 
-        self.bit_pos += width;
         Ok(value)
+    }
+
+    pub fn drop_bits(&mut self, width: u8) -> Result<()> {
+        if width > MAX_BITS_PER_OP {
+            return Err(BurliError::Format("bit drop width exceeds 56 bits"));
+        }
+
+        let width = usize::from(width);
+        if self.remaining_bits() < width {
+            return Err(BurliError::Format("unexpected end of Brotli input"));
+        }
+
+        self.bit_pos += width;
+        Ok(())
     }
 
     pub fn align_to_byte(&mut self) {

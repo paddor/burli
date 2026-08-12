@@ -11,6 +11,10 @@ pub mod context;
 pub mod streaming;
 
 #[cfg(feature = "alloc")]
+mod compressed;
+#[cfg(feature = "alloc")]
+mod huffman;
+#[cfg(feature = "alloc")]
 mod stored;
 
 pub use burli_core::{DecompressError, format::DEFAULT_MAX_OUTPUT_SIZE};

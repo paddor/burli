@@ -52,6 +52,12 @@ pub fn decompress_with_limit(
                 output.extend_from_slice(bytes);
             }
             MetaBlockHeader::Compressed { len: _, is_last: _ } => {
+                let header = crate::compressed::read_header_probe(&mut reader)?;
+                let _block_type_counts = (
+                    header.literal_block_types(),
+                    header.command_block_types(),
+                    header.distance_block_types(),
+                );
                 return Err(BurliError::Unsupported(
                     "compressed Brotli meta-blocks not implemented yet",
                 ));
