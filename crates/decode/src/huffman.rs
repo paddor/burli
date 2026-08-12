@@ -4,6 +4,8 @@ use alloc::vec::Vec;
 use burli_core::{BurliError, DecompressError, bits::BitReader};
 
 const MAX_CODE_BITS: u8 = 15;
+const FAST_LOOKUP_BITS: u8 = 8;
+const FAST_LOOKUP_SIZE: usize = 1 << FAST_LOOKUP_BITS;
 const CODE_LENGTH_CODES: usize = 18;
 const CODE_LENGTH_ORDER: [usize; CODE_LENGTH_CODES] =
     [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -13,6 +15,8 @@ const CODE_LENGTH_PREFIX_VALUE: [u8; 16] = [0, 4, 3, 2, 0, 4, 3, 1, 0, 4, 3, 2, 
 #[derive(Clone, Debug)]
 pub(crate) struct PrefixCode {
     entries: Vec<Entry>,
+    fast: [Lookup; FAST_LOOKUP_SIZE],
+    fast_bits: u8,
     single_symbol: Option<u16>,
     max_bits: u8,
 }
@@ -24,10 +28,22 @@ struct Entry {
     code: u16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Lookup {
+    symbol: u16,
+    len: u8,
+}
+
+impl Lookup {
+    const EMPTY: Self = Self { symbol: 0, len: 0 };
+}
+
 impl PrefixCode {
     pub(crate) fn single(symbol: u16) -> Self {
         Self {
             entries: Vec::new(),
+            fast: [Lookup::EMPTY; FAST_LOOKUP_SIZE],
+            fast_bits: 0,
             single_symbol: Some(symbol),
             max_bits: 0,
         }
@@ -92,8 +108,13 @@ impl PrefixCode {
             });
         }
 
+        let fast_bits = max_bits.min(FAST_LOOKUP_BITS);
+        let fast = build_fast_lookup(&entries, fast_bits);
+
         Ok(Self {
             entries,
+            fast,
+            fast_bits,
             single_symbol: None,
             max_bits,
         })
@@ -119,6 +140,14 @@ impl PrefixCode {
             return Ok(symbol);
         }
 
+        if self.fast_bits != 0 && reader.remaining_bits() >= usize::from(self.fast_bits) {
+            let lookup = self.fast[reader.peek_bits(self.fast_bits)? as usize];
+            if lookup.len != 0 {
+                reader.drop_bits(lookup.len)?;
+                return Ok(lookup.symbol);
+            }
+        }
+
         let mut code = 0_u16;
         for len in 1..=self.max_bits {
             code = (code << 1) | u16::from(reader.read_bit()?);
@@ -133,6 +162,35 @@ impl PrefixCode {
 
         Err(BurliError::Format("invalid Brotli Huffman code"))
     }
+}
+
+fn build_fast_lookup(entries: &[Entry], fast_bits: u8) -> [Lookup; FAST_LOOKUP_SIZE] {
+    let mut fast = [Lookup::EMPTY; FAST_LOOKUP_SIZE];
+    for entry in entries {
+        if entry.len > fast_bits {
+            continue;
+        }
+
+        let prefix = reverse_low_bits(entry.code, entry.len);
+        let suffix_bits = fast_bits - entry.len;
+        for suffix in 0..(1_usize << suffix_bits) {
+            let index = usize::from(prefix) | (suffix << entry.len);
+            fast[index] = Lookup {
+                symbol: entry.symbol,
+                len: entry.len,
+            };
+        }
+    }
+    fast
+}
+
+fn reverse_low_bits(mut value: u16, width: u8) -> u16 {
+    let mut reversed = 0_u16;
+    for _ in 0..width {
+        reversed = (reversed << 1) | (value & 1);
+        value >>= 1;
+    }
+    reversed
 }
 
 fn read_simple_prefix_code(
