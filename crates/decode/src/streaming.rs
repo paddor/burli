@@ -186,8 +186,7 @@ impl<R: Read> Read for StreamDecoder<R> {
                 .decode_next_step()
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
             {
-                DecodeStep::MadeOutput => continue,
-                DecodeStep::Done => continue,
+                DecodeStep::MadeOutput | DecodeStep::Done => {}
                 DecodeStep::NeedMore => {
                     if !self.read_more_encoded()? {
                         return Err(io::Error::new(

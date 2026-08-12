@@ -131,7 +131,7 @@ fn c_brotli_compress(input: &[u8], quality: u8) -> Vec<u8> {
             BROTLI_MODE_GENERIC,
             input.len(),
             input.as_ptr(),
-            &mut output_size,
+            &raw mut output_size,
             output.as_mut_ptr(),
         )
     };
@@ -147,7 +147,7 @@ fn c_brotli_decompress(input: &[u8], decoded_size: usize) -> Option<Vec<u8>> {
         BrotliDecoderDecompress(
             input.len(),
             input.as_ptr(),
-            &mut output_size,
+            &raw mut output_size,
             output.as_mut_ptr(),
         )
     };

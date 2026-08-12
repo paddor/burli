@@ -124,16 +124,73 @@ pub(crate) fn decode_meta_block(
         )?;
         copy_from_distance(
             output,
-            start,
-            needed,
-            window_size,
-            distance,
-            command.copy_len,
-            distance_symbol != 0,
+            CopyRequest {
+                meta_block_start: start,
+                needed,
+                window_size,
+                distance,
+                len: command.copy_len,
+                push_distance: distance_symbol != 0,
+            },
             distances,
         )?;
     }
 
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CopyRequest {
+    meta_block_start: usize,
+    needed: usize,
+    window_size: usize,
+    distance: usize,
+    len: usize,
+    push_distance: bool,
+}
+
+fn copy_from_distance(
+    output: &mut Vec<u8>,
+    request: CopyRequest,
+    distances: &mut DistanceRing,
+) -> Result<(), DecompressError> {
+    let produced = output.len();
+    let max_allowed_distance = request.window_size.min(produced);
+    if request.distance > max_allowed_distance {
+        let word = crate::dictionary::lookup(request.distance, max_allowed_distance, request.len)?;
+        let end = produced
+            .checked_add(word.len())
+            .ok_or(BurliError::Format("Brotli dictionary copy length overflow"))?;
+        if end > request.needed {
+            return Err(BurliError::Format(
+                "Brotli dictionary copy exceeds meta-block size",
+            ));
+        }
+        output.extend_from_slice(&word);
+        return Ok(());
+    }
+    if request.distance == 0 || request.distance > produced {
+        return Err(BurliError::Format("invalid Brotli backward distance"));
+    }
+
+    let end = produced
+        .checked_add(request.len)
+        .ok_or(BurliError::Format("Brotli copy length overflow"))?;
+    if end > request.needed {
+        return Err(BurliError::Format("Brotli copy exceeds meta-block size"));
+    }
+    if end < request.meta_block_start {
+        return Err(BurliError::Format("Brotli copy output position underflow"));
+    }
+
+    for _ in 0..request.len {
+        let src = output.len() - request.distance;
+        let byte = output[src];
+        output.push(byte);
+    }
+    if request.push_distance {
+        distances.push(request.distance);
+    }
     Ok(())
 }
 
@@ -615,56 +672,6 @@ fn read_distance(
     Ok(((offset + dextra) << npostfix) + lcode + ndirect + 1)
 }
 
-fn copy_from_distance(
-    output: &mut Vec<u8>,
-    meta_block_start: usize,
-    needed: usize,
-    window_size: usize,
-    distance: usize,
-    copy_len: usize,
-    push_distance: bool,
-    distances: &mut DistanceRing,
-) -> Result<(), DecompressError> {
-    let produced = output.len();
-    let max_allowed_distance = window_size.min(produced);
-    if distance > max_allowed_distance {
-        let word = crate::dictionary::lookup(distance, max_allowed_distance, copy_len)?;
-        let end = produced
-            .checked_add(word.len())
-            .ok_or(BurliError::Format("Brotli dictionary copy length overflow"))?;
-        if end > needed {
-            return Err(BurliError::Format(
-                "Brotli dictionary copy exceeds meta-block size",
-            ));
-        }
-        output.extend_from_slice(&word);
-        return Ok(());
-    }
-    if distance == 0 || distance > produced {
-        return Err(BurliError::Format("invalid Brotli backward distance"));
-    }
-
-    let end = produced
-        .checked_add(copy_len)
-        .ok_or(BurliError::Format("Brotli copy length overflow"))?;
-    if end > needed {
-        return Err(BurliError::Format("Brotli copy exceeds meta-block size"));
-    }
-    if end < meta_block_start {
-        return Err(BurliError::Format("Brotli copy output position underflow"));
-    }
-
-    for _ in 0..copy_len {
-        let src = output.len() - distance;
-        let byte = output[src];
-        output.push(byte);
-    }
-    if push_distance {
-        distances.push(distance);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,7 +716,19 @@ mod tests {
         let mut output = b"0123456789abcdef".to_vec();
         let mut distances = DistanceRing::new();
 
-        copy_from_distance(&mut output, 0, 20, 1 << 16, 4, 4, false, &mut distances).unwrap();
+        copy_from_distance(
+            &mut output,
+            CopyRequest {
+                meta_block_start: 0,
+                needed: 20,
+                window_size: 1 << 16,
+                distance: 4,
+                len: 4,
+                push_distance: false,
+            },
+            &mut distances,
+        )
+        .unwrap();
 
         let mut reader = BitReader::new(&[]);
         assert_eq!(read_distance(&mut reader, 1, 0, 0, &distances).unwrap(), 11);
