@@ -41,6 +41,7 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
     }
 }
 
+#[cfg(feature = "std")]
 pub(crate) fn write_stream_header(
     writer: &mut BitWriter,
     options: &Options,
@@ -53,6 +54,7 @@ pub(crate) fn write_stream_header(
     write_window_bits(writer, options.window_bits_value())
 }
 
+#[cfg(feature = "std")]
 pub(crate) fn write_stream_chunk(
     writer: &mut BitWriter,
     input: &[u8],
