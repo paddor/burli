@@ -58,44 +58,6 @@ impl DistanceRing {
     }
 }
 
-#[derive(Clone, Debug)]
-#[cfg(test)]
-pub(crate) struct CompressedHeaderProbe {
-    literal: usize,
-    command: usize,
-    distance: usize,
-}
-
-#[cfg(test)]
-impl CompressedHeaderProbe {
-    pub(crate) const fn literal_block_types(&self) -> usize {
-        self.literal
-    }
-
-    pub(crate) const fn command_block_types(&self) -> usize {
-        self.command
-    }
-
-    pub(crate) const fn distance_block_types(&self) -> usize {
-        self.distance
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn read_header_probe(
-    reader: &mut BitReader<'_>,
-) -> Result<CompressedHeaderProbe, DecompressError> {
-    let literal_block_types = read_block_category_header(reader)?;
-    let command_block_types = read_block_category_header(reader)?;
-    let distance_block_types = read_block_category_header(reader)?;
-
-    Ok(CompressedHeaderProbe {
-        literal: literal_block_types,
-        command: command_block_types,
-        distance: distance_block_types,
-    })
-}
-
 pub(crate) fn decode_meta_block(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
@@ -113,19 +75,11 @@ pub(crate) fn decode_meta_block(
         });
     }
 
-    let header = read_header(reader)?;
-    if header.literal_block_types != 1
-        || header.command_block_types != 1
-        || header.distance_block_types != 1
-    {
-        return Err(BurliError::Unsupported(
-            "compressed Brotli block switching not implemented yet",
-        ));
-    }
+    let mut header = read_header(reader)?;
 
     let literal_codes =
         read_prefix_codes(reader, header.literal_tree_count(), LITERAL_ALPHABET_SIZE)?;
-    let command_code = PrefixCode::read(reader, COMMAND_ALPHABET_SIZE)?;
+    let command_codes = read_prefix_codes(reader, header.commands.types(), COMMAND_ALPHABET_SIZE)?;
     let distance_codes = read_prefix_codes(
         reader,
         header.distance_tree_count(),
@@ -134,14 +88,16 @@ pub(crate) fn decode_meta_block(
     let window_size = (1_usize << window_bits) - 16;
 
     while output.len() < needed {
-        let command = read_command(reader, &command_code)?;
+        let command_block_type = header.commands.current_type(reader)?;
+        let command = read_command(reader, &command_codes[command_block_type])?;
+        header.commands.consume_one();
         copy_literals(
             reader,
             output,
             needed,
             command.insert_len,
             &literal_codes,
-            &header,
+            &mut header,
         )?;
         if output.len() == needed {
             break;
@@ -153,8 +109,10 @@ pub(crate) fn decode_meta_block(
         let distance_symbol = if command.reuse_last_distance {
             0
         } else {
+            let distance_block_type = header.distances.current_type(reader)?;
             let context = distance_context(command.copy_len);
-            let tree_index = header.distance_context_map[context];
+            let tree_index = header.distance_context_map[distance_block_type * 4 + context];
+            header.distances.consume_one();
             distance_codes[tree_index].decode(reader)? as usize
         };
         let distance = read_distance(
@@ -180,15 +138,96 @@ pub(crate) fn decode_meta_block(
 
 #[derive(Clone, Debug)]
 struct CompressedHeader {
-    literal_block_types: usize,
-    command_block_types: usize,
-    distance_block_types: usize,
+    literals: BlockCategory,
+    commands: BlockCategory,
+    distances: BlockCategory,
     npostfix: u8,
     ndirect: usize,
     context_modes: Vec<u8>,
     literal_context_map: Vec<usize>,
     distance_context_map: Vec<usize>,
     distance_alphabet_size: usize,
+}
+
+#[derive(Clone, Debug)]
+struct BlockCategory {
+    block_types: usize,
+    current_type: usize,
+    previous_type: usize,
+    remaining: usize,
+    type_code: Option<PrefixCode>,
+    count_code: Option<PrefixCode>,
+}
+
+impl BlockCategory {
+    const fn single() -> Self {
+        Self {
+            block_types: 1,
+            current_type: 0,
+            previous_type: 1,
+            remaining: usize::MAX,
+            type_code: None,
+            count_code: None,
+        }
+    }
+
+    fn new(
+        block_types: usize,
+        type_code: PrefixCode,
+        count_code: PrefixCode,
+        remaining: usize,
+    ) -> Self {
+        Self {
+            block_types,
+            current_type: 0,
+            previous_type: 1,
+            remaining,
+            type_code: Some(type_code),
+            count_code: Some(count_code),
+        }
+    }
+
+    const fn types(&self) -> usize {
+        self.block_types
+    }
+
+    fn current_type(&mut self, reader: &mut BitReader<'_>) -> Result<usize, DecompressError> {
+        if self.remaining == 0 {
+            self.switch(reader)?;
+        }
+        Ok(self.current_type)
+    }
+
+    fn consume_one(&mut self) {
+        self.remaining = self.remaining.saturating_sub(1);
+    }
+
+    fn switch(&mut self, reader: &mut BitReader<'_>) -> Result<(), DecompressError> {
+        let type_code = self
+            .type_code
+            .as_ref()
+            .ok_or(BurliError::Format("missing Brotli block type code"))?;
+        let count_code = self
+            .count_code
+            .as_ref()
+            .ok_or(BurliError::Format("missing Brotli block count code"))?;
+        let symbol = type_code.decode(reader)? as usize;
+        let next_type = match symbol {
+            0 => self.previous_type,
+            1 => (self.current_type + 1) % self.block_types,
+            _ => {
+                let value = symbol - 2;
+                if value >= self.block_types {
+                    return Err(BurliError::Format("invalid Brotli block type"));
+                }
+                value
+            }
+        };
+        self.previous_type = self.current_type;
+        self.current_type = next_type;
+        self.remaining = read_block_count(reader, count_code)?;
+        Ok(())
+    }
 }
 
 impl CompressedHeader {
@@ -202,28 +241,28 @@ impl CompressedHeader {
 }
 
 fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, DecompressError> {
-    let literal_block_types = read_block_category_header(reader)?;
-    let command_block_types = read_block_category_header(reader)?;
-    let distance_block_types = read_block_category_header(reader)?;
+    let literals = read_block_category_header(reader)?;
+    let commands = read_block_category_header(reader)?;
+    let distances = read_block_category_header(reader)?;
     let npostfix = reader.read_bits(2)? as u8;
     let ndirect = (reader.read_bits(4)? as usize) << npostfix;
 
-    let mut context_modes = Vec::with_capacity(literal_block_types);
-    for _ in 0..literal_block_types {
+    let mut context_modes = Vec::with_capacity(literals.types());
+    for _ in 0..literals.types() {
         context_modes.push(reader.read_bits(2)? as u8);
     }
 
     let literal_trees = read_var_len_u8(reader)? + 1;
-    let literal_context_map = read_context_map(reader, literal_block_types * 64, literal_trees)?;
+    let literal_context_map = read_context_map(reader, literals.types() * 64, literal_trees)?;
 
     let distance_trees = read_var_len_u8(reader)? + 1;
-    let distance_context_map = read_context_map(reader, distance_block_types * 4, distance_trees)?;
+    let distance_context_map = read_context_map(reader, distances.types() * 4, distance_trees)?;
 
     let distance_alphabet_size = 16 + ndirect + (48 << npostfix);
     Ok(CompressedHeader {
-        literal_block_types,
-        command_block_types,
-        distance_block_types,
+        literals,
+        commands,
+        distances,
         npostfix,
         ndirect,
         context_modes,
@@ -233,14 +272,23 @@ fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, Decompres
     })
 }
 
-fn read_block_category_header(reader: &mut BitReader<'_>) -> Result<usize, DecompressError> {
+fn read_block_category_header(
+    reader: &mut BitReader<'_>,
+) -> Result<BlockCategory, DecompressError> {
     let block_types = read_var_len_u8(reader)? + 1;
-    if block_types >= 2 {
-        let _block_type_code = PrefixCode::read(reader, block_types + 2)?;
-        let block_count_code = PrefixCode::read(reader, BLOCK_LENGTH_ALPHABET_SIZE)?;
-        let _first_block_count = read_block_count(reader, &block_count_code)?;
+    if block_types == 1 {
+        return Ok(BlockCategory::single());
     }
-    Ok(block_types)
+
+    let block_type_code = PrefixCode::read(reader, block_types + 2)?;
+    let block_count_code = PrefixCode::read(reader, BLOCK_LENGTH_ALPHABET_SIZE)?;
+    let first_block_count = read_block_count(reader, &block_count_code)?;
+    Ok(BlockCategory::new(
+        block_types,
+        block_type_code,
+        block_count_code,
+        first_block_count,
+    ))
 }
 
 fn read_var_len_u8(reader: &mut BitReader<'_>) -> Result<usize, DecompressError> {
@@ -478,7 +526,7 @@ fn copy_literals(
     needed: usize,
     count: usize,
     literal_codes: &[PrefixCode],
-    header: &CompressedHeader,
+    header: &mut CompressedHeader,
 ) -> Result<(), DecompressError> {
     let end = output
         .len()
@@ -491,9 +539,11 @@ fn copy_literals(
     }
 
     for _ in 0..count {
-        let context = literal_context(output, header)?;
-        let tree_index = header.literal_context_map[context];
+        let literal_block_type = header.literals.current_type(reader)?;
+        let context = literal_context(output, header, literal_block_type)?;
+        let tree_index = header.literal_context_map[literal_block_type * 64 + context];
         let literal = literal_codes[tree_index].decode(reader)?;
+        header.literals.consume_one();
         if literal > u16::from(u8::MAX) {
             return Err(BurliError::Format("invalid Brotli literal symbol"));
         }
@@ -502,9 +552,13 @@ fn copy_literals(
     Ok(())
 }
 
-fn literal_context(output: &[u8], header: &CompressedHeader) -> Result<usize, DecompressError> {
+fn literal_context(
+    output: &[u8],
+    header: &CompressedHeader,
+    block_type: usize,
+) -> Result<usize, DecompressError> {
     let p1 = output.last().copied().unwrap_or(0);
-    let mode = header.context_modes[0];
+    let mode = header.context_modes[block_type];
     let context = match mode {
         0 => p1 & 0x3f,
         1 => p1 >> 2,
@@ -605,11 +659,13 @@ mod tests {
         bits.write_bits(1, 0).unwrap();
         let bytes = bits.into_bytes();
         let mut reader = BitReader::new(&bytes);
-        let probe = read_header_probe(&mut reader).unwrap();
+        let literal = read_block_category_header(&mut reader).unwrap();
+        let command = read_block_category_header(&mut reader).unwrap();
+        let distance = read_block_category_header(&mut reader).unwrap();
 
-        assert_eq!(probe.literal_block_types(), 1);
-        assert_eq!(probe.command_block_types(), 1);
-        assert_eq!(probe.distance_block_types(), 1);
+        assert_eq!(literal.types(), 1);
+        assert_eq!(command.types(), 1);
+        assert_eq!(distance.types(), 1);
     }
 
     #[test]
