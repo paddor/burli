@@ -566,16 +566,13 @@ fn write_token_batch_with_len(
         return Err(BurliError::Format("invalid compressed Brotli block size"));
     }
 
-    let mut prepared = Vec::with_capacity(tokens.len());
-    for &token in tokens {
-        prepared.push(PreparedToken::new(token)?);
-    }
-
     let mut literal_frequencies = vec![0_usize; LITERAL_ALPHABET_SIZE];
     let mut command_frequencies = vec![0_usize; COMMAND_ALPHABET_SIZE];
     let mut distance_frequencies = vec![0_usize; 64];
     let mut has_distance = false;
-    for prepared_token in &prepared {
+    let mut prepared = Vec::with_capacity(tokens.len());
+    for &token in tokens {
+        let prepared_token = PreparedToken::new(token)?;
         let token = prepared_token.token;
         for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
             literal_frequencies[usize::from(literal)] += 1;
@@ -585,6 +582,7 @@ fn write_token_batch_with_len(
             distance_frequencies[usize::from(distance.symbol)] += 1;
             has_distance = true;
         }
+        prepared.push(prepared_token);
     }
     if !has_distance {
         distance_frequencies[0] = 1;
