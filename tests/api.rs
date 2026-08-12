@@ -166,7 +166,7 @@ fn burli_decodes_rust_brotli_small_compressed_streams() {
         b"{\"name\":\"burli\",\"kind\":\"brotli\",\"kind\":\"brotli\"}",
     ];
 
-    for quality in 1..=5 {
+    for quality in 1..=11 {
         for input in inputs {
             let mut encoder = rust_brotli::CompressorReader::new(*input, 4096, quality, 22);
             let mut encoded = Vec::new();
@@ -189,7 +189,7 @@ fn burli_decodes_rust_brotli_representative_compressed_streams() {
         b"function render(items){return items.map((item)=>`<li data-id=\"${item.id}\">${item.name}</li>`).join('')} export { render };".repeat(32),
     ];
 
-    for quality in 1..=5 {
+    for quality in 1..=11 {
         for input in &inputs {
             let mut encoder =
                 rust_brotli::CompressorReader::new(input.as_slice(), 4096, quality, 22);
