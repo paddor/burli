@@ -25,3 +25,10 @@ path = "fuzz_targets/roundtrip.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fragmented"
+path = "fuzz_targets/fragmented.rs"
+test = false
+doc = false
+bench = false

@@ -41,7 +41,10 @@ pub fn decompress_with_limit(
                 }
             }
             MetaBlockHeader::Uncompressed { len } => {
-                let needed = output.len().saturating_add(len);
+                let needed = output
+                    .len()
+                    .checked_add(len)
+                    .ok_or(BurliError::Format("Brotli output length overflow"))?;
                 if needed > max_output_size {
                     return Err(BurliError::OutputLimitExceeded {
                         limit: max_output_size,
