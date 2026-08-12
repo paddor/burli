@@ -1,3 +1,5 @@
+#![cfg(feature = "std")]
+
 use std::{
     env,
     ffi::OsStr,
@@ -37,7 +39,7 @@ impl Read for FragmentedRead<'_> {
 
 #[test]
 #[ignore = "downloads or uses upstream Brotli testdata"]
-fn google_testdata_compressed_streams_decode() {
+fn google_testdata_compressed_streams_decode_through_public_apis() {
     let root = ensure_google_brotli_testdata().join("tests/testdata");
     let mut cases = compressed_cases(&root);
     if let Some(case) = env::var_os("BURLI_GOOGLE_BROTLI_CASE") {
@@ -52,38 +54,109 @@ fn google_testdata_compressed_streams_decode() {
         let expected = fs::read(&expected_path).unwrap();
         let label = compressed_path.file_name().unwrap().to_string_lossy();
 
-        let decoded = burli::decompress_with_limit(&encoded, expected.len())
-            .unwrap_or_else(|error| panic!("{label} failed: {error:?}"));
-        assert_eq!(decoded, expected, "{label} one-shot mismatch");
+        assert_public_decode_apis(&encoded, &expected, &label);
     }
 }
 
 #[test]
 #[ignore = "downloads or uses upstream Brotli testdata"]
-fn google_testdata_representative_streams_decode_fragmented() {
+fn google_testdata_compressed_streams_decode_fragmented() {
     let root = ensure_google_brotli_testdata().join("tests/testdata");
-    let cases = [
-        "10x10y.compressed",
-        "backward65536.compressed",
-        "quickfox_repeated.compressed",
-    ];
+    let mut cases = compressed_cases(&root);
+    let focused_case = env::var_os("BURLI_GOOGLE_BROTLI_CASE");
+    let focused = focused_case.is_some();
+    if let Some(case) = focused_case {
+        cases.retain(|path| path.file_name() == Some(case.as_os_str()));
+    }
+    cases.sort();
+    assert!(!cases.is_empty(), "no compressed cases under {root:?}");
 
-    for case in cases {
-        let compressed_path = root.join(case);
+    for compressed_path in cases {
         let expected_path = expected_path(&compressed_path);
         let encoded = fs::read(&compressed_path).unwrap();
         let expected = fs::read(&expected_path).unwrap();
-        for chunk in [1, 7, 64] {
+        let label = compressed_path.file_name().unwrap().to_string_lossy();
+
+        for &chunk in fragmented_chunks(encoded.len(), focused) {
             let source = FragmentedRead::new(&encoded, chunk);
             let mut decoder = burli::StreamDecoder::with_limit(source, expected.len());
             let mut streamed = Vec::new();
 
             decoder
                 .read_to_end(&mut streamed)
-                .unwrap_or_else(|error| panic!("{case} chunk {chunk} failed: {error:?}"));
+                .unwrap_or_else(|error| panic!("{label} chunk {chunk} failed: {error:?}"));
 
-            assert_eq!(streamed, expected, "{case} chunk {chunk} mismatch");
+            assert_eq!(streamed, expected, "{label} chunk {chunk} mismatch");
         }
+    }
+}
+
+fn assert_public_decode_apis(encoded: &[u8], expected: &[u8], label: &str) {
+    let decoded = burli::decompress_with_limit(encoded, expected.len())
+        .unwrap_or_else(|error| panic!("{label} one-shot failed: {error:?}"));
+    assert_eq!(decoded, expected, "{label} one-shot mismatch");
+
+    let mut appended = b"prefix".to_vec();
+    let written = burli::decompress_into(encoded, &mut appended)
+        .unwrap_or_else(|error| panic!("{label} append failed: {error:?}"));
+    assert_eq!(written, expected.len(), "{label} append length mismatch");
+    assert_eq!(
+        &appended[b"prefix".len()..],
+        expected,
+        "{label} append mismatch"
+    );
+
+    let mut slice = vec![0_u8; expected.len()];
+    let written = burli::decompress_into_slice(encoded, &mut slice)
+        .unwrap_or_else(|error| panic!("{label} slice failed: {error:?}"));
+    assert_eq!(written, expected.len(), "{label} slice length mismatch");
+    assert_eq!(slice, expected, "{label} slice mismatch");
+
+    let mut decompressor = burli::Decompressor::with_limit(expected.len());
+    let decoded = decompressor
+        .decompress(encoded)
+        .unwrap_or_else(|error| panic!("{label} stateful failed: {error:?}"));
+    assert_eq!(decoded, expected, "{label} stateful mismatch");
+
+    let mut stateful_appended = b"prefix".to_vec();
+    let written = decompressor
+        .decompress_into(encoded, &mut stateful_appended)
+        .unwrap_or_else(|error| panic!("{label} stateful append failed: {error:?}"));
+    assert_eq!(
+        written,
+        expected.len(),
+        "{label} stateful append length mismatch"
+    );
+    assert_eq!(
+        &stateful_appended[b"prefix".len()..],
+        expected,
+        "{label} stateful append mismatch"
+    );
+
+    let mut stateful_slice = vec![0_u8; expected.len()];
+    let written = decompressor
+        .decompress_into_slice(encoded, &mut stateful_slice)
+        .unwrap_or_else(|error| panic!("{label} stateful slice failed: {error:?}"));
+    assert_eq!(
+        written,
+        expected.len(),
+        "{label} stateful slice length mismatch"
+    );
+    assert_eq!(stateful_slice, expected, "{label} stateful slice mismatch");
+}
+
+fn fragmented_chunks(encoded_len: usize, focused: bool) -> &'static [usize] {
+    const ALL_CHUNKS: &[usize] = &[1, 2, 3, 5, 7, 13, 64, 1024];
+    const LARGE_CHUNKS: &[usize] = &[64, 1024];
+    const BYTE_CHUNK_LIMIT: usize = 2048;
+
+    if focused
+        || env::var_os("BURLI_GOOGLE_BROTLI_FRAGMENTED_EXHAUSTIVE").is_some()
+        || encoded_len <= BYTE_CHUNK_LIMIT
+    {
+        ALL_CHUNKS
+    } else {
+        LARGE_CHUNKS
     }
 }
 
