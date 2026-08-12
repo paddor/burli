@@ -131,6 +131,25 @@ fn burli_decodes_rust_brotli_empty_stream() {
 }
 
 #[test]
+fn burli_decodes_rust_brotli_small_compressed_streams() {
+    let inputs: &[&[u8]] = &[b"abc abc abc abc"];
+
+    for quality in 1..=5 {
+        for input in inputs {
+            let mut encoder = rust_brotli::CompressorReader::new(*input, 4096, quality, 22);
+            let mut encoded = Vec::new();
+
+            encoder.read_to_end(&mut encoded).unwrap();
+            assert_eq!(
+                burli::decompress(&encoded)
+                    .unwrap_or_else(|error| panic!("q{quality} failed: {error:?}")),
+                *input
+            );
+        }
+    }
+}
+
+#[test]
 fn decoder_rejects_invalid_input() {
     assert!(matches!(
         burli::decompress(b"not brotli"),

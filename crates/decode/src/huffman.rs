@@ -266,6 +266,17 @@ fn read_symbol_code_lengths(
     let mut pending_repeat: Option<Repeat> = None;
 
     while cursor < alphabet_size && space > 0 {
+        if pending_repeat_finishes_tree(alphabet_size, cursor, space, pending_repeat)? {
+            apply_pending_repeat(
+                &mut lengths,
+                &mut cursor,
+                &mut space,
+                &mut previous_non_zero,
+                &mut pending_repeat,
+            )?;
+            continue;
+        }
+
         let symbol = code_length_code.decode(reader)? as u8;
         if symbol <= 15 {
             apply_pending_repeat(
@@ -275,6 +286,9 @@ fn read_symbol_code_lengths(
                 &mut previous_non_zero,
                 &mut pending_repeat,
             )?;
+            if cursor >= alphabet_size {
+                return Err(BurliError::Format("Brotli code length exceeds alphabet"));
+            }
             lengths[cursor] = symbol;
             cursor += 1;
             if symbol != 0 {
@@ -384,6 +398,34 @@ fn apply_pending_repeat(
     }
 
     Ok(())
+}
+
+fn pending_repeat_finishes_tree(
+    alphabet_size: usize,
+    cursor: usize,
+    space: i32,
+    pending_repeat: Option<Repeat>,
+) -> Result<bool, DecompressError> {
+    let Some(repeat) = pending_repeat else {
+        return Ok(false);
+    };
+    let end = cursor
+        .checked_add(repeat.count)
+        .ok_or(BurliError::Format("Brotli code length repeat overflow"))?;
+    if end > alphabet_size {
+        return Err(BurliError::Format(
+            "Brotli code length repeat exceeds alphabet",
+        ));
+    }
+    if end == alphabet_size {
+        return Ok(true);
+    }
+    if repeat.value == 0 {
+        return Ok(false);
+    }
+
+    let remaining = space - ((repeat.count as i32) << (MAX_CODE_BITS - repeat.value));
+    Ok(remaining == 0)
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 
+use crate::compressed::DistanceRing;
 use burli_core::{
     BurliError, DecompressError,
     bits::BitReader,
@@ -21,8 +22,9 @@ pub fn decompress_with_limit(
     max_output_size: usize,
 ) -> Result<Vec<u8>, DecompressError> {
     let mut reader = BitReader::new(input);
-    let _window_bits = read_window_bits(&mut reader)?;
+    let window_bits = read_window_bits(&mut reader)?;
     let mut output = Vec::new();
+    let mut distances = DistanceRing::new();
 
     loop {
         match read_meta_block_header(&mut reader)? {
@@ -51,16 +53,19 @@ pub fn decompress_with_limit(
                 let bytes = reader.read_aligned_bytes(len)?;
                 output.extend_from_slice(bytes);
             }
-            MetaBlockHeader::Compressed { len: _, is_last: _ } => {
-                let header = crate::compressed::read_header_probe(&mut reader)?;
-                let _block_type_counts = (
-                    header.literal_block_types(),
-                    header.command_block_types(),
-                    header.distance_block_types(),
-                );
-                return Err(BurliError::Unsupported(
-                    "compressed Brotli meta-blocks not implemented yet",
-                ));
+            MetaBlockHeader::Compressed { len, is_last } => {
+                crate::compressed::decode_meta_block(
+                    &mut reader,
+                    &mut output,
+                    len,
+                    max_output_size,
+                    window_bits,
+                    &mut distances,
+                )?;
+                if is_last {
+                    finish_stream(&reader)?;
+                    return Ok(output);
+                }
             }
         }
     }
