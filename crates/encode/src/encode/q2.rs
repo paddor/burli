@@ -74,6 +74,14 @@ pub(super) fn collect(
     }
 }
 
+pub(super) fn collect_without_dictionary(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
+    collect_with_dictionary::<false>(input, max_backward_distance, workspace)
+}
+
 fn collect_with_dictionary<const USE_DICTIONARY: bool>(
     input: &[u8],
     max_backward_distance: usize,
