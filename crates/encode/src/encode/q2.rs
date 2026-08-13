@@ -67,6 +67,18 @@ pub(super) fn collect(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
+    if input.len() > 128 * 1024 {
+        collect_with_dictionary::<false>(input, max_backward_distance, workspace)
+    } else {
+        collect_with_dictionary::<true>(input, max_backward_distance, workspace)
+    }
+}
+
+fn collect_with_dictionary<const USE_DICTIONARY: bool>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
     if input.len() < HASH_TYPE_LEN {
         return literal_only(input.len());
     }
@@ -82,7 +94,7 @@ pub(super) fn collect(
 
     while pos + HASH_TYPE_LEN < pos_end {
         let max_len = pos_end - pos;
-        let Some(mut found) = find_match(
+        let Some(mut found) = find_match::<USE_DICTIONARY>(
             input,
             &mut table,
             pos,
@@ -106,7 +118,7 @@ pub(super) fn collect(
             let lazy_pos = pos + 1;
             let lazy_max_len = pos_end - lazy_pos;
             let best_len_in = found.len.saturating_sub(1).min(lazy_max_len);
-            if let Some(next) = find_match(
+            if let Some(next) = find_match::<USE_DICTIONARY>(
                 input,
                 &mut table,
                 lazy_pos,
@@ -185,7 +197,7 @@ fn literal_only(input_len: usize) -> Vec<Token> {
     }]
 }
 
-fn find_match(
+fn find_match<const USE_DICTIONARY: bool>(
     input: &[u8],
     table: &mut [u32],
     pos: usize,
@@ -223,15 +235,33 @@ fn find_match(
         || previous >= pos
         || pos - previous > params.max_backward_distance
     {
-        return find_static_dictionary_identity(input, pos, max_len, dictionary_base, best_score);
+        return find_dictionary_match::<USE_DICTIONARY>(
+            input,
+            pos,
+            max_len,
+            dictionary_base,
+            best_score,
+        );
     }
     if input[previous + best_check] != compare_char {
-        return find_static_dictionary_identity(input, pos, max_len, dictionary_base, best_score);
+        return find_dictionary_match::<USE_DICTIONARY>(
+            input,
+            pos,
+            max_len,
+            dictionary_base,
+            best_score,
+        );
     }
 
     let len = match_len(input, previous, pos, max_len);
     if len < MIN_MATCH_BYTES {
-        return find_static_dictionary_identity(input, pos, max_len, dictionary_base, best_score);
+        return find_dictionary_match::<USE_DICTIONARY>(
+            input,
+            pos,
+            max_len,
+            dictionary_base,
+            best_score,
+        );
     }
     let distance = pos - previous;
     let score = score_distance(len, distance);
@@ -243,7 +273,21 @@ fn find_match(
             score,
         });
     }
-    find_static_dictionary_identity(input, pos, max_len, dictionary_base, best_score)
+    find_dictionary_match::<USE_DICTIONARY>(input, pos, max_len, dictionary_base, best_score)
+}
+
+fn find_dictionary_match<const USE_DICTIONARY: bool>(
+    input: &[u8],
+    pos: usize,
+    max_len: usize,
+    dictionary_base: usize,
+    min_score: usize,
+) -> Option<Match> {
+    if USE_DICTIONARY {
+        find_static_dictionary_identity(input, pos, max_len, dictionary_base, min_score)
+    } else {
+        None
+    }
 }
 
 fn find_static_dictionary_identity(
