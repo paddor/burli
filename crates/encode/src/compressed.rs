@@ -148,12 +148,18 @@ fn write_compressed_chunk(
         return write_compressed_literal_meta_block(writer, input);
     }
 
+    if quality == 0 {
+        let mut batch = collect_prepared_tokens_q0(input, max_backward_distance)?;
+        if !batch.has_copy {
+            return write_compressed_literal_meta_block(writer, input);
+        }
+        batch.ensure_distance_frequencies();
+        return write_prepared_token_batch_with_len(writer, input, &batch, input.len());
+    }
+
     let tokens = collect_tokens(input, quality, max_backward_distance);
     if tokens.iter().all(|token| token.copy_len == 0) {
         return write_compressed_literal_meta_block(writer, input);
-    }
-    if quality == 0 {
-        return write_token_batch_with_len(writer, input, &tokens, input.len());
     }
     write_token_batches(writer, input, &tokens)
 }
@@ -174,6 +180,51 @@ impl Token {
 
     const fn block_len(self) -> usize {
         self.insert_len + self.copy_len
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PreparedBatch {
+    prepared: Vec<PreparedToken>,
+    literal_frequencies: Vec<usize>,
+    command_frequencies: Vec<usize>,
+    distance_frequencies: Vec<usize>,
+    has_distance: bool,
+    has_copy: bool,
+}
+
+impl PreparedBatch {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            prepared: Vec::with_capacity(capacity),
+            literal_frequencies: vec![0; LITERAL_ALPHABET_SIZE],
+            command_frequencies: vec![0; COMMAND_ALPHABET_SIZE],
+            distance_frequencies: vec![0; 64],
+            has_distance: false,
+            has_copy: false,
+        }
+    }
+
+    fn push(&mut self, input: &[u8], token: Token) -> Result<(), CompressError> {
+        let prepared_token = PreparedToken::new(token)?;
+        let token = prepared_token.token;
+        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
+            self.literal_frequencies[usize::from(literal)] += 1;
+        }
+        self.command_frequencies[usize::from(prepared_token.command_symbol)] += 1;
+        if let Some(distance) = prepared_token.distance {
+            self.distance_frequencies[usize::from(distance.symbol)] += 1;
+            self.has_distance = true;
+        }
+        self.has_copy |= token.is_copy();
+        self.prepared.push(prepared_token);
+        Ok(())
+    }
+
+    fn ensure_distance_frequencies(&mut self) {
+        if !self.has_distance {
+            self.distance_frequencies[0] = 1;
+        }
     }
 }
 
@@ -321,6 +372,101 @@ fn collect_tokens_q0(input: &[u8], max_backward_distance: usize) -> Vec<Token> {
 
     mark_last_distance_tokens(&mut tokens);
     tokens
+}
+
+fn collect_prepared_tokens_q0(
+    input: &[u8],
+    max_backward_distance: usize,
+) -> Result<PreparedBatch, CompressError> {
+    const TABLE_SIZE: usize = 1 << 15;
+    const TABLE_MASK: usize = TABLE_SIZE - 1;
+    const HASH_SHIFT: usize = 49;
+    const EMPTY: u32 = u32::MAX;
+
+    let mut batch = PreparedBatch::with_capacity(input.len() / 32);
+    if input.len() < 8 {
+        batch.push(
+            input,
+            Token {
+                insert_start: 0,
+                insert_len: input.len(),
+                copy_len: 0,
+                distance: 0,
+                use_last_distance: false,
+            },
+        )?;
+        return Ok(batch);
+    }
+
+    let mut table = vec![EMPTY; TABLE_SIZE];
+    let mut pos = 0;
+    let mut insert_start = 0;
+    let mut last_distance = None;
+    let mut word = read_u64_le(input, 0);
+
+    while pos + 8 <= input.len() {
+        let key = hash_word_q0(word, HASH_SHIFT) & TABLE_MASK;
+        let previous = table[key];
+        table[key] = pos as u32;
+
+        let previous = last_distance
+            .filter(|&distance| pos >= distance && is_match5(input, pos - distance, pos))
+            .map(|distance| pos - distance)
+            .or_else(|| {
+                (previous != EMPTY)
+                    .then_some(previous as usize)
+                    .filter(|&previous| {
+                        pos - previous <= max_backward_distance && is_match5(input, previous, pos)
+                    })
+            });
+
+        if let Some(previous) = previous {
+            let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
+            let copy_len = match_len(input, previous, pos, max_copy_len);
+            if copy_len >= 5 {
+                let distance = pos - previous;
+                let mut token = Token {
+                    insert_start,
+                    insert_len: pos - insert_start,
+                    copy_len,
+                    distance,
+                    use_last_distance: false,
+                };
+                token.use_last_distance = distance
+                    == last_distance.unwrap_or(INITIAL_LAST_DISTANCE)
+                    && token_supports_last_distance(token);
+                batch.push(input, token)?;
+                store_match_range_q0(input, &mut table, pos + 1, copy_len.saturating_sub(1));
+                pos += copy_len;
+                insert_start = pos;
+                last_distance = Some(distance);
+                if pos + 8 <= input.len() {
+                    word = read_u64_le(input, pos);
+                }
+                continue;
+            }
+        }
+
+        pos += 1;
+        if pos + 8 <= input.len() {
+            word = next_hash_word(word, input[pos + 7]);
+        }
+    }
+
+    if insert_start < input.len() {
+        batch.push(
+            input,
+            Token {
+                insert_start,
+                insert_len: input.len() - insert_start,
+                copy_len: 0,
+                distance: 0,
+                use_last_distance: false,
+            },
+        )?;
+    }
+
+    Ok(batch)
 }
 
 fn store_match_range(
@@ -569,40 +715,43 @@ fn write_token_batch_with_len(
         return Err(BurliError::Format("invalid compressed Brotli block size"));
     }
 
-    let mut literal_frequencies = vec![0_usize; LITERAL_ALPHABET_SIZE];
-    let mut command_frequencies = vec![0_usize; COMMAND_ALPHABET_SIZE];
-    let mut distance_frequencies = vec![0_usize; 64];
-    let mut has_distance = false;
-    let mut prepared = Vec::with_capacity(tokens.len());
+    let mut batch = PreparedBatch::with_capacity(tokens.len());
     for &token in tokens {
-        let prepared_token = PreparedToken::new(token)?;
-        let token = prepared_token.token;
-        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            literal_frequencies[usize::from(literal)] += 1;
-        }
-        command_frequencies[usize::from(prepared_token.command_symbol)] += 1;
-        if let Some(distance) = prepared_token.distance {
-            distance_frequencies[usize::from(distance.symbol)] += 1;
-            has_distance = true;
-        }
-        prepared.push(prepared_token);
+        batch.push(input, token)?;
     }
-    if !has_distance {
-        distance_frequencies[0] = 1;
+    batch.ensure_distance_frequencies();
+    write_prepared_token_batch_with_len(writer, input, &batch, block_len)
+}
+
+fn write_prepared_token_batch_with_len(
+    writer: &mut BitWriter,
+    input: &[u8],
+    batch: &PreparedBatch,
+    block_len: usize,
+) -> Result<(), CompressError> {
+    if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
+        return Err(BurliError::Format("invalid compressed Brotli block size"));
     }
 
     write_meta_block_len(writer, block_len)?;
     write_block_and_context_header(writer)?;
-    let literal_codes =
-        write_prefix_code_from_frequencies(writer, LITERAL_ALPHABET_SIZE, &literal_frequencies)?;
-    let command_codes =
-        write_prefix_code_from_frequencies(writer, COMMAND_ALPHABET_SIZE, &command_frequencies)?;
-    let distance_codes = write_prefix_code_from_frequencies(writer, 64, &distance_frequencies)?;
+    let literal_codes = write_prefix_code_from_frequencies(
+        writer,
+        LITERAL_ALPHABET_SIZE,
+        &batch.literal_frequencies,
+    )?;
+    let command_codes = write_prefix_code_from_frequencies(
+        writer,
+        COMMAND_ALPHABET_SIZE,
+        &batch.command_frequencies,
+    )?;
+    let distance_codes =
+        write_prefix_code_from_frequencies(writer, 64, &batch.distance_frequencies)?;
     let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
     let command_code_map = symbol_code_map(&command_codes, COMMAND_ALPHABET_SIZE);
     let distance_code_map = symbol_code_map(&distance_codes, 64);
 
-    for prepared_token in &prepared {
+    for prepared_token in &batch.prepared {
         let token = prepared_token.token;
         let insert = prepared_token.insert;
         let copy = prepared_token.copy;
