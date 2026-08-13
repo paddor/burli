@@ -19,12 +19,16 @@ const FONT_BUMP: u32 = 1;
 const HEADER_SUBTITLE_OFFSET: i32 = 18;
 const LEGEND_ROW_H: f64 = 20.0;
 const LEGEND_COL_W: f64 = 250.0;
+const GROUP_BAR_FILL: f64 = 0.78;
+const GROUP_BAR_GAP_FRACTION: f64 = 0.025;
+const GROUP_BAR_MIN_GAP: f64 = 2.0;
+const GROUP_BAR_MAX_GAP: f64 = 4.0;
 
 const TRANSFER_RATE: f64 = 100e6;
 const QUALITY: u8 = 5;
 const DECODE_QUALITY: u8 = 5;
 const SCATTER_QUALITIES: &[u8] = &[0, 1, 2, 3, 4, 5];
-const MATRIX_QUALITIES: &[u8] = &[0, 3, 5];
+const MATRIX_QUALITIES: &[u8] = &[0, 1, 2, 3, 4, 5];
 const SMALL_QUALITIES: &[u8] = &[0, 1, 2, 3, 4, 5];
 const LABEL_QUALITY: u8 = 5;
 const SCATTER_LOG_X_MIN: f64 = 0.5; // 10^0.5 ~= 3 MB/s
@@ -862,6 +866,32 @@ fn px(v: f64) -> i32 {
     v.round() as i32
 }
 
+fn grouped_bar_rects(slot_x: f64, slot_w: f64, count: usize, max_bar_w: f64) -> Vec<(f64, f64)> {
+    if count == 0 {
+        return Vec::new();
+    }
+
+    let slot_left = px(slot_x) as f64;
+    let slot_right = px(slot_x + slot_w) as f64;
+    let slot_w = (slot_right - slot_left).max(count as f64);
+    let gap = if count > 1 {
+        (slot_w * GROUP_BAR_GAP_FRACTION)
+            .round()
+            .clamp(GROUP_BAR_MIN_GAP, GROUP_BAR_MAX_GAP)
+    } else {
+        0.0
+    };
+    let gap_total = gap * count.saturating_sub(1) as f64;
+    let available = ((slot_w * GROUP_BAR_FILL).round() - gap_total).max(count as f64);
+    let bar_w = (available / count as f64).floor().min(max_bar_w).max(1.0);
+    let total_w = count as f64 * bar_w + gap_total;
+    let start = slot_left + ((slot_w - total_w) / 2.0).round();
+
+    (0..count)
+        .map(|i| (start + i as f64 * (bar_w + gap), bar_w))
+        .collect()
+}
+
 fn nice_step(max_val: f64, target_lines: usize) -> f64 {
     if max_val <= 0.0 {
         return 1.0;
@@ -1604,29 +1634,22 @@ fn draw_pipeline(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
         draw_y_grid(&area, x_left, x_right, p_top, p_bot, y_max, false)?;
 
         let group_w = plot_w / panel_inputs.len() as f64;
-        let bar_w = group_w * 0.75 / codecs.len() as f64;
-        let gap = group_w * 0.25;
         for (gi, input) in panel_inputs.iter().enumerate() {
-            let group_x = x_left + gi as f64 * group_w + gap / 2.0;
-            for (ci, codec) in codecs.iter().enumerate() {
+            let group_x = x_left + gi as f64 * group_w;
+            let bars = grouped_bar_rects(group_x, group_w, codecs.len(), 36.0);
+            for (codec, (x, bar_w)) in codecs.iter().zip(bars.iter().copied()) {
                 let Some(parts) = stacks.get(&(input.to_string(), (*codec).to_string())) else {
                     continue;
                 };
                 let Some(style) = cfg.style(codec) else {
                     continue;
                 };
-                draw_stack(
-                    &area,
-                    group_x + ci as f64 * bar_w,
-                    bar_w,
-                    p_top,
-                    p_bot,
-                    y_max,
-                    *parts,
-                    style,
-                )?;
+                draw_stack(&area, x, bar_w, p_top, p_bot, y_max, *parts, style)?;
             }
-            let cx = group_x + codecs.len() as f64 * bar_w / 2.0;
+            let cx = match (bars.first(), bars.last()) {
+                (Some((first_x, _)), Some((last_x, last_w))) => (first_x + last_x + last_w) / 2.0,
+                _ => group_x + group_w / 2.0,
+            };
             text(
                 &area,
                 input_chart_label(input),
@@ -1741,24 +1764,8 @@ fn draw_matrix(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
         draw_y_grid(&area, x_left, x_right, p_top, p_bot, y_max, true)?;
 
         let col_w = plot_w / MATRIX_QUALITIES.len() as f64;
-        let max_codecs = MATRIX_QUALITIES
-            .iter()
-            .map(|quality| {
-                cfg.matrix_codecs
-                    .iter()
-                    .copied()
-                    .filter(|codec| {
-                        stacks.contains_key(&((*codec).to_string(), *quality, (*group).to_string()))
-                    })
-                    .count()
-            })
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        let bar_w = (col_w * 0.7 / max_codecs as f64).min(44.0);
-        let inner_gap = bar_w * 0.15;
         for (qi, quality) in MATRIX_QUALITIES.iter().enumerate() {
-            let col_x = x_left + qi as f64 * col_w + (col_w * 0.2) / 2.0;
+            let col_x = x_left + qi as f64 * col_w;
             let codecs = cfg
                 .matrix_codecs
                 .iter()
@@ -1767,7 +1774,8 @@ fn draw_matrix(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
                     stacks.contains_key(&((*codec).to_string(), *quality, (*group).to_string()))
                 })
                 .collect::<Vec<_>>();
-            for (ci, codec) in codecs.iter().enumerate() {
+            let bars = grouped_bar_rects(col_x, col_w, codecs.len(), 44.0);
+            for (codec, (x, bar_w)) in codecs.iter().zip(bars.iter().copied()) {
                 let Some(parts) =
                     stacks.get(&((*codec).to_string(), *quality, (*group).to_string()))
                 else {
@@ -1776,16 +1784,7 @@ fn draw_matrix(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
                 let Some(style) = cfg.style(codec) else {
                     continue;
                 };
-                draw_stack(
-                    &area,
-                    col_x + ci as f64 * (bar_w + inner_gap / max_codecs as f64),
-                    bar_w,
-                    p_top,
-                    p_bot,
-                    y_max,
-                    *parts,
-                    style,
-                )?;
+                draw_stack(&area, x, bar_w, p_top, p_bot, y_max, *parts, style)?;
             }
             text(
                 &area,
@@ -1801,23 +1800,25 @@ fn draw_matrix(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
     }
 
     let leg_y = panel_tops[2] + panel_h + 48.0;
-    draw_legend(
+    let legend_items = cfg
+        .matrix_codecs
+        .iter()
+        .copied()
+        .filter(|codec| data.contains_key(*codec))
+        .collect::<Vec<_>>();
+    let legend_rows = draw_marker_legend(
         &area,
         cfg,
-        &cfg.matrix_codecs
-            .iter()
-            .copied()
-            .filter(|codec| data.contains_key(*codec))
-            .collect::<Vec<_>>(),
-        width as f64 / 2.0 - 235.0,
+        &legend_items,
+        width as f64 / 2.0,
         leg_y,
-        2,
+        x_right - x_left,
+        legend_items.len().max(1),
     )?;
-    let rows = cfg.matrix_codecs.len().div_ceil(2);
     draw_segment_legend(
         &area,
         width as f64 / 2.0,
-        leg_y + rows as f64 * LEGEND_ROW_H + 16.0,
+        leg_y + legend_rows as f64 * LEGEND_ROW_H + 16.0,
     )?;
     area.present()?;
     drop(area);
