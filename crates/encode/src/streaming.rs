@@ -25,9 +25,9 @@ impl<W: Write> StreamEncoder<W> {
         }
         let mut writer = BitWriter::new();
         if options.quality_value() == 0 {
-            crate::stored::write_window_bits(&mut writer, options.window_bits_value())?;
+            crate::metablock::write_window_bits(&mut writer, options.window_bits_value())?;
         } else {
-            crate::compressed::write_stream_header(&mut writer, &options)?;
+            crate::encode::write_stream_header(&mut writer, &options)?;
         }
 
         Ok(Self {
@@ -46,7 +46,7 @@ impl<W: Write> StreamEncoder<W> {
     pub fn finish(mut self) -> Result<W, CompressError> {
         self.write_buffered_chunk()
             .map_err(|_| CompressError::Format("failed to write compressed Brotli stream"))?;
-        crate::stored::write_last_empty_meta_block(&mut self.writer)?;
+        crate::metablock::write_last_empty_meta_block(&mut self.writer)?;
         self.write_final_bytes()
             .map_err(|_| CompressError::Format("failed to write compressed Brotli stream"))?;
         Ok(self.inner)
@@ -61,9 +61,9 @@ impl<W: Write> StreamEncoder<W> {
             return Ok(());
         }
         let result = if self.options.quality_value() == 0 {
-            crate::stored::write_uncompressed_meta_block(&mut self.writer, input)
+            crate::metablock::write_uncompressed_meta_block(&mut self.writer, input)
         } else {
-            crate::compressed::write_stream_chunk(&mut self.writer, input, &self.options)
+            crate::encode::write_stream_chunk(&mut self.writer, input, &self.options)
         };
         result.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         self.write_full_bytes()

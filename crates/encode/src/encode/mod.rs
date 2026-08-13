@@ -1,10 +1,13 @@
 use alloc::{vec, vec::Vec};
 
-use burli_core::{
-    BurliError, CompressError, Options,
-    bits::BitWriter,
-    format::{MAX_WINDOW_BITS, MIN_BLOCK_BITS, MIN_WINDOW_BITS},
-};
+use burli_core::{BurliError, CompressError, Options, bits::BitWriter, format::MIN_BLOCK_BITS};
+
+mod q0;
+mod q1;
+mod q2;
+mod q3;
+mod q4;
+mod q5;
 
 const MAX_LITERAL_ONLY_QUALITY: u8 = 5;
 const MAX_META_BLOCK_SIZE: usize = 1 << 24;
@@ -24,28 +27,29 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
         ));
     }
     if options.quality_value() == 0 && !input.is_empty() && input.len() <= 256 {
-        return crate::stored::compress_stored_with_options(input, options);
+        return crate::metablock::compress_uncompressed_with_options(input, options);
     }
 
     let mut writer = BitWriter::with_capacity(max_literal_only_size(input.len()));
-    write_window_bits(&mut writer, options.window_bits_value())?;
+    crate::metablock::write_window_bits(&mut writer, options.window_bits_value())?;
     if input.is_empty() {
-        write_last_empty_meta_block(&mut writer)?;
+        crate::metablock::write_last_empty_meta_block(&mut writer)?;
         return Ok(writer.into_bytes());
     }
 
     write_compressed_meta_blocks(&mut writer, input, options)?;
-    write_last_empty_meta_block(&mut writer)?;
+    crate::metablock::write_last_empty_meta_block(&mut writer)?;
 
     let compressed = writer.into_bytes();
     if compressed.len() < input.len() {
         return Ok(compressed);
     }
 
-    let stored_options = options.clone().quality(0)?;
-    let stored = crate::stored::compress_stored_with_options(input, &stored_options)?;
-    if stored.len() < compressed.len() {
-        Ok(stored)
+    let uncompressed_options = options.clone().quality(0)?;
+    let uncompressed =
+        crate::metablock::compress_uncompressed_with_options(input, &uncompressed_options)?;
+    if uncompressed.len() < compressed.len() {
+        Ok(uncompressed)
     } else {
         Ok(compressed)
     }
@@ -61,7 +65,7 @@ pub(crate) fn write_stream_header(
             "only q0..q5 Brotli encoding is implemented yet",
         ));
     }
-    write_window_bits(writer, options.window_bits_value())
+    crate::metablock::write_window_bits(writer, options.window_bits_value())
 }
 
 #[cfg(feature = "std")]
@@ -88,24 +92,6 @@ fn max_literal_only_size(input_len: usize) -> usize {
         .saturating_add(256)
 }
 
-fn write_window_bits(writer: &mut BitWriter, window_bits: u8) -> Result<(), CompressError> {
-    if !(MIN_WINDOW_BITS..=MAX_WINDOW_BITS).contains(&window_bits) {
-        return Err(BurliError::InvalidWindowBits(window_bits));
-    }
-
-    if window_bits == 16 {
-        writer.write_bits(1, 0)
-    } else if window_bits == 17 {
-        writer.write_bits(7, 1)
-    } else if window_bits > 17 {
-        let bits = ((window_bits - 17) << 1) | 1;
-        writer.write_bits(4, u64::from(bits))
-    } else {
-        let bits = ((window_bits - 8) << 4) | 1;
-        writer.write_bits(7, u64::from(bits))
-    }
-}
-
 fn write_compressed_meta_blocks(
     writer: &mut BitWriter,
     input: &[u8],
@@ -122,7 +108,6 @@ fn write_compressed_meta_blocks(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct EncoderPlan {
-    quality: u8,
     path: EncoderPath,
     block_size: usize,
     max_backward_distance: usize,
@@ -146,7 +131,6 @@ impl EncoderPlan {
         .min(MAX_META_BLOCK_SIZE);
 
         Ok(Self {
-            quality,
             path: EncoderPath::for_quality(quality),
             block_size,
             max_backward_distance,
@@ -159,8 +143,7 @@ impl EncoderPlan {
             return write_compressed_literal_meta_block(writer, input);
         }
 
-        let commands =
-            ParsedCommands::collect(input, self.path, self.quality, max_backward_distance)?;
+        let commands = ParsedCommands::collect(input, self.path, max_backward_distance)?;
         if !commands.has_copy() {
             return write_compressed_literal_meta_block(writer, input);
         }
@@ -212,22 +195,25 @@ impl ParsedCommands {
     fn collect(
         input: &[u8],
         path: EncoderPath,
-        quality: u8,
         max_backward_distance: usize,
     ) -> Result<Self, CompressError> {
         match path {
             EncoderPath::FastOnePass => {
-                collect_prepared_tokens_q0(input, max_backward_distance).map(Self::Prepared)
+                q0::collect(input, max_backward_distance).map(Self::Prepared)
             }
-            EncoderPath::FastTwoPass
-            | EncoderPath::StaticEntropy
-            | EncoderPath::RegularNoSplit
-            | EncoderPath::RegularSplit
-            | EncoderPath::ContextModeled => Ok(Self::Tokens(collect_tokens(
-                input,
-                quality,
-                max_backward_distance,
-            ))),
+            EncoderPath::FastTwoPass => Ok(Self::Tokens(q1::collect(input, max_backward_distance))),
+            EncoderPath::StaticEntropy => {
+                Ok(Self::Tokens(q2::collect(input, max_backward_distance)))
+            }
+            EncoderPath::RegularNoSplit => {
+                Ok(Self::Tokens(q3::collect(input, max_backward_distance)))
+            }
+            EncoderPath::RegularSplit => {
+                Ok(Self::Tokens(q4::collect(input, max_backward_distance)))
+            }
+            EncoderPath::ContextModeled => {
+                Ok(Self::Tokens(q5::collect(input, max_backward_distance)))
+            }
         }
     }
 
@@ -1489,11 +1475,6 @@ fn alphabet_bits(alphabet_size: usize) -> u8 {
     (usize::BITS - value.leading_zeros()) as u8
 }
 
-fn write_last_empty_meta_block(writer: &mut BitWriter) -> Result<(), CompressError> {
-    writer.write_bits(1, 1)?;
-    writer.write_bits(1, 1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1507,7 +1488,7 @@ mod tests {
 
         assert_ne!(
             encoded,
-            crate::stored::compress_stored_with_options(
+            crate::metablock::compress_uncompressed_with_options(
                 &input,
                 &Options::default().quality(0).unwrap()
             )
@@ -1521,24 +1502,25 @@ mod tests {
         let input = b"function demo(){return demo_value;} ".repeat(256);
         let encoded =
             compress_with_options(&input, &Options::default().quality(0).unwrap()).unwrap();
-        let stored = crate::stored::compress_stored_with_options(
+        let uncompressed = crate::metablock::compress_uncompressed_with_options(
             &input,
             &Options::default().quality(0).unwrap(),
         )
         .unwrap();
 
-        assert!(encoded.len() < stored.len());
+        assert!(encoded.len() < uncompressed.len());
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 
     #[test]
-    fn q0_stores_tiny_payloads() {
+    fn q0_uses_uncompressed_for_tiny_payloads() {
         let input = b"<html><body>hello burli</body></html>".repeat(4);
         let options = Options::default().quality(0).unwrap();
         let encoded = compress_with_options(&input, &options).unwrap();
-        let stored = crate::stored::compress_stored_with_options(&input, &options).unwrap();
+        let uncompressed =
+            crate::metablock::compress_uncompressed_with_options(&input, &options).unwrap();
 
-        assert_eq!(encoded, stored);
+        assert_eq!(encoded, uncompressed);
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 

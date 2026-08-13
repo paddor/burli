@@ -53,8 +53,8 @@ fn q6_encoder_path_returns_unsupported() {
 }
 
 #[test]
-fn stateful_api_round_trips_stored_streams() {
-    let input = b"stateful stored payload";
+fn stateful_api_round_trips_uncompressed_streams() {
+    let input = b"stateful uncompressed payload";
     let mut compressor = burli::Compressor::new(0).unwrap();
     let mut decompressor = burli::Decompressor::new();
 
@@ -111,8 +111,8 @@ fn stateful_decode_into_slice_respects_buffer_size() {
 
 #[test]
 #[cfg(feature = "std")]
-fn stream_api_round_trips_stored_streams() {
-    let input = b"stream stored payload";
+fn stream_api_round_trips_uncompressed_streams() {
+    let input = b"stream uncompressed payload";
     let mut encoder = burli::StreamEncoder::new(Vec::new(), 0).unwrap();
     encoder.write_all(input).unwrap();
     let encoded = encoder.finish().unwrap();
@@ -192,7 +192,7 @@ fn stream_decoder_emits_before_consuming_full_input() {
 
 #[test]
 fn q0_output_decodes_with_rust_brotli() {
-    let input = b"rust-brotli should decode burli stored streams";
+    let input = b"rust-brotli should decode burli uncompressed streams";
     let encoded = burli::compress(input, 0).unwrap();
     let mut decoder = rust_brotli::Decompressor::new(encoded.as_slice(), 4096);
     let mut decoded = Vec::new();
@@ -203,7 +203,7 @@ fn q0_output_decodes_with_rust_brotli() {
 
 #[test]
 fn q0_to_q5_outputs_decode_with_rust_brotli() {
-    let input = b"rust-brotli should decode all scoped stored qualities";
+    let input = b"rust-brotli should decode all scoped uncompressed qualities";
 
     for quality in 0..=5 {
         let encoded = burli::compress(input, quality).unwrap();

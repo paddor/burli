@@ -1,30 +1,18 @@
 use alloc::vec::Vec;
 
-use burli_core::{
-    BurliError, CompressError, Options,
-    bits::BitWriter,
-    format::{MAX_WINDOW_BITS, MIN_BLOCK_BITS, MIN_WINDOW_BITS},
-};
+use burli_core::{BurliError, CompressError, Options, bits::BitWriter, format::MIN_BLOCK_BITS};
+
+use super::{write_last_empty_meta_block, write_window_bits};
 
 const MAX_META_BLOCK_SIZE: usize = 1 << 24;
 
-pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
-    if options.quality_value() <= 5 {
-        return crate::compressed::compress_with_options(input, options);
-    }
-
-    Err(BurliError::Unsupported(
-        "only q0..q5 Brotli encoding is implemented yet",
-    ))
-}
-
-pub(crate) fn compress_stored_with_options(
+pub(crate) fn compress_uncompressed_with_options(
     input: &[u8],
     options: &Options,
 ) -> Result<Vec<u8>, CompressError> {
     let block_bits = options.block_bits_value().unwrap_or(MIN_BLOCK_BITS);
     let block_size = 1_usize << block_bits;
-    let mut writer = BitWriter::with_capacity(max_stored_size(input.len(), block_size));
+    let mut writer = BitWriter::with_capacity(max_uncompressed_size(input.len(), block_size));
 
     write_window_bits(&mut writer, options.window_bits_value())?;
     if input.is_empty() {
@@ -40,32 +28,11 @@ pub(crate) fn compress_stored_with_options(
     Ok(writer.into_bytes())
 }
 
-fn max_stored_size(input_len: usize, block_size: usize) -> usize {
+fn max_uncompressed_size(input_len: usize, block_size: usize) -> usize {
     let blocks = input_len.div_ceil(block_size).max(1);
     input_len
         .saturating_add(blocks.saturating_mul(5))
         .saturating_add(2)
-}
-
-pub(crate) fn write_window_bits(
-    writer: &mut BitWriter,
-    window_bits: u8,
-) -> Result<(), CompressError> {
-    if !(MIN_WINDOW_BITS..=MAX_WINDOW_BITS).contains(&window_bits) {
-        return Err(BurliError::InvalidWindowBits(window_bits));
-    }
-
-    if window_bits == 16 {
-        writer.write_bits(1, 0)
-    } else if window_bits == 17 {
-        writer.write_bits(7, 1)
-    } else if window_bits > 17 {
-        let bits = ((window_bits - 17) << 1) | 1;
-        writer.write_bits(4, u64::from(bits))
-    } else {
-        let bits = ((window_bits - 8) << 4) | 1;
-        writer.write_bits(7, u64::from(bits))
-    }
 }
 
 pub(crate) fn write_uncompressed_meta_block(
@@ -100,11 +67,6 @@ fn write_meta_block_len(writer: &mut BitWriter, len: usize) -> Result<(), Compre
     writer.write_bits(1, 1)
 }
 
-pub(crate) fn write_last_empty_meta_block(writer: &mut BitWriter) -> Result<(), CompressError> {
-    writer.write_bits(1, 1)?;
-    writer.write_bits(1, 1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,16 +74,18 @@ mod tests {
     #[test]
     fn encodes_empty_stream_with_default_window() {
         assert_eq!(
-            compress_with_options(b"", &Options::default().quality(0).unwrap()).unwrap(),
+            compress_uncompressed_with_options(b"", &Options::default().quality(0).unwrap())
+                .unwrap(),
             [0x3b]
         );
     }
 
     #[test]
     fn q0_round_trips_through_burli_decoder() {
-        let input = b"hello stored brotli";
+        let input = b"hello uncompressed brotli";
         let encoded =
-            compress_with_options(input, &Options::default().quality(0).unwrap()).unwrap();
+            compress_uncompressed_with_options(input, &Options::default().quality(0).unwrap())
+                .unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
@@ -136,23 +100,23 @@ mod tests {
             .block_bits(Some(16))
             .unwrap();
         let input = vec![42; (1 << 16) + 3];
-        let encoded = compress_with_options(&input, &options).unwrap();
+        let encoded = compress_uncompressed_with_options(&input, &options).unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 
     #[test]
-    fn q1_to_q5_round_trip_through_encode_entrypoint() {
+    fn q1_to_q5_round_trip_through_encoder_entrypoint() {
         for quality in 1..=5 {
-            let encoded = compress_with_options(
-                b"stored fallback",
+            let encoded = crate::encode::compress_with_options(
+                b"uncompressed fallback",
                 &Options::default().quality(quality).unwrap(),
             )
             .unwrap();
 
             assert_eq!(
                 burli_decode::decompress(&encoded).unwrap(),
-                b"stored fallback"
+                b"uncompressed fallback"
             );
         }
     }
@@ -160,7 +124,7 @@ mod tests {
     #[test]
     fn q6_returns_unsupported() {
         assert!(matches!(
-            compress_with_options(b"hello", &Options::default().quality(6).unwrap()),
+            crate::encode::compress_with_options(b"hello", &Options::default().quality(6).unwrap()),
             Err(BurliError::Unsupported(_))
         ));
     }

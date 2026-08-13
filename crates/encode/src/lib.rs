@@ -11,9 +11,9 @@ pub mod context;
 pub mod streaming;
 
 #[cfg(feature = "alloc")]
-mod compressed;
+mod encode;
 #[cfg(feature = "alloc")]
-mod stored;
+mod metablock;
 
 pub use burli_core::{CompressError, Options};
 
@@ -28,7 +28,7 @@ pub fn compress_with_options(
     input: &[u8],
     options: &Options,
 ) -> Result<alloc::vec::Vec<u8>, CompressError> {
-    stored::compress_with_options(input, options)
+    encode::compress_with_options(input, options)
 }
 
 #[cfg(feature = "alloc")]
