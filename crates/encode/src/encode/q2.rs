@@ -352,6 +352,9 @@ fn table_key(input: &[u8], pos: usize, table: &[u32]) -> usize {
 }
 
 fn table_size_for_input(input_len: usize) -> usize {
+    if input_len <= 1024 {
+        return 1 << 10;
+    }
     if input_len <= 8 * 1024 {
         1 << 12
     } else {
