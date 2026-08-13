@@ -254,9 +254,9 @@ fn copy_from_distance(
             let byte = output[src];
             output.push(byte);
         }
-    } else if request.len <= 16 && request.distance >= request.len {
+    } else if request.len <= 64 && request.distance >= request.len {
         let src = produced - request.distance;
-        let mut copy = [0_u8; 16];
+        let mut copy = [0_u8; 64];
         copy[..request.len].copy_from_slice(&output[src..src + request.len]);
         output.extend_from_slice(&copy[..request.len]);
     } else {
