@@ -328,15 +328,6 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::RegularNoSplit {
-            if input.len() <= 4 * 1024 {
-                let tokens = q2::collect(input, max_backward_distance, &mut workspace.q2);
-                return write_token_batches_with_symbol_limit(
-                    writer,
-                    input,
-                    &tokens,
-                    MAX_DELAYED_SYMBOLS,
-                );
-            }
             let tokens = q3::collect(input, max_backward_distance, &mut workspace.q3);
             if !tokens.iter().any(|token| token.is_copy()) {
                 return write_compressed_literal_meta_block(writer, input);
