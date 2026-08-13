@@ -19,6 +19,7 @@ const SCORE_BASE: usize = DISTANCE_BIT_PENALTY * 8 * core::mem::size_of::<usize>
 const MIN_SCORE: usize = SCORE_BASE + 100;
 const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
+const SMALL_MEDIUM_INPUT_THRESHOLD: usize = 320 * 1024;
 const LARGE_INPUT_THRESHOLD: usize = 1 << 20;
 const CUTOFF_TRANSFORMS_COUNT: usize = 10;
 const CUTOFF_TRANSFORMS: u64 = 0x071b_520a_da2d_3200;
@@ -64,6 +65,8 @@ pub(super) fn collect(
 ) -> Vec<Token> {
     if input.len() <= 1024 {
         collect_with_params::<8, 4, 4, 4>(input, max_backward_distance, workspace)
+    } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
+        collect_with_params::<13, 3, 4, 4>(input, max_backward_distance, workspace)
     } else if input.len() >= LARGE_INPUT_THRESHOLD {
         collect_with_params::<15, 4, 5, 8>(input, max_backward_distance, workspace)
     } else {
