@@ -28,6 +28,7 @@ const INITIAL_LAST_DISTANCE: usize = 4;
 const MAX_DELAYED_SYMBOLS: usize = 0x2fff;
 const Q4_DELAYED_SYMBOLS: usize = 3840;
 const Q5_DELAYED_SYMBOLS: usize = 3584;
+const Q0_DIRECT_MAX_INPUT: usize = 384;
 const Q1_STATIC_ENTROPY_MAX_INPUT: usize = 384;
 const STATIC_CODE_LENGTH_DEPTH: [u8; CODE_LENGTH_ALPHABET_SIZE] =
     [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 0, 4, 4];
@@ -254,6 +255,17 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::FastOnePass {
+            if input.len() > Q0_DIRECT_MAX_INPUT {
+                let has_copy = {
+                    let batch = q1::collect(input, max_backward_distance, &mut workspace.q1)?;
+                    batch.has_copy()
+                };
+                if !has_copy {
+                    return write_compressed_literal_meta_block(writer, input);
+                }
+                return q1::write(writer, input, input.len(), &mut workspace.q1);
+            }
+
             let has_copy = {
                 let batch = q0::collect(input, max_backward_distance, &mut workspace.q0)?;
                 batch.has_copy()
