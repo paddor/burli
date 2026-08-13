@@ -187,7 +187,7 @@ impl EncoderPath {
 
 #[derive(Clone, Debug)]
 enum ParsedCommands {
-    Prepared(PreparedBatch),
+    Q0(alloc::boxed::Box<q0::Batch>),
     Tokens(Vec<Token>),
 }
 
@@ -198,9 +198,7 @@ impl ParsedCommands {
         max_backward_distance: usize,
     ) -> Result<Self, CompressError> {
         match path {
-            EncoderPath::FastOnePass => {
-                q0::collect(input, max_backward_distance).map(Self::Prepared)
-            }
+            EncoderPath::FastOnePass => q0::collect(input, max_backward_distance).map(Self::Q0),
             EncoderPath::FastTwoPass => Ok(Self::Tokens(q1::collect(input, max_backward_distance))),
             EncoderPath::StaticEntropy => {
                 Ok(Self::Tokens(q2::collect(input, max_backward_distance)))
@@ -219,7 +217,7 @@ impl ParsedCommands {
 
     fn has_copy(&self) -> bool {
         match self {
-            Self::Prepared(batch) => batch.has_copy,
+            Self::Q0(batch) => batch.has_copy(),
             Self::Tokens(tokens) => tokens.iter().any(|token| token.is_copy()),
         }
     }
@@ -231,10 +229,7 @@ impl ParsedCommands {
         block_len: usize,
     ) -> Result<(), CompressError> {
         match &mut self {
-            Self::Prepared(batch) => {
-                batch.ensure_distance_frequencies();
-                write_prepared_token_batch_with_len(writer, input, batch, block_len)
-            }
+            Self::Q0(batch) => batch.write(writer, input, block_len),
             Self::Tokens(tokens) => write_token_batches(writer, input, tokens),
         }
     }
@@ -364,101 +359,6 @@ fn collect_tokens(input: &[u8], quality: u8, max_backward_distance: usize) -> Ve
     tokens
 }
 
-fn collect_prepared_tokens_q0(
-    input: &[u8],
-    max_backward_distance: usize,
-) -> Result<PreparedBatch, CompressError> {
-    const TABLE_SIZE: usize = 1 << 15;
-    const TABLE_MASK: usize = TABLE_SIZE - 1;
-    const HASH_SHIFT: usize = 49;
-    const EMPTY: u32 = u32::MAX;
-
-    let mut batch = PreparedBatch::with_capacity(input.len() / 32);
-    if input.len() < 8 {
-        batch.push(
-            input,
-            Token {
-                insert_start: 0,
-                insert_len: input.len(),
-                copy_len: 0,
-                distance: 0,
-                use_last_distance: false,
-            },
-        )?;
-        return Ok(batch);
-    }
-
-    let mut table = vec![EMPTY; TABLE_SIZE];
-    let mut pos = 0;
-    let mut insert_start = 0;
-    let mut last_distance = None;
-    let mut word = read_u64_le(input, 0);
-
-    while pos + 8 <= input.len() {
-        let key = hash_word_q0(word, HASH_SHIFT) & TABLE_MASK;
-        let previous = table[key];
-        table[key] = pos as u32;
-
-        let previous = last_distance
-            .filter(|&distance| pos >= distance && is_match5(input, pos - distance, pos))
-            .map(|distance| pos - distance)
-            .or_else(|| {
-                (previous != EMPTY)
-                    .then_some(previous as usize)
-                    .filter(|&previous| {
-                        pos - previous <= max_backward_distance && is_match5(input, previous, pos)
-                    })
-            });
-
-        if let Some(previous) = previous {
-            let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
-            let copy_len = match_len(input, previous, pos, max_copy_len);
-            if copy_len >= 5 {
-                let distance = pos - previous;
-                let mut token = Token {
-                    insert_start,
-                    insert_len: pos - insert_start,
-                    copy_len,
-                    distance,
-                    use_last_distance: false,
-                };
-                token.use_last_distance = distance
-                    == last_distance.unwrap_or(INITIAL_LAST_DISTANCE)
-                    && token_supports_last_distance(token);
-                batch.push(input, token)?;
-                store_match_range_q0(input, &mut table, pos + 1, copy_len.saturating_sub(1));
-                pos += copy_len;
-                insert_start = pos;
-                last_distance = Some(distance);
-                if pos + 8 <= input.len() {
-                    word = read_u64_le(input, pos);
-                }
-                continue;
-            }
-        }
-
-        pos += 1;
-        if pos + 8 <= input.len() {
-            word = next_hash_word(word, input[pos + 7]);
-        }
-    }
-
-    if insert_start < input.len() {
-        batch.push(
-            input,
-            Token {
-                insert_start,
-                insert_len: input.len() - insert_start,
-                copy_len: 0,
-                distance: 0,
-                use_last_distance: false,
-            },
-        )?;
-    }
-
-    Ok(batch)
-}
-
 fn store_match_range(
     input: &[u8],
     quality: u8,
@@ -473,29 +373,6 @@ fn store_match_range(
     for pos in start..end {
         let key = hash_key(input, pos, quality) & table_mask;
         table[key] = pos;
-    }
-}
-
-fn store_match_range_q0(input: &[u8], table: &mut [u32], start: usize, copy_len: usize) {
-    const TABLE_MASK: usize = (1 << 15) - 1;
-    const HASH_SHIFT: usize = 49;
-
-    let end = start
-        .saturating_add(copy_len)
-        .min(input.len().saturating_sub(7));
-    if start >= end {
-        return;
-    }
-
-    let first = end.saturating_sub(3).max(start);
-    let mut word = read_u64_le(input, first);
-    for pos in first..end {
-        let key = hash_word_q0(word, HASH_SHIFT) & TABLE_MASK;
-        table[key] = pos as u32;
-        let next = pos + 1;
-        if next < end {
-            word = next_hash_word(word, input[next + 7]);
-        }
     }
 }
 
