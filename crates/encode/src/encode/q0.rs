@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec, vec::Vec};
+use alloc::{vec, vec::Vec};
 
 use burli_core::{BurliError, CompressError, bits::BitWriter};
 
@@ -14,8 +14,18 @@ use super::{
 const TABLE_SIZE: usize = 1 << 15;
 const TABLE_MASK: usize = TABLE_SIZE - 1;
 const HASH_SHIFT: usize = 49;
-const EMPTY: u32 = u32::MAX;
-const NO_DISTANCE: u16 = u16::MAX;
+const POSITION_MASK: u32 = 0x00ff_ffff;
+const NO_DISTANCE_SYMBOL: u32 = 127;
+const COMMAND_SYMBOL_BITS: u32 = 10;
+const DISTANCE_SYMBOL_BITS: u32 = 7;
+const EXTRA_BITS_WIDTH: u32 = 5;
+const COMMAND_SYMBOL_MASK: u32 = (1 << COMMAND_SYMBOL_BITS) - 1;
+const DISTANCE_SYMBOL_MASK: u32 = (1 << DISTANCE_SYMBOL_BITS) - 1;
+const EXTRA_BITS_MASK: u32 = (1 << EXTRA_BITS_WIDTH) - 1;
+const DISTANCE_SYMBOL_SHIFT: u32 = COMMAND_SYMBOL_BITS;
+const INSERT_EXTRA_BITS_SHIFT: u32 = DISTANCE_SYMBOL_SHIFT + DISTANCE_SYMBOL_BITS;
+const COPY_EXTRA_BITS_SHIFT: u32 = INSERT_EXTRA_BITS_SHIFT + EXTRA_BITS_WIDTH;
+const DISTANCE_EXTRA_BITS_SHIFT: u32 = COPY_EXTRA_BITS_SHIFT + EXTRA_BITS_WIDTH;
 
 #[derive(Clone, Debug)]
 pub(super) struct Batch {
@@ -25,6 +35,18 @@ pub(super) struct Batch {
     distance_frequencies: [usize; 64],
     has_distance: bool,
     has_copy: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct Workspace {
+    table: HashTable,
+    batch: Batch,
+}
+
+#[derive(Clone, Debug, Default)]
+struct HashTable {
+    entries: Vec<u32>,
+    generation: u32,
 }
 
 impl Batch {
@@ -37,6 +59,18 @@ impl Batch {
             has_distance: false,
             has_copy: false,
         }
+    }
+
+    fn reset(&mut self, capacity: usize) {
+        self.records.clear();
+        if self.records.capacity() < capacity {
+            self.records.reserve(capacity - self.records.capacity());
+        }
+        self.literal_frequencies.fill(0);
+        self.command_frequencies.fill(0);
+        self.distance_frequencies.fill(0);
+        self.has_distance = false;
+        self.has_copy = false;
     }
 
     #[inline]
@@ -71,17 +105,21 @@ impl Batch {
             self.has_distance = true;
         }
         self.has_copy |= token.is_copy();
+        let distance_symbol =
+            distance.map_or(NO_DISTANCE_SYMBOL, |distance| u32::from(distance.symbol));
         self.records.push(Record {
             insert_start: token.insert_start as u32,
             insert_len: token.insert_len as u32,
             insert_extra: insert.extra as u32,
             copy_extra: copy.map_or(0, |copy| copy.extra as u32),
             distance_extra: distance.map_or(0, |distance| distance.extra as u32),
-            command_symbol,
-            distance_symbol: distance.map_or(NO_DISTANCE, |distance| distance.symbol),
-            insert_extra_bits: insert.extra_bits,
-            copy_extra_bits: copy.map_or(0, |copy| copy.extra_bits),
-            distance_extra_bits: distance.map_or(0, |distance| distance.extra_bits),
+            meta: pack_record_meta(
+                u32::from(command_symbol),
+                distance_symbol,
+                u32::from(insert.extra_bits),
+                copy.map_or(0, |copy| u32::from(copy.extra_bits)),
+                distance.map_or(0, |distance| u32::from(distance.extra_bits)),
+            ),
         });
         Ok(())
     }
@@ -121,10 +159,11 @@ impl Batch {
         let distance_code_map = symbol_code_map(&distance_codes, 64);
 
         for record in &self.records {
-            let command_code = symbol_code(&command_code_map, record.command_symbol)?;
+            let meta = unpack_record_meta(record.meta);
+            let command_code = symbol_code(&command_code_map, meta.command_symbol as u16)?;
             writer.write_bits_trusted(command_code.len, u64::from(command_code.bits));
-            writer.write_bits_trusted(record.insert_extra_bits, u64::from(record.insert_extra));
-            writer.write_bits_trusted(record.copy_extra_bits, u64::from(record.copy_extra));
+            writer.write_bits_trusted(meta.insert_extra_bits, u64::from(record.insert_extra));
+            writer.write_bits_trusted(meta.copy_extra_bits, u64::from(record.copy_extra));
 
             let insert_start = record.insert_start as usize;
             let insert_end = insert_start + record.insert_len as usize;
@@ -132,18 +171,64 @@ impl Batch {
                 write_literal(writer, &literal_code_map, literal)?;
             }
 
-            if record.distance_symbol != NO_DISTANCE {
-                let distance_code = symbol_code(&distance_code_map, record.distance_symbol)?;
+            if meta.distance_symbol != NO_DISTANCE_SYMBOL {
+                let distance_code = symbol_code(&distance_code_map, meta.distance_symbol as u16)?;
                 writer.write_bits_trusted(distance_code.len, u64::from(distance_code.bits));
-                writer.write_bits_trusted(
-                    record.distance_extra_bits,
-                    u64::from(record.distance_extra),
-                );
+                writer
+                    .write_bits_trusted(meta.distance_extra_bits, u64::from(record.distance_extra));
             }
         }
 
         Ok(())
     }
+}
+
+impl Default for Batch {
+    fn default() -> Self {
+        Self::with_capacity(0)
+    }
+}
+
+impl Workspace {
+    fn reset(&mut self, record_capacity: usize) {
+        self.table.reset();
+        self.batch.reset(record_capacity);
+    }
+}
+
+impl HashTable {
+    fn reset(&mut self) {
+        if self.entries.len() != TABLE_SIZE {
+            self.entries = vec![0; TABLE_SIZE];
+            self.generation = 1;
+            return;
+        }
+
+        self.generation = (self.generation + 1) & 0xff;
+        if self.generation == 0 {
+            self.entries.fill(0);
+            self.generation = 1;
+        }
+    }
+
+    #[inline]
+    fn load_and_store(&mut self, key: usize, position: usize) -> Option<usize> {
+        let entry = &mut self.entries[key];
+        let previous = (entry_generation(*entry) == self.generation)
+            .then_some((*entry & POSITION_MASK) as usize);
+        *entry = (self.generation << 24) | position as u32;
+        previous
+    }
+
+    #[inline]
+    fn store(&mut self, key: usize, position: usize) {
+        self.entries[key] = (self.generation << 24) | position as u32;
+    }
+}
+
+#[inline]
+fn entry_generation(entry: u32) -> u32 {
+    entry >> 24
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -153,106 +238,151 @@ struct Record {
     insert_extra: u32,
     copy_extra: u32,
     distance_extra: u32,
-    command_symbol: u16,
-    distance_symbol: u16,
+    meta: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RecordMeta {
+    command_symbol: u32,
+    distance_symbol: u32,
     insert_extra_bits: u8,
     copy_extra_bits: u8,
     distance_extra_bits: u8,
 }
 
-pub(super) fn collect(
+fn pack_record_meta(
+    command_symbol: u32,
+    distance_symbol: u32,
+    insert_extra_bits: u32,
+    copy_extra_bits: u32,
+    distance_extra_bits: u32,
+) -> u32 {
+    debug_assert!(command_symbol <= COMMAND_SYMBOL_MASK);
+    debug_assert!(distance_symbol <= DISTANCE_SYMBOL_MASK);
+    debug_assert!(insert_extra_bits <= EXTRA_BITS_MASK);
+    debug_assert!(copy_extra_bits <= EXTRA_BITS_MASK);
+    debug_assert!(distance_extra_bits <= EXTRA_BITS_MASK);
+
+    command_symbol
+        | (distance_symbol << DISTANCE_SYMBOL_SHIFT)
+        | (insert_extra_bits << INSERT_EXTRA_BITS_SHIFT)
+        | (copy_extra_bits << COPY_EXTRA_BITS_SHIFT)
+        | (distance_extra_bits << DISTANCE_EXTRA_BITS_SHIFT)
+}
+
+fn unpack_record_meta(meta: u32) -> RecordMeta {
+    RecordMeta {
+        command_symbol: meta & COMMAND_SYMBOL_MASK,
+        distance_symbol: (meta >> DISTANCE_SYMBOL_SHIFT) & DISTANCE_SYMBOL_MASK,
+        insert_extra_bits: ((meta >> INSERT_EXTRA_BITS_SHIFT) & EXTRA_BITS_MASK) as u8,
+        copy_extra_bits: ((meta >> COPY_EXTRA_BITS_SHIFT) & EXTRA_BITS_MASK) as u8,
+        distance_extra_bits: ((meta >> DISTANCE_EXTRA_BITS_SHIFT) & EXTRA_BITS_MASK) as u8,
+    }
+}
+
+pub(super) fn collect<'a>(
     input: &[u8],
     max_backward_distance: usize,
-) -> Result<Box<Batch>, CompressError> {
-    let mut batch = Box::new(Batch::with_capacity(input.len() / 32));
-    if input.len() < 8 {
-        batch.push(
-            input,
-            Token {
-                insert_start: 0,
-                insert_len: input.len(),
-                copy_len: 0,
-                distance: 0,
-                use_last_distance: false,
-            },
-        )?;
-        batch.ensure_distance_frequencies();
-        return Ok(batch);
-    }
+    workspace: &'a mut Workspace,
+) -> Result<&'a Batch, CompressError> {
+    workspace.collect(input, max_backward_distance)
+}
 
-    let mut table = vec![EMPTY; TABLE_SIZE];
-    let mut pos = 0;
-    let mut insert_start = 0;
-    let mut last_distance = None;
-    let mut word = read_u64_le(input, 0);
+impl Workspace {
+    fn collect(
+        &mut self,
+        input: &[u8],
+        max_backward_distance: usize,
+    ) -> Result<&Batch, CompressError> {
+        self.reset(input.len() / 32);
+        if input.len() < 8 {
+            self.batch.push(
+                input,
+                Token {
+                    insert_start: 0,
+                    insert_len: input.len(),
+                    copy_len: 0,
+                    distance: 0,
+                    use_last_distance: false,
+                },
+            )?;
+            self.batch.ensure_distance_frequencies();
+            return Ok(&self.batch);
+        }
 
-    while pos + 8 <= input.len() {
-        let key = hash_word_q0(word, HASH_SHIFT) & TABLE_MASK;
-        let previous = table[key];
-        table[key] = pos as u32;
+        let table = &mut self.table;
+        let batch = &mut self.batch;
+        let mut pos = 0;
+        let mut insert_start = 0;
+        let mut last_distance = None;
+        let mut word = read_u64_le(input, 0);
 
-        let previous = last_distance
-            .filter(|&distance| pos >= distance && is_match5(input, pos - distance, pos))
-            .map(|distance| pos - distance)
-            .or_else(|| {
-                (previous != EMPTY)
-                    .then_some(previous as usize)
-                    .filter(|&previous| {
+        while pos + 8 <= input.len() {
+            let key = hash_word_q0(word, HASH_SHIFT) & TABLE_MASK;
+            let previous = table.load_and_store(key, pos);
+
+            let previous = last_distance
+                .filter(|&distance| pos >= distance && is_match5(input, pos - distance, pos))
+                .map(|distance| pos - distance)
+                .or_else(|| {
+                    previous.filter(|&previous| {
                         pos - previous <= max_backward_distance && is_match5(input, previous, pos)
                     })
-            });
+                });
 
-        if let Some(previous) = previous {
-            let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
-            let copy_len = match_len(input, previous, pos, max_copy_len);
-            if copy_len >= 5 {
-                let distance = pos - previous;
-                let mut token = Token {
-                    insert_start,
-                    insert_len: pos - insert_start,
-                    copy_len,
-                    distance,
-                    use_last_distance: false,
-                };
-                token.use_last_distance = distance
-                    == last_distance.unwrap_or(INITIAL_LAST_DISTANCE)
-                    && token_supports_last_distance(token);
-                batch.push(input, token)?;
-                store_match_range(input, &mut table, pos + 1, copy_len.saturating_sub(1));
-                pos += copy_len;
-                insert_start = pos;
-                last_distance = Some(distance);
-                if pos + 8 <= input.len() {
-                    word = read_u64_le(input, pos);
+            if let Some(previous) = previous {
+                let max_copy_len =
+                    (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
+                let copy_len = match_len(input, previous, pos, max_copy_len);
+                if copy_len >= 5 {
+                    let distance = pos - previous;
+                    let mut token = Token {
+                        insert_start,
+                        insert_len: pos - insert_start,
+                        copy_len,
+                        distance,
+                        use_last_distance: false,
+                    };
+                    token.use_last_distance = distance
+                        == last_distance.unwrap_or(INITIAL_LAST_DISTANCE)
+                        && token_supports_last_distance(token);
+                    batch.push(input, token)?;
+                    store_match_range(input, table, pos + 1, copy_len.saturating_sub(1));
+                    pos += copy_len;
+                    insert_start = pos;
+                    last_distance = Some(distance);
+                    if pos + 8 <= input.len() {
+                        word = read_u64_le(input, pos);
+                    }
+                    continue;
                 }
-                continue;
+            }
+
+            pos += 1;
+            if pos + 8 <= input.len() {
+                word = next_hash_word(word, input[pos + 7]);
             }
         }
 
-        pos += 1;
-        if pos + 8 <= input.len() {
-            word = next_hash_word(word, input[pos + 7]);
+        if insert_start < input.len() {
+            batch.push(
+                input,
+                Token {
+                    insert_start,
+                    insert_len: input.len() - insert_start,
+                    copy_len: 0,
+                    distance: 0,
+                    use_last_distance: false,
+                },
+            )?;
         }
-    }
 
-    if insert_start < input.len() {
-        batch.push(
-            input,
-            Token {
-                insert_start,
-                insert_len: input.len() - insert_start,
-                copy_len: 0,
-                distance: 0,
-                use_last_distance: false,
-            },
-        )?;
+        batch.ensure_distance_frequencies();
+        Ok(batch)
     }
-
-    batch.ensure_distance_frequencies();
-    Ok(batch)
 }
 
-fn store_match_range(input: &[u8], table: &mut [u32], start: usize, copy_len: usize) {
+fn store_match_range(input: &[u8], table: &mut HashTable, start: usize, copy_len: usize) {
     let end = start
         .saturating_add(copy_len)
         .min(input.len().saturating_sub(7));
@@ -264,7 +394,7 @@ fn store_match_range(input: &[u8], table: &mut [u32], start: usize, copy_len: us
     let mut word = read_u64_le(input, first);
     for pos in first..end {
         let key = hash_word_q0(word, HASH_SHIFT) & TABLE_MASK;
-        table[key] = pos as u32;
+        table.store(key, pos);
         let next = pos + 1;
         if next < end {
             word = next_hash_word(word, input[next + 7]);

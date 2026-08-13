@@ -24,9 +24,9 @@ JavaScript
 <rect x="95" y="278" width="44" height="6" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="95" y="273" width="44" height="5" opacity="1" fill="#1D4ED8" stroke="none"/>
 <rect x="95" y="268" width="44" height="5" opacity="1" fill="#2563EB" stroke="none"/>
-<rect x="142" y="267" width="44" height="17" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="142" y="262" width="44" height="5" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="142" y="234" width="44" height="28" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="142" y="268" width="44" height="16" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="142" y="264" width="44" height="4" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="142" y="235" width="44" height="29" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="188" y="261" width="44" height="23" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="188" y="254" width="44" height="7" opacity="1" fill="#3AAF60" stroke="none"/>
 <rect x="188" y="238" width="44" height="16" opacity="1" fill="#4ADE80" stroke="none"/>
@@ -80,9 +80,9 @@ CSS
 <rect x="95" y="556" width="44" height="5" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="95" y="552" width="44" height="4" opacity="1" fill="#1D4ED8" stroke="none"/>
 <rect x="95" y="547" width="44" height="5" opacity="1" fill="#2563EB" stroke="none"/>
-<rect x="142" y="547" width="44" height="14" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="142" y="543" width="44" height="4" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="142" y="514" width="44" height="29" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="142" y="546" width="44" height="15" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="142" y="542" width="44" height="4" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="142" y="512" width="44" height="30" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="188" y="537" width="44" height="24" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="188" y="531" width="44" height="6" opacity="1" fill="#3AAF60" stroke="none"/>
 <rect x="188" y="514" width="44" height="17" opacity="1" fill="#4ADE80" stroke="none"/>
@@ -137,8 +137,8 @@ Data/docs
 <rect x="95" y="827" width="44" height="5" opacity="1" fill="#1D4ED8" stroke="none"/>
 <rect x="95" y="822" width="44" height="5" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="142" y="821" width="44" height="17" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="142" y="817" width="44" height="4" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="142" y="781" width="44" height="36" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="142" y="816" width="44" height="5" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="142" y="779" width="44" height="37" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="188" y="810" width="44" height="28" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="188" y="803" width="44" height="7" opacity="1" fill="#3AAF60" stroke="none"/>
 <rect x="188" y="785" width="44" height="18" opacity="1" fill="#4ADE80" stroke="none"/>

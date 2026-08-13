@@ -20,38 +20,72 @@ const CODE_LENGTH_ORDER: [u8; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 1
 const MAX_SIMPLE_PREFIX_SYMBOLS: usize = 4;
 const INITIAL_LAST_DISTANCE: usize = 4;
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Workspace {
+    q0: q0::Workspace,
+}
+
 pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
+    let mut workspace = Workspace::default();
+    compress_with_options_workspace(input, options, &mut workspace)
+}
+
+pub(crate) fn compress_with_options_workspace(
+    input: &[u8],
+    options: &Options,
+    workspace: &mut Workspace,
+) -> Result<Vec<u8>, CompressError> {
+    let mut writer = BitWriter::with_capacity(max_literal_only_size(input.len()));
+    let mut output = Vec::new();
+    compress_into_with_options_workspace(input, options, workspace, &mut writer, &mut output)?;
+    Ok(output)
+}
+
+pub(crate) fn compress_into_with_options_workspace(
+    input: &[u8],
+    options: &Options,
+    workspace: &mut Workspace,
+    writer: &mut BitWriter,
+    output: &mut Vec<u8>,
+) -> Result<usize, CompressError> {
     if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
         return Err(BurliError::Unsupported(
             "only q0..q5 Brotli encoding is implemented yet",
         ));
     }
     if options.quality_value() == 0 && !input.is_empty() && input.len() <= 256 {
-        return crate::metablock::compress_uncompressed_with_options(input, options);
+        let before = output.len();
+        let uncompressed = crate::metablock::compress_uncompressed_with_options(input, options)?;
+        output.extend_from_slice(&uncompressed);
+        return Ok(output.len() - before);
     }
 
-    let mut writer = BitWriter::with_capacity(max_literal_only_size(input.len()));
-    crate::metablock::write_window_bits(&mut writer, options.window_bits_value())?;
+    writer.clear();
+    writer.reserve(max_literal_only_size(input.len()));
+    crate::metablock::write_window_bits(writer, options.window_bits_value())?;
     if input.is_empty() {
-        crate::metablock::write_last_empty_meta_block(&mut writer)?;
-        return Ok(writer.into_bytes());
+        crate::metablock::write_last_empty_meta_block(writer)?;
+        return Ok(writer.finish_into(output));
     }
 
-    write_compressed_meta_blocks(&mut writer, input, options)?;
-    crate::metablock::write_last_empty_meta_block(&mut writer)?;
+    write_compressed_meta_blocks(writer, input, options, workspace)?;
+    crate::metablock::write_last_empty_meta_block(writer)?;
 
-    let compressed = writer.into_bytes();
-    if compressed.len() < input.len() {
-        return Ok(compressed);
+    let compressed_len = writer.finished_len();
+    if compressed_len < input.len() {
+        return Ok(writer.finish_into(output));
     }
 
     let uncompressed_options = options.clone().quality(0)?;
     let uncompressed =
         crate::metablock::compress_uncompressed_with_options(input, &uncompressed_options)?;
-    if uncompressed.len() < compressed.len() {
-        Ok(uncompressed)
+    if uncompressed.len() < compressed_len {
+        writer.clear();
+        let before = output.len();
+        output.extend_from_slice(&uncompressed);
+        Ok(output.len() - before)
     } else {
-        Ok(compressed)
+        Ok(writer.finish_into(output))
     }
 }
 
@@ -69,10 +103,11 @@ pub(crate) fn write_stream_header(
 }
 
 #[cfg(feature = "std")]
-pub(crate) fn write_stream_chunk(
+pub(crate) fn write_stream_chunk_with_workspace(
     writer: &mut BitWriter,
     input: &[u8],
     options: &Options,
+    workspace: &mut Workspace,
 ) -> Result<(), CompressError> {
     if input.is_empty() {
         return Ok(());
@@ -83,7 +118,7 @@ pub(crate) fn write_stream_chunk(
         ));
     }
     let plan = EncoderPlan::from_options(input.len(), options)?;
-    plan.write_meta_block(writer, input)
+    plan.write_meta_block_with_workspace(writer, input, workspace)
 }
 
 fn max_literal_only_size(input_len: usize) -> usize {
@@ -96,11 +131,12 @@ fn write_compressed_meta_blocks(
     writer: &mut BitWriter,
     input: &[u8],
     options: &Options,
+    workspace: &mut Workspace,
 ) -> Result<(), CompressError> {
     let plan = EncoderPlan::from_options(input.len(), options)?;
 
     for chunk in input.chunks(plan.block_size) {
-        plan.write_meta_block(writer, chunk)?;
+        plan.write_meta_block_with_workspace(writer, chunk, workspace)?;
     }
 
     Ok(())
@@ -137,13 +173,26 @@ impl EncoderPlan {
         })
     }
 
-    fn write_meta_block(self, writer: &mut BitWriter, input: &[u8]) -> Result<(), CompressError> {
+    fn write_meta_block_with_workspace(
+        self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        workspace: &mut Workspace,
+    ) -> Result<(), CompressError> {
         let max_backward_distance = self.max_backward_distance.min(input.len());
         if input.len() < self.path.min_match_len() {
             return write_compressed_literal_meta_block(writer, input);
         }
 
-        let commands = ParsedCommands::collect(input, self.path, max_backward_distance)?;
+        if self.path == EncoderPath::FastOnePass {
+            let batch = q0::collect(input, max_backward_distance, &mut workspace.q0)?;
+            if !batch.has_copy() {
+                return write_compressed_literal_meta_block(writer, input);
+            }
+            return batch.write(writer, input, input.len());
+        }
+
+        let commands = ParsedCommands::collect(input, self.path, max_backward_distance);
         if !commands.has_copy() {
             return write_compressed_literal_meta_block(writer, input);
         }
@@ -187,37 +236,23 @@ impl EncoderPath {
 
 #[derive(Clone, Debug)]
 enum ParsedCommands {
-    Q0(alloc::boxed::Box<q0::Batch>),
     Tokens(Vec<Token>),
 }
 
 impl ParsedCommands {
-    fn collect(
-        input: &[u8],
-        path: EncoderPath,
-        max_backward_distance: usize,
-    ) -> Result<Self, CompressError> {
+    fn collect(input: &[u8], path: EncoderPath, max_backward_distance: usize) -> Self {
         match path {
-            EncoderPath::FastOnePass => q0::collect(input, max_backward_distance).map(Self::Q0),
-            EncoderPath::FastTwoPass => Ok(Self::Tokens(q1::collect(input, max_backward_distance))),
-            EncoderPath::StaticEntropy => {
-                Ok(Self::Tokens(q2::collect(input, max_backward_distance)))
-            }
-            EncoderPath::RegularNoSplit => {
-                Ok(Self::Tokens(q3::collect(input, max_backward_distance)))
-            }
-            EncoderPath::RegularSplit => {
-                Ok(Self::Tokens(q4::collect(input, max_backward_distance)))
-            }
-            EncoderPath::ContextModeled => {
-                Ok(Self::Tokens(q5::collect(input, max_backward_distance)))
-            }
+            EncoderPath::FastOnePass => unreachable!("q0 is handled by EncoderPlan"),
+            EncoderPath::FastTwoPass => Self::Tokens(q1::collect(input, max_backward_distance)),
+            EncoderPath::StaticEntropy => Self::Tokens(q2::collect(input, max_backward_distance)),
+            EncoderPath::RegularNoSplit => Self::Tokens(q3::collect(input, max_backward_distance)),
+            EncoderPath::RegularSplit => Self::Tokens(q4::collect(input, max_backward_distance)),
+            EncoderPath::ContextModeled => Self::Tokens(q5::collect(input, max_backward_distance)),
         }
     }
 
     fn has_copy(&self) -> bool {
         match self {
-            Self::Q0(batch) => batch.has_copy(),
             Self::Tokens(tokens) => tokens.iter().any(|token| token.is_copy()),
         }
     }
@@ -226,10 +261,9 @@ impl ParsedCommands {
         mut self,
         writer: &mut BitWriter,
         input: &[u8],
-        block_len: usize,
+        _block_len: usize,
     ) -> Result<(), CompressError> {
         match &mut self {
-            Self::Q0(batch) => batch.write(writer, input, block_len),
             Self::Tokens(tokens) => write_token_batches(writer, input, tokens),
         }
     }

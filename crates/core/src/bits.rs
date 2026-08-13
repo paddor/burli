@@ -156,6 +156,17 @@ impl BitWriter {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.output.clear();
+        self.bit_buffer = 0;
+        self.bit_count = 0;
+        self.bit_len = 0;
+    }
+
+    pub fn reserve(&mut self, additional: usize) {
+        self.output.reserve(additional);
+    }
+
     pub fn written_bits(&self) -> usize {
         self.bit_len
     }
@@ -226,6 +237,20 @@ impl BitWriter {
             self.output.push(self.bit_buffer as u8);
         }
         self.output
+    }
+
+    pub fn finish_into(&mut self, output: &mut Vec<u8>) -> usize {
+        if self.bit_count != 0 {
+            self.output.push(self.bit_buffer as u8);
+        }
+        let before = output.len();
+        output.extend_from_slice(&self.output);
+        self.clear();
+        output.len() - before
+    }
+
+    pub fn finished_len(&self) -> usize {
+        self.output.len() + usize::from(self.bit_count != 0)
     }
 }
 

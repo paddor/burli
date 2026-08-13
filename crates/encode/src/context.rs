@@ -1,21 +1,29 @@
 use alloc::vec::Vec;
 
-use burli_core::{CompressError, Options};
+use burli_core::{CompressError, Options, bits::BitWriter};
 
 #[derive(Clone, Debug)]
 pub struct Compressor {
     options: Options,
+    workspace: crate::encode::Workspace,
+    writer: BitWriter,
 }
 
 impl Compressor {
     pub fn new(quality: u8) -> Result<Self, CompressError> {
         Ok(Self {
             options: Options::default().quality(quality)?,
+            workspace: crate::encode::Workspace::default(),
+            writer: BitWriter::new(),
         })
     }
 
     pub fn with_options(options: Options) -> Self {
-        Self { options }
+        Self {
+            options,
+            workspace: crate::encode::Workspace::default(),
+            writer: BitWriter::new(),
+        }
     }
 
     pub const fn options(&self) -> &Options {
@@ -27,7 +35,9 @@ impl Compressor {
     }
 
     pub fn compress(&mut self, input: &[u8]) -> Result<Vec<u8>, CompressError> {
-        crate::compress_with_options(input, &self.options)
+        let mut output = Vec::new();
+        self.compress_into(input, &mut output)?;
+        Ok(output)
     }
 
     pub fn compress_into(
@@ -35,10 +45,13 @@ impl Compressor {
         input: &[u8],
         output: &mut Vec<u8>,
     ) -> Result<usize, CompressError> {
-        let before = output.len();
-        let compressed = self.compress(input)?;
-        output.extend_from_slice(&compressed);
-        Ok(output.len() - before)
+        crate::encode::compress_into_with_options_workspace(
+            input,
+            &self.options,
+            &mut self.workspace,
+            &mut self.writer,
+            output,
+        )
     }
 
     pub fn compress_into_slice(

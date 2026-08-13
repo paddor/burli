@@ -354,9 +354,7 @@ fn profile_encode_only(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let compressed = compress_codec(codec, &input.data, quality)?;
     verify_decodes(codec, &compressed, input)?;
-    let compress_ns = bench_loop(1, 100_000_000, 3, || {
-        let _ = compress_codec(codec, &input.data, quality);
-    });
+    let compress_ns = bench_compress(codec, &input.data, quality)?;
     let mbs = input.data.len() as f64 / compress_ns * 1000.0;
     println!(
         "{} q{} {}: {} -> {} bytes, encode {:.1} MB/s",
@@ -382,18 +380,7 @@ fn bench_codec(
     };
     verify_decodes(codec, &compressed, input)?;
 
-    let compress_ns = bench_loop(1, 100_000_000, 3, || match codec {
-        "burli" => {
-            let _ = burli_compress(&input.data, quality);
-        }
-        "google-brotli" => {
-            let _ = google_brotli_compress(&input.data, quality);
-        }
-        "rust-brotli" => {
-            let _ = rust_brotli_compress(&input.data, quality);
-        }
-        _ => unreachable!(),
-    });
+    let compress_ns = bench_compress(codec, &input.data, quality)?;
 
     let decompress_ns = bench_loop(1, 100_000_000, 3, || match codec {
         "burli" => {
@@ -434,6 +421,25 @@ fn compress_codec(
         "burli" => burli_compress(input, quality).map_err(Into::into),
         "google-brotli" => google_brotli_compress(input, quality),
         "rust-brotli" => rust_brotli_compress(input, quality),
+        other => Err(format!("unknown impl: {other}").into()),
+    }
+}
+
+fn bench_compress(
+    codec: &str,
+    input: &[u8],
+    quality: u8,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    match codec {
+        "burli" => Ok(bench_loop(1, 100_000_000, 3, || {
+            let _ = burli_compress(input, quality);
+        })),
+        "google-brotli" => Ok(bench_loop(1, 100_000_000, 3, || {
+            let _ = google_brotli_compress(input, quality);
+        })),
+        "rust-brotli" => Ok(bench_loop(1, 100_000_000, 3, || {
+            let _ = rust_brotli_compress(input, quality);
+        })),
         other => Err(format!("unknown impl: {other}").into()),
     }
 }

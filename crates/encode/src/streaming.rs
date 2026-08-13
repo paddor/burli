@@ -9,6 +9,7 @@ pub struct StreamEncoder<W> {
     inner: W,
     options: Options,
     writer: BitWriter,
+    workspace: crate::encode::Workspace,
     buffered: Vec<u8>,
     block_size: usize,
 }
@@ -34,6 +35,7 @@ impl<W: Write> StreamEncoder<W> {
             inner,
             options,
             writer,
+            workspace: crate::encode::Workspace::default(),
             buffered: Vec::new(),
             block_size: 1_usize << block_bits,
         })
@@ -63,7 +65,12 @@ impl<W: Write> StreamEncoder<W> {
         let result = if self.options.quality_value() == 0 {
             crate::metablock::write_uncompressed_meta_block(&mut self.writer, input)
         } else {
-            crate::encode::write_stream_chunk(&mut self.writer, input, &self.options)
+            crate::encode::write_stream_chunk_with_workspace(
+                &mut self.writer,
+                input,
+                &self.options,
+                &mut self.workspace,
+            )
         };
         result.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         self.write_full_bytes()

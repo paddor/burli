@@ -82,6 +82,38 @@ fn stateful_api_appends_into_existing_buffers() {
 }
 
 #[test]
+fn stateful_compressor_reuses_q0_workspace_without_stale_matches() {
+    let first = b"function demo(){return demo_value;} ".repeat(512);
+    let second = b"abcdefghijklmnopqrstuvwxyz0123456789".repeat(257);
+    let mut compressor = burli::Compressor::new(0).unwrap();
+
+    let first_encoded = compressor.compress(&first).unwrap();
+    let second_encoded = compressor.compress(&second).unwrap();
+
+    assert_eq!(first_encoded, burli::compress(&first, 0).unwrap());
+    assert_eq!(second_encoded, burli::compress(&second, 0).unwrap());
+    assert_eq!(burli::decompress(&first_encoded).unwrap(), first);
+    assert_eq!(burli::decompress(&second_encoded).unwrap(), second);
+}
+
+#[test]
+fn stateful_q0_workspace_handles_many_reuses() {
+    let inputs = [
+        b"function demo(){return demo_value;} ".repeat(128),
+        b"abcdefghijklmnopqrstuvwxyz0123456789".repeat(129),
+    ];
+    let mut compressor = burli::Compressor::new(0).unwrap();
+
+    for index in 0..300 {
+        let input = &inputs[index % inputs.len()];
+        let encoded = compressor.compress(input).unwrap();
+
+        assert_eq!(encoded, burli::compress(input, 0).unwrap());
+        assert_eq!(burli::decompress(&encoded).unwrap(), *input);
+    }
+}
+
+#[test]
 fn decode_into_slice_writes_existing_buffer() {
     let input = b"slice payload";
     let encoded = burli::compress(input, 0).unwrap();
