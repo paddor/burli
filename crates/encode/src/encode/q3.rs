@@ -5,23 +5,19 @@ use super::{
     token_supports_last_distance,
 };
 
-const TABLE_BITS: usize = 16;
-const TABLE_SIZE: usize = 1 << TABLE_BITS;
-const TABLE_MASK: usize = TABLE_SIZE - 1;
 const HASH_LEN: usize = 5;
 const HASH_TYPE_LEN: usize = 8;
 const STORE_LOOKAHEAD: usize = 8;
 const HASH_MUL: u64 = 0x1e35_a7bd_1e35_a7bd;
-const NO_POSITION: u32 = u32::MAX;
 const LITERAL_BYTE_SCORE: usize = 135;
 const DISTANCE_BIT_PENALTY: usize = 30;
 const SCORE_BASE: usize = DISTANCE_BIT_PENALTY * 8 * core::mem::size_of::<usize>();
 const MIN_SCORE: usize = SCORE_BASE + 100;
 const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
-const BUCKET_SWEEP: usize = 2;
-const BUCKET_SWEEP_MASK: usize = (BUCKET_SWEEP - 1) << 3;
 const LONG_MATCH_STORE_THRESHOLD: usize = 64;
+const TINY_INPUT_THRESHOLD: usize = 1024;
+const SMALL_MEDIUM_INPUT_THRESHOLD: usize = 320 * 1024;
 
 #[derive(Clone, Copy, Debug)]
 struct Match {
@@ -62,11 +58,29 @@ pub(super) fn collect(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
+    if input.len() <= TINY_INPUT_THRESHOLD {
+        collect_with_params::<10, 4, 2>(input, max_backward_distance, workspace)
+    } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
+        collect_with_params::<15, 1, 2>(input, max_backward_distance, workspace)
+    } else {
+        collect_with_params::<16, 4, 2>(input, max_backward_distance, workspace)
+    }
+}
+
+fn collect_with_params<
+    const TABLE_BITS: usize,
+    const MAX_LAZY_MATCHES: usize,
+    const BUCKET_SWEEP: usize,
+>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
     if input.len() < HASH_TYPE_LEN {
         return literal_only(input.len());
     }
 
-    let mut table = vec![NO_POSITION; TABLE_SIZE];
+    let mut table = vec![0_u32; 1 << TABLE_BITS];
     let mut tokens = Vec::new();
     let mut pos = 0_usize;
     let mut insert_start = 0_usize;
@@ -77,7 +91,7 @@ pub(super) fn collect(
 
     while pos + HASH_TYPE_LEN < pos_end {
         let max_len = pos_end - pos;
-        let Some(mut found) = find_match(
+        let Some(mut found) = find_match::<TABLE_BITS, BUCKET_SWEEP>(
             input,
             &mut table,
             pos,
@@ -91,17 +105,23 @@ pub(super) fn collect(
         ) else {
             pos += 1;
             if pos > apply_sparse_search {
-                pos = skip_sparse(input, &mut table, pos, pos_end, apply_sparse_search);
+                pos = skip_sparse::<TABLE_BITS, BUCKET_SWEEP>(
+                    input,
+                    &mut table,
+                    pos,
+                    pos_end,
+                    apply_sparse_search,
+                );
             }
             continue;
         };
 
         let mut delayed = 0;
-        while delayed < 4 && pos + 1 + HASH_TYPE_LEN < pos_end {
+        while delayed < MAX_LAZY_MATCHES && pos + 1 + HASH_TYPE_LEN < pos_end {
             let lazy_pos = pos + 1;
             let lazy_max_len = pos_end - lazy_pos;
             let best_len_in = found.len.saturating_sub(1).min(lazy_max_len);
-            if let Some(next) = find_match(
+            if let Some(next) = find_match::<TABLE_BITS, BUCKET_SWEEP>(
                 input,
                 &mut table,
                 lazy_pos,
@@ -144,7 +164,12 @@ pub(super) fn collect(
             dist_cache[1] = dist_cache[0];
             dist_cache[0] = found.distance;
         }
-        store_range(input, &mut table, pos + 2, (pos + found.len).min(store_end));
+        store_range::<TABLE_BITS, BUCKET_SWEEP>(
+            input,
+            &mut table,
+            pos + 2,
+            (pos + found.len).min(store_end),
+        );
         pos += found.len;
         insert_start = pos;
     }
@@ -180,15 +205,17 @@ fn literal_only(input_len: usize) -> Vec<Token> {
     }]
 }
 
-fn find_match(
+fn find_match<const TABLE_BITS: usize, const BUCKET_SWEEP: usize>(
     input: &[u8],
     table: &mut [u32],
     pos: usize,
     max_len: usize,
     params: SearchParams,
 ) -> Option<Match> {
-    let key = hash(input, pos);
-    let key_out = (key + (pos & BUCKET_SWEEP_MASK)) & TABLE_MASK;
+    let table_mask = (1 << TABLE_BITS) - 1;
+    let key = hash::<TABLE_BITS>(input, pos);
+    let sweep_mask = (BUCKET_SWEEP - 1) << 3;
+    let key_out = (key + (pos & sweep_mask)) & table_mask;
     let best_check = params.best_len_in.min(max_len.saturating_sub(1));
     let mut compare_char = input[pos + best_check];
     let mut best_score = params.min_score;
@@ -221,11 +248,12 @@ fn find_match(
         if best_len >= max_len {
             break;
         }
-        let previous = table[(key + (slot << 3)) & TABLE_MASK] as usize;
-        if previous == NO_POSITION as usize
-            || previous >= pos
-            || pos - previous > params.max_backward_distance
-        {
+        let entry = table[(key + (slot << 3)) & table_mask] as usize;
+        if entry == 0 {
+            continue;
+        }
+        let previous = entry - 1;
+        if previous >= pos || pos - previous > params.max_backward_distance {
             continue;
         }
         if input[previous + best_len] != compare_char {
@@ -252,11 +280,11 @@ fn find_match(
         }
     }
 
-    table[key_out] = pos as u32;
+    table[key_out] = (pos + 1) as u32;
     out
 }
 
-fn skip_sparse(
+fn skip_sparse<const TABLE_BITS: usize, const BUCKET_SWEEP: usize>(
     input: &[u8],
     table: &mut [u32],
     mut pos: usize,
@@ -267,37 +295,48 @@ fn skip_sparse(
     if pos > start + 4 * SPARSE_SEARCH_WINDOW {
         let pos_jump = (pos + 16).min(pos_end.saturating_sub(margin));
         while pos < pos_jump {
-            store(input, table, pos);
+            store::<TABLE_BITS, BUCKET_SWEEP>(input, table, pos);
             pos += 4;
         }
     } else {
         let pos_jump = (pos + 8).min(pos_end.saturating_sub(margin));
         while pos < pos_jump {
-            store(input, table, pos);
+            store::<TABLE_BITS, BUCKET_SWEEP>(input, table, pos);
             pos += 2;
         }
     }
     pos
 }
 
-fn store_range(input: &[u8], table: &mut [u32], start: usize, end: usize) {
+fn store_range<const TABLE_BITS: usize, const BUCKET_SWEEP: usize>(
+    input: &[u8],
+    table: &mut [u32],
+    start: usize,
+    end: usize,
+) {
     let step = if end.saturating_sub(start) >= LONG_MATCH_STORE_THRESHOLD {
         4
     } else {
         2
     };
     for pos in (start..end).step_by(step) {
-        store(input, table, pos);
+        store::<TABLE_BITS, BUCKET_SWEEP>(input, table, pos);
     }
 }
 
-fn store(input: &[u8], table: &mut [u32], pos: usize) {
-    let key = (hash(input, pos) + (pos & BUCKET_SWEEP_MASK)) & TABLE_MASK;
-    table[key] = pos as u32;
+fn store<const TABLE_BITS: usize, const BUCKET_SWEEP: usize>(
+    input: &[u8],
+    table: &mut [u32],
+    pos: usize,
+) {
+    let table_mask = (1 << TABLE_BITS) - 1;
+    let sweep_mask = (BUCKET_SWEEP - 1) << 3;
+    let key = (hash::<TABLE_BITS>(input, pos) + (pos & sweep_mask)) & table_mask;
+    table[key] = (pos + 1) as u32;
 }
 
 #[inline(always)]
-fn hash(input: &[u8], pos: usize) -> usize {
+fn hash<const TABLE_BITS: usize>(input: &[u8], pos: usize) -> usize {
     let word = read_u64_le(input, pos) << (64 - 8 * HASH_LEN);
     (word.wrapping_mul(HASH_MUL) >> (64 - TABLE_BITS)) as usize
 }
