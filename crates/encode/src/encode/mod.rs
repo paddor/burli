@@ -1,6 +1,10 @@
 use alloc::{vec, vec::Vec};
 
-use burli_core::{BurliError, CompressError, Options, bits::BitWriter, format::MIN_BLOCK_BITS};
+use burli_core::{
+    BurliError, CompressError, Options,
+    bits::{BitWriter, MAX_BITS_PER_OP},
+    format::MIN_BLOCK_BITS,
+};
 
 mod q0;
 mod q1;
@@ -1895,6 +1899,28 @@ fn write_literal(
     let code = symbol_code(codes, u16::from(literal))?;
     writer.write_bits_trusted(code.len, u64::from(code.bits));
     Ok(())
+}
+
+#[inline(always)]
+fn append_pending_bits(
+    writer: &mut BitWriter,
+    pending_bits: &mut u64,
+    pending_width: &mut u8,
+    width: u8,
+    bits: u64,
+) {
+    debug_assert!(width <= MAX_BITS_PER_OP);
+    debug_assert!(width == 0 || bits < (1_u64 << width));
+    if width == 0 {
+        return;
+    }
+    if *pending_width + width > MAX_BITS_PER_OP {
+        writer.write_bits_trusted_fits(*pending_width, *pending_bits);
+        *pending_bits = 0;
+        *pending_width = 0;
+    }
+    *pending_bits |= bits << *pending_width;
+    *pending_width += width;
 }
 
 #[derive(Clone, Copy, Debug)]

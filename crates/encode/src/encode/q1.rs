@@ -1,13 +1,10 @@
 use alloc::vec::Vec;
 
-use burli_core::{
-    BurliError, CompressError,
-    bits::{BitWriter, MAX_BITS_PER_OP},
-};
+use burli_core::{BurliError, CompressError, bits::BitWriter};
 
 use super::{
     COMMAND_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE, PrefixCodeScratch,
-    match_len, read_u32_le, read_u64_le, write_block_and_context_header,
+    append_pending_bits, match_len, read_u32_le, read_u64_le, write_block_and_context_header,
     write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits, write_meta_block_len,
     write_q1_internal_command_prefix_codes,
 };
@@ -340,28 +337,6 @@ impl Batch {
 
         Ok(())
     }
-}
-
-#[inline(always)]
-fn append_pending_bits(
-    writer: &mut BitWriter,
-    pending_bits: &mut u64,
-    pending_width: &mut u8,
-    width: u8,
-    bits: u64,
-) {
-    debug_assert!(width <= MAX_BITS_PER_OP);
-    debug_assert!(width == 0 || bits < (1_u64 << width));
-    if width == 0 {
-        return;
-    }
-    if *pending_width + width > MAX_BITS_PER_OP {
-        writer.write_bits_trusted_fits(*pending_width, *pending_bits);
-        *pending_bits = 0;
-        *pending_width = 0;
-    }
-    *pending_bits |= bits << *pending_width;
-    *pending_width += width;
 }
 
 #[inline(always)]
