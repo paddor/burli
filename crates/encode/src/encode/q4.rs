@@ -21,6 +21,7 @@ const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
 const BUCKET_SWEEP: usize = 2;
 const BUCKET_SWEEP_MASK: usize = (BUCKET_SWEEP - 1) << 3;
+const SMALL_MEDIUM_INPUT_THRESHOLD: usize = 320 * 1024;
 const LARGE_INPUT_THRESHOLD: usize = 1 << 20;
 const LONG_MATCH_STORE_THRESHOLD: usize = 64;
 const CUTOFF_TRANSFORMS_COUNT: usize = 10;
@@ -67,15 +68,21 @@ pub(super) fn collect(
     workspace: &mut Workspace,
 ) -> Vec<Token> {
     if input.len() <= 1024 {
-        collect_with_params::<12, 5>(input, max_backward_distance, workspace)
+        collect_with_params::<12, 5, true>(input, max_backward_distance, workspace)
+    } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
+        collect_with_params::<16, 5, true>(input, max_backward_distance, workspace)
     } else if input.len() >= LARGE_INPUT_THRESHOLD {
-        collect_with_params::<20, 7>(input, max_backward_distance, workspace)
+        collect_with_params::<20, 7, false>(input, max_backward_distance, workspace)
     } else {
-        collect_with_params::<17, 5>(input, max_backward_distance, workspace)
+        collect_with_params::<17, 5, false>(input, max_backward_distance, workspace)
     }
 }
 
-fn collect_with_params<const TABLE_BITS: usize, const HASH_LEN: usize>(
+fn collect_with_params<
+    const TABLE_BITS: usize,
+    const HASH_LEN: usize,
+    const SKIP_DICT_AFTER_MATCH: bool,
+>(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
@@ -95,7 +102,7 @@ fn collect_with_params<const TABLE_BITS: usize, const HASH_LEN: usize>(
 
     while pos + HASH_TYPE_LEN < pos_end {
         let max_len = pos_end - pos;
-        let Some(mut found) = find_match::<TABLE_BITS, HASH_LEN>(
+        let Some(mut found) = find_match::<TABLE_BITS, HASH_LEN, SKIP_DICT_AFTER_MATCH>(
             input,
             &mut table,
             pos,
@@ -125,7 +132,7 @@ fn collect_with_params<const TABLE_BITS: usize, const HASH_LEN: usize>(
             let lazy_pos = pos + 1;
             let lazy_max_len = pos_end - lazy_pos;
             let best_len_in = found.len.saturating_sub(1).min(lazy_max_len);
-            if let Some(next) = find_match::<TABLE_BITS, HASH_LEN>(
+            if let Some(next) = find_match::<TABLE_BITS, HASH_LEN, SKIP_DICT_AFTER_MATCH>(
                 input,
                 &mut table,
                 lazy_pos,
@@ -209,7 +216,7 @@ fn literal_only(input_len: usize) -> Vec<Token> {
     }]
 }
 
-fn find_match<const TABLE_BITS: usize, const HASH_LEN: usize>(
+fn find_match<const TABLE_BITS: usize, const HASH_LEN: usize, const SKIP_DICT_AFTER_MATCH: bool>(
     input: &[u8],
     table: &mut [u32],
     pos: usize,
@@ -287,7 +294,11 @@ fn find_match<const TABLE_BITS: usize, const HASH_LEN: usize>(
     }
 
     table[key_out] = (pos + 1) as u32;
-    find_static_dictionary_identity(input, pos, max_len, dictionary_base, best_score).or(out)
+    if SKIP_DICT_AFTER_MATCH && out.is_some() {
+        out
+    } else {
+        find_static_dictionary_identity(input, pos, max_len, dictionary_base, best_score).or(out)
+    }
 }
 
 fn find_static_dictionary_identity(
