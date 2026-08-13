@@ -445,9 +445,9 @@ impl Token {
 #[derive(Clone, Debug)]
 struct PreparedBatch {
     prepared: Vec<PreparedToken>,
-    literal_frequencies: Vec<usize>,
-    command_frequencies: Vec<usize>,
-    distance_frequencies: Vec<usize>,
+    literal_frequencies: [usize; LITERAL_ALPHABET_SIZE],
+    command_frequencies: [usize; COMMAND_ALPHABET_SIZE],
+    distance_frequencies: [usize; 64],
     has_distance: bool,
     has_copy: bool,
 }
@@ -456,9 +456,9 @@ impl PreparedBatch {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             prepared: Vec::with_capacity(capacity),
-            literal_frequencies: vec![0; LITERAL_ALPHABET_SIZE],
-            command_frequencies: vec![0; COMMAND_ALPHABET_SIZE],
-            distance_frequencies: vec![0; 64],
+            literal_frequencies: [0; LITERAL_ALPHABET_SIZE],
+            command_frequencies: [0; COMMAND_ALPHABET_SIZE],
+            distance_frequencies: [0; 64],
             has_distance: false,
             has_copy: false,
         }
@@ -806,23 +806,26 @@ fn write_prepared_token_batch_with_len(
 
     write_meta_block_len(writer, block_len)?;
     write_block_and_context_header(writer)?;
-    let literal_codes = write_prefix_code_from_frequencies(
+    let mut prefix = PrefixCodeScratch::default();
+    prefix.reserve_for(COMMAND_ALPHABET_SIZE, COMMAND_ALPHABET_SIZE);
+    let literal_code_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
         writer,
-        LITERAL_ALPHABET_SIZE,
         &batch.literal_frequencies,
+        &mut prefix,
+        MAX_CODE_BITS,
     )?;
-    let command_codes = write_prefix_code_from_frequencies(
+    let command_code_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
         writer,
-        COMMAND_ALPHABET_SIZE,
         &batch.command_frequencies,
+        &mut prefix,
+        MAX_CODE_BITS,
     )?;
-    let distance_codes =
-        write_prefix_code_from_frequencies(writer, 64, &batch.distance_frequencies)?;
-    let literal_code_map =
-        dense_symbol_code_map_from_symbol_codes::<LITERAL_ALPHABET_SIZE>(&literal_codes)?;
-    let command_code_map =
-        dense_symbol_code_map_from_symbol_codes::<COMMAND_ALPHABET_SIZE>(&command_codes)?;
-    let distance_code_map = dense_symbol_code_map_from_symbol_codes::<64>(&distance_codes)?;
+    let distance_code_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+        writer,
+        &batch.distance_frequencies,
+        &mut prefix,
+        MAX_CODE_BITS,
+    )?;
 
     let mut pending_bits = 0_u64;
     let mut pending_width = 0_u8;
