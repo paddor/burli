@@ -8,6 +8,7 @@ mod q2;
 mod q3;
 mod q4;
 mod q5;
+mod static_dictionary_hash;
 
 const MAX_LITERAL_ONLY_QUALITY: u8 = 5;
 const MAX_META_BLOCK_SIZE: usize = 1 << 24;
@@ -16,18 +17,51 @@ const LITERAL_ALPHABET_SIZE: usize = 256;
 const COMMAND_ALPHABET_SIZE: usize = 704;
 const CODE_LENGTH_ALPHABET_SIZE: usize = 18;
 const MAX_CODE_BITS: u8 = 15;
+const FAST_CODE_BITS: u8 = 14;
 const CODE_LENGTH_ORDER: [u8; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const MAX_SIMPLE_PREFIX_SYMBOLS: usize = 4;
 const INITIAL_LAST_DISTANCE: usize = 4;
+const MAX_DELAYED_SYMBOLS: usize = 0x2fff;
+const Q4_DELAYED_SYMBOLS: usize = 3840;
+const Q5_DELAYED_SYMBOLS: usize = 3584;
+const Q1_STATIC_ENTROPY_MAX_INPUT: usize = 384;
+const STATIC_CODE_LENGTH_DEPTH: [u8; CODE_LENGTH_ALPHABET_SIZE] =
+    [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 0, 4, 4];
+const STATIC_CODE_LENGTH_BITS: [u16; CODE_LENGTH_ALPHABET_SIZE] =
+    [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 15, 31, 0, 11, 7];
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Workspace {
     q0: q0::Workspace,
+    q1: q1::Workspace,
+    q2: q2::Workspace,
+    q3: q3::Workspace,
+    q4: q4::Workspace,
+    q5: q5::Workspace,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PrefixCodeScratch {
+    used: Vec<(u16, usize)>,
+    nodes: Vec<HuffmanNode>,
+    leaves: Vec<(usize, usize)>,
+    parent_queue: Vec<usize>,
+    lengths: Vec<u8>,
+    tree: Vec<u16>,
 }
 
 pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
     let mut workspace = Workspace::default();
     compress_with_options_workspace(input, options, &mut workspace)
+}
+
+impl Workspace {
+    fn reset_stream(&mut self) {
+        self.q2.reset();
+        self.q3.reset();
+        self.q4.reset();
+        self.q5.reset();
+    }
 }
 
 pub(crate) fn compress_with_options_workspace(
@@ -53,6 +87,7 @@ pub(crate) fn compress_into_with_options_workspace(
             "only q0..q5 Brotli encoding is implemented yet",
         ));
     }
+    workspace.reset_stream();
     if options.quality_value() == 0 && !input.is_empty() && input.len() <= 256 {
         let before = output.len();
         let uncompressed = crate::metablock::compress_uncompressed_with_options(input, options)?;
@@ -162,6 +197,12 @@ impl EncoderPlan {
         let block_size = match options.block_bits_value() {
             Some(bits) => 1_usize << bits,
             None if quality == 0 && input_len <= max_backward_distance => MAX_META_BLOCK_SIZE,
+            None if quality == 1 && input_len <= max_backward_distance => MAX_META_BLOCK_SIZE,
+            None if quality == 1 => 1_usize << 18,
+            None if quality == 2 => ((max_backward_distance + 16) << 1).min(MAX_META_BLOCK_SIZE),
+            None if quality == 3 => ((max_backward_distance + 16) << 1).min(MAX_META_BLOCK_SIZE),
+            None if quality == 4 => ((max_backward_distance + 16) << 1).min(MAX_META_BLOCK_SIZE),
+            None if quality == 5 => ((max_backward_distance + 16) << 1).min(MAX_META_BLOCK_SIZE),
             None => 1_usize << MIN_BLOCK_BITS,
         }
         .min(MAX_META_BLOCK_SIZE);
@@ -192,11 +233,92 @@ impl EncoderPlan {
             return batch.write(writer, input, input.len());
         }
 
-        let commands = ParsedCommands::collect(input, self.path, max_backward_distance);
-        if !commands.has_copy() {
-            return write_compressed_literal_meta_block(writer, input);
+        if self.path == EncoderPath::FastTwoPass {
+            if input.len() <= Q1_STATIC_ENTROPY_MAX_INPUT {
+                let tokens = q2::collect(input, max_backward_distance, &mut workspace.q2);
+                if !tokens.iter().any(|token| token.is_copy()) {
+                    return write_compressed_literal_meta_block(writer, input);
+                }
+                return write_token_batches_with_symbol_limit(
+                    writer,
+                    input,
+                    &tokens,
+                    MAX_DELAYED_SYMBOLS,
+                );
+            }
+
+            let has_copy = {
+                let batch = q1::collect(input, max_backward_distance, &mut workspace.q1)?;
+                batch.has_copy()
+            };
+            if !has_copy {
+                return write_compressed_literal_meta_block(writer, input);
+            }
+            return q1::write(writer, input, input.len(), &mut workspace.q1);
         }
-        commands.write(writer, input, input.len())
+
+        if self.path == EncoderPath::StaticEntropy {
+            let tokens = q2::collect(input, max_backward_distance, &mut workspace.q2);
+            if !tokens.iter().any(|token| token.is_copy()) {
+                return write_compressed_literal_meta_block(writer, input);
+            }
+            return write_token_batches_with_symbol_limit(
+                writer,
+                input,
+                &tokens,
+                MAX_DELAYED_SYMBOLS,
+            );
+        }
+
+        if self.path == EncoderPath::RegularNoSplit {
+            if input.len() <= 4 * 1024 {
+                let tokens = q2::collect(input, max_backward_distance, &mut workspace.q2);
+                return write_token_batches_with_symbol_limit(
+                    writer,
+                    input,
+                    &tokens,
+                    MAX_DELAYED_SYMBOLS,
+                );
+            }
+            let tokens = q3::collect(input, max_backward_distance, &mut workspace.q3);
+            if !tokens.iter().any(|token| token.is_copy()) {
+                return write_compressed_literal_meta_block(writer, input);
+            }
+            return write_regular_token_batches_with_symbol_limit(
+                writer,
+                input,
+                &tokens,
+                MAX_DELAYED_SYMBOLS,
+            );
+        }
+
+        if self.path == EncoderPath::RegularSplit {
+            let tokens = q4::collect(input, max_backward_distance, &mut workspace.q4);
+            if !tokens.iter().any(|token| token.is_copy()) {
+                return write_compressed_literal_meta_block(writer, input);
+            }
+            return write_regular_token_batches_with_symbol_limit(
+                writer,
+                input,
+                &tokens,
+                Q4_DELAYED_SYMBOLS,
+            );
+        }
+
+        if self.path == EncoderPath::ContextModeled {
+            let tokens = q5::collect(input, max_backward_distance, &mut workspace.q5);
+            if !tokens.iter().any(|token| token.is_copy()) {
+                return write_compressed_literal_meta_block(writer, input);
+            }
+            return write_regular_token_batches_with_symbol_limit(
+                writer,
+                input,
+                &tokens,
+                Q5_DELAYED_SYMBOLS,
+            );
+        }
+
+        unreachable!("all scoped encoder paths are handled above")
     }
 }
 
@@ -225,46 +347,11 @@ impl EncoderPath {
     const fn min_match_len(self) -> usize {
         match self {
             Self::FastOnePass => 5,
-            Self::FastTwoPass => min_match_len(1),
+            Self::FastTwoPass => 4,
             Self::StaticEntropy => min_match_len(2),
             Self::RegularNoSplit => min_match_len(3),
             Self::RegularSplit => min_match_len(4),
             Self::ContextModeled => min_match_len(5),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-enum ParsedCommands {
-    Tokens(Vec<Token>),
-}
-
-impl ParsedCommands {
-    fn collect(input: &[u8], path: EncoderPath, max_backward_distance: usize) -> Self {
-        match path {
-            EncoderPath::FastOnePass => unreachable!("q0 is handled by EncoderPlan"),
-            EncoderPath::FastTwoPass => Self::Tokens(q1::collect(input, max_backward_distance)),
-            EncoderPath::StaticEntropy => Self::Tokens(q2::collect(input, max_backward_distance)),
-            EncoderPath::RegularNoSplit => Self::Tokens(q3::collect(input, max_backward_distance)),
-            EncoderPath::RegularSplit => Self::Tokens(q4::collect(input, max_backward_distance)),
-            EncoderPath::ContextModeled => Self::Tokens(q5::collect(input, max_backward_distance)),
-        }
-    }
-
-    fn has_copy(&self) -> bool {
-        match self {
-            Self::Tokens(tokens) => tokens.iter().any(|token| token.is_copy()),
-        }
-    }
-
-    fn write(
-        mut self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        _block_len: usize,
-    ) -> Result<(), CompressError> {
-        match &mut self {
-            Self::Tokens(tokens) => write_token_batches(writer, input, tokens),
         }
     }
 }
@@ -274,7 +361,9 @@ struct Token {
     insert_start: usize,
     insert_len: usize,
     copy_len: usize,
+    copy_len_code: usize,
     distance: usize,
+    distance_code: Option<u16>,
     use_last_distance: bool,
 }
 
@@ -285,6 +374,14 @@ impl Token {
 
     const fn block_len(self) -> usize {
         self.insert_len + self.copy_len
+    }
+
+    const fn copy_len_code(self) -> usize {
+        if self.copy_len_code == 0 {
+            self.copy_len
+        } else {
+            self.copy_len_code
+        }
     }
 }
 
@@ -333,95 +430,6 @@ impl PreparedBatch {
     }
 }
 
-fn collect_tokens(input: &[u8], quality: u8, max_backward_distance: usize) -> Vec<Token> {
-    let table_size = hash_table_size(quality);
-    let mut table = vec![usize::MAX; table_size];
-    let table_mask = table_size - 1;
-    let min_match = min_match_len(quality);
-    let mut tokens = Vec::new();
-    let mut pos = 0;
-    let mut insert_start = 0;
-
-    while pos + MIN_MATCH_BYTES <= input.len() {
-        let key = hash_key(input, pos, quality) & table_mask;
-        let previous = table[key];
-        table[key] = pos;
-
-        if previous != usize::MAX
-            && pos - previous <= max_backward_distance
-            && pos + min_match <= input.len()
-            && input[previous..previous + MIN_MATCH_BYTES] == input[pos..pos + MIN_MATCH_BYTES]
-        {
-            let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
-            let copy_len = match_len(input, previous, pos, max_copy_len);
-            if copy_len >= min_match {
-                tokens.push(Token {
-                    insert_start,
-                    insert_len: pos - insert_start,
-                    copy_len,
-                    distance: pos - previous,
-                    use_last_distance: false,
-                });
-                store_match_range(
-                    input,
-                    quality,
-                    &mut table,
-                    table_mask,
-                    pos + 1,
-                    copy_len.saturating_sub(1),
-                );
-                pos += copy_len;
-                insert_start = pos;
-                continue;
-            }
-        }
-
-        pos += 1;
-    }
-
-    if insert_start < input.len() {
-        tokens.push(Token {
-            insert_start,
-            insert_len: input.len() - insert_start,
-            copy_len: 0,
-            distance: 0,
-            use_last_distance: false,
-        });
-    }
-
-    mark_last_distance_tokens(&mut tokens);
-    tokens
-}
-
-fn store_match_range(
-    input: &[u8],
-    quality: u8,
-    table: &mut [usize],
-    table_mask: usize,
-    start: usize,
-    copy_len: usize,
-) {
-    let end = start
-        .saturating_add(copy_len)
-        .min(input.len().saturating_sub(MIN_MATCH_BYTES - 1));
-    for pos in start..end {
-        let key = hash_key(input, pos, quality) & table_mask;
-        table[key] = pos;
-    }
-}
-
-fn mark_last_distance_tokens(tokens: &mut [Token]) {
-    let mut last_distance = INITIAL_LAST_DISTANCE;
-    for token in tokens {
-        if !token.is_copy() {
-            continue;
-        }
-        token.use_last_distance =
-            token.distance == last_distance && token_supports_last_distance(*token);
-        last_distance = token.distance;
-    }
-}
-
 fn token_supports_last_distance(token: Token) -> bool {
     let Ok(insert) = insert_length_code(token.insert_len) else {
         return false;
@@ -432,36 +440,44 @@ fn token_supports_last_distance(token: Token) -> bool {
     insert.code < 8 && copy.code < 16
 }
 
-fn write_token_batches(
+fn write_token_batches_with_symbol_limit(
     writer: &mut BitWriter,
     input: &[u8],
     tokens: &[Token],
+    symbol_limit: usize,
 ) -> Result<(), CompressError> {
     let mut start = 0;
     while start < tokens.len() {
-        let end = token_batch_end(&tokens[start..]) + start;
+        let end = q2_token_batch_end_with_symbol_limit(&tokens[start..], symbol_limit) + start;
+        write_token_batch_q2(writer, input, &tokens[start..end])?;
+        start = end;
+    }
+    Ok(())
+}
+
+fn write_regular_token_batches_with_symbol_limit(
+    writer: &mut BitWriter,
+    input: &[u8],
+    tokens: &[Token],
+    symbol_limit: usize,
+) -> Result<(), CompressError> {
+    let mut start = 0;
+    while start < tokens.len() {
+        let end = q2_token_batch_end_with_symbol_limit(&tokens[start..], symbol_limit) + start;
         write_token_batch(writer, input, &tokens[start..end])?;
         start = end;
     }
     Ok(())
 }
 
-fn token_batch_end(tokens: &[Token]) -> usize {
-    let mut block_len = 0_usize;
+fn q2_token_batch_end_with_symbol_limit(tokens: &[Token], symbol_limit: usize) -> usize {
+    let mut symbols = 0_usize;
 
     for (index, &token) in tokens.iter().enumerate() {
-        if token_command_symbol(token).is_err() {
-            return index.max(1);
+        if index != 0 && symbols >= symbol_limit {
+            return index;
         }
-        if token.is_copy() && distance_code(token.distance).is_err() {
-            return index.max(1);
-        }
-        let next_len = block_len.saturating_add(token.block_len());
-        if next_len > MAX_META_BLOCK_SIZE {
-            return index.max(1);
-        }
-
-        block_len = next_len;
+        symbols = symbols.saturating_add(token.insert_len).saturating_add(1);
     }
 
     tokens.len()
@@ -484,38 +500,10 @@ const fn min_match_len(quality: u8) -> usize {
     }
 }
 
-fn hash_table_size(quality: u8) -> usize {
-    1_usize
-        << match quality {
-            0 | 4 => 15,
-            1 => 12,
-            2 => 13,
-            3 => 14,
-            _ => 16,
-        }
-}
-
-fn hash4(input: &[u8], pos: usize) -> usize {
-    let word = u32::from_le_bytes([input[pos], input[pos + 1], input[pos + 2], input[pos + 3]]);
-    ((word.wrapping_mul(0x1e35_a7bd)) >> 16) as usize
-}
-
-fn hash_key(input: &[u8], pos: usize, quality: u8) -> usize {
-    if quality == 0 && pos + 8 <= input.len() {
-        return hash8_q0(input, pos);
-    }
-    hash4(input, pos)
-}
-
 #[inline(always)]
 fn is_match5(input: &[u8], previous: usize, pos: usize) -> bool {
     input[previous..previous + MIN_MATCH_BYTES] == input[pos..pos + MIN_MATCH_BYTES]
         && input[previous + 4] == input[pos + 4]
-}
-
-#[inline(always)]
-fn hash8_q0(input: &[u8], pos: usize) -> usize {
-    hash_word_q0(read_u64_le(input, pos), 49)
 }
 
 #[inline(always)]
@@ -534,6 +522,14 @@ fn read_u64_le(input: &[u8], pos: usize) -> u64 {
         .first_chunk::<8>()
         .expect("read_u64_le range checked by caller");
     u64::from_le_bytes(*bytes)
+}
+
+#[inline(always)]
+fn read_u32_le(input: &[u8], pos: usize) -> u32 {
+    let bytes = input[pos..]
+        .first_chunk::<4>()
+        .expect("read_u32_le range checked by caller");
+    u32::from_le_bytes(*bytes)
 }
 
 #[inline(always)]
@@ -606,6 +602,18 @@ fn write_token_batch(
     write_token_batch_with_len(writer, input, tokens, block_len)
 }
 
+fn write_token_batch_q2(
+    writer: &mut BitWriter,
+    input: &[u8],
+    tokens: &[Token],
+) -> Result<(), CompressError> {
+    if tokens.len() <= 1024 {
+        let block_len = tokens.iter().map(|token| token.block_len()).sum::<usize>();
+        return write_static_entropy_token_batch(writer, input, tokens, block_len);
+    }
+    write_token_batch(writer, input, tokens)
+}
+
 fn write_token_batch_with_len(
     writer: &mut BitWriter,
     input: &[u8],
@@ -622,6 +630,67 @@ fn write_token_batch_with_len(
     }
     batch.ensure_distance_frequencies();
     write_prepared_token_batch_with_len(writer, input, &batch, block_len)
+}
+
+fn write_static_entropy_token_batch(
+    writer: &mut BitWriter,
+    input: &[u8],
+    tokens: &[Token],
+    block_len: usize,
+) -> Result<(), CompressError> {
+    if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
+        return Err(BurliError::Format("invalid compressed Brotli block size"));
+    }
+
+    let mut batch = PreparedBatch::with_capacity(tokens.len());
+    for &token in tokens {
+        batch.push(input, token)?;
+    }
+
+    write_meta_block_len(writer, block_len)?;
+    write_block_and_context_header(writer)?;
+    let literal_codes = if block_len <= 1024 {
+        write_fast_prefix_code_from_frequencies(
+            writer,
+            LITERAL_ALPHABET_SIZE,
+            &batch.literal_frequencies,
+            8,
+        )?
+    } else {
+        write_prefix_code_from_frequencies(
+            writer,
+            LITERAL_ALPHABET_SIZE,
+            &batch.literal_frequencies,
+        )?
+    };
+    writer.write_bits_trusted_fits(56, 0x0092_6244_1630_7003);
+    writer.write_bits_trusted_fits(3, 0);
+    writer.write_bits_trusted_fits(28, 0x0369_dc03);
+    let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
+
+    for prepared_token in &batch.prepared {
+        let token = prepared_token.token;
+        let insert = prepared_token.insert;
+        let copy = prepared_token.copy;
+        let command_code = static_command_code(prepared_token.command_symbol)?;
+        writer.write_bits_trusted_fits(command_code.len, u64::from(command_code.bits));
+        writer.write_bits_trusted(insert.extra_bits, insert.extra);
+        if let Some(copy) = copy {
+            writer.write_bits_trusted(copy.extra_bits, copy.extra);
+        }
+
+        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
+            write_literal(writer, &literal_code_map, literal)?;
+        }
+
+        if let Some(distance) = prepared_token.distance {
+            let distance_code = static_distance_code(distance.symbol)?;
+            writer.write_bits_trusted_fits(distance_code.len, u64::from(distance_code.bits));
+            writer.write_bits_trusted(distance.extra_bits, distance.extra);
+        }
+    }
+
+    Ok(())
 }
 
 fn write_prepared_token_batch_with_len(
@@ -677,6 +746,35 @@ fn write_prepared_token_batch_with_len(
     Ok(())
 }
 
+fn static_command_code(symbol: u16) -> Result<DenseSymbolCode, CompressError> {
+    let symbol = usize::from(symbol);
+    if symbol < 448 {
+        return Ok(DenseSymbolCode {
+            len: 9,
+            bits: reverse_bits_u16(symbol as u16, 9),
+        });
+    }
+    if symbol < COMMAND_ALPHABET_SIZE {
+        return Ok(DenseSymbolCode {
+            len: 11,
+            bits: reverse_bits_u16((1792 + symbol - 448) as u16, 11),
+        });
+    }
+    Err(BurliError::Format("Brotli command symbol exceeds alphabet"))
+}
+
+fn static_distance_code(symbol: u16) -> Result<DenseSymbolCode, CompressError> {
+    if usize::from(symbol) >= 64 {
+        return Err(BurliError::Format(
+            "Brotli distance symbol exceeds alphabet",
+        ));
+    }
+    Ok(DenseSymbolCode {
+        len: 6,
+        bits: reverse_bits_u16(symbol, 6),
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 struct PreparedToken {
     token: Token,
@@ -690,7 +788,7 @@ impl PreparedToken {
     fn new(token: Token) -> Result<Self, CompressError> {
         let insert = insert_length_code(token.insert_len)?;
         let copy = if token.is_copy() {
-            Some(copy_length_code(token.copy_len)?)
+            Some(copy_length_code(token.copy_len_code())?)
         } else {
             None
         };
@@ -700,7 +798,15 @@ impl PreparedToken {
             command_symbol_for_insert(insert.code)?
         };
         let distance = if token.is_copy() && !token.use_last_distance {
-            Some(distance_code(token.distance)?)
+            if let Some(distance_code) = token.distance_code {
+                Some(DistanceCode {
+                    symbol: distance_code,
+                    extra_bits: 0,
+                    extra: 0,
+                })
+            } else {
+                Some(distance_code(token.distance)?)
+            }
         } else {
             None
         };
@@ -769,21 +875,37 @@ fn write_var_len_u8(writer: &mut BitWriter, value: usize) -> Result<(), Compress
 }
 
 fn write_code_length_code_len(writer: &mut BitWriter, len: u8) -> Result<(), CompressError> {
-    match len {
-        0 => writer.write_bits(2, 0),
-        1 => writer.write_bits(4, 7),
-        2 => writer.write_bits(3, 3),
-        3 => writer.write_bits(2, 2),
-        4 => writer.write_bits(2, 1),
-        5 => writer.write_bits(4, 15),
-        _ => Err(BurliError::Format("unsupported Brotli code length code")),
-    }
+    let (width, bits) = match len {
+        0 => (2, 0),
+        1 => (4, 7),
+        2 => (3, 3),
+        3 => (2, 2),
+        4 => (2, 1),
+        5 => (4, 15),
+        _ => return Err(BurliError::Format("unsupported Brotli code length code")),
+    };
+    writer.write_bits_trusted_fits(width, bits);
+    Ok(())
 }
 
 fn write_prefix_code_from_frequencies(
     writer: &mut BitWriter,
     alphabet_size: usize,
     frequencies: &[usize],
+) -> Result<Vec<SymbolCode>, CompressError> {
+    write_prefix_code_from_frequencies_with_max_bits(
+        writer,
+        alphabet_size,
+        frequencies,
+        MAX_CODE_BITS,
+    )
+}
+
+fn write_prefix_code_from_frequencies_with_max_bits(
+    writer: &mut BitWriter,
+    alphabet_size: usize,
+    frequencies: &[usize],
+    max_bits: u8,
 ) -> Result<Vec<SymbolCode>, CompressError> {
     if frequencies.len() != alphabet_size {
         return Err(BurliError::Format("Brotli prefix alphabet size mismatch"));
@@ -802,15 +924,175 @@ fn write_prefix_code_from_frequencies(
         return write_simple_prefix_code_symbols(writer, alphabet_size, &symbols);
     }
 
-    let lengths = huffman_code_lengths(frequencies, MAX_CODE_BITS)
-        .unwrap_or_else(|| balanced_code_lengths(alphabet_size, &mut used, MAX_CODE_BITS));
+    let lengths = huffman_code_lengths(frequencies, max_bits)
+        .unwrap_or_else(|| balanced_code_lengths(alphabet_size, &mut used, max_bits));
 
     write_complex_prefix_code_lengths(writer, &lengths)?;
     Ok(symbol_codes_from_lengths(&lengths))
 }
 
+fn write_fast_prefix_code_from_frequencies(
+    writer: &mut BitWriter,
+    alphabet_size: usize,
+    frequencies: &[usize],
+    simple_symbol_bits: u8,
+) -> Result<Vec<SymbolCode>, CompressError> {
+    if frequencies.len() != alphabet_size {
+        return Err(BurliError::Format("Brotli prefix alphabet size mismatch"));
+    }
+
+    let mut used = frequencies
+        .iter()
+        .enumerate()
+        .filter_map(|(symbol, &frequency)| (frequency != 0).then_some((symbol as u16, frequency)))
+        .collect::<Vec<_>>();
+    if used.is_empty() {
+        write_fast_simple_prefix_code_symbols(writer, simple_symbol_bits, &[0], &[0])?;
+        return Ok(simple_symbol_codes(&[0]));
+    }
+    if used.len() == 1 {
+        let symbol = used[0].0;
+        write_fast_simple_prefix_code_symbols(writer, simple_symbol_bits, &[symbol], &[0])?;
+        return Ok(simple_symbol_codes(&[symbol]));
+    }
+
+    let lengths = huffman_code_lengths(frequencies, FAST_CODE_BITS)
+        .unwrap_or_else(|| balanced_code_lengths(alphabet_size, &mut used, FAST_CODE_BITS));
+    let mut symbols = used.iter().map(|&(symbol, _)| symbol).collect::<Vec<_>>();
+
+    if symbols.len() <= MAX_SIMPLE_PREFIX_SYMBOLS {
+        symbols.sort_unstable_by(|&left, &right| {
+            lengths[usize::from(left)]
+                .cmp(&lengths[usize::from(right)])
+                .then_with(|| left.cmp(&right))
+        });
+        write_fast_simple_prefix_code_symbols(writer, simple_symbol_bits, &symbols, &lengths)?;
+    } else {
+        write_fast_complex_prefix_code_lengths(writer, &lengths)?;
+    }
+    Ok(symbol_codes_from_lengths(&lengths))
+}
+
+fn write_fast_simple_prefix_code_symbols(
+    writer: &mut BitWriter,
+    symbol_bits: u8,
+    symbols: &[u16],
+    lengths: &[u8],
+) -> Result<(), CompressError> {
+    if symbols.is_empty() || symbols.len() > MAX_SIMPLE_PREFIX_SYMBOLS {
+        return Err(BurliError::Format(
+            "invalid Brotli simple prefix symbol count",
+        ));
+    }
+
+    writer.write_bits(2, 1)?;
+    writer.write_bits(2, (symbols.len() - 1) as u64)?;
+    for &symbol in symbols {
+        writer.write_bits(symbol_bits, u64::from(symbol))?;
+    }
+    if symbols.len() == 4 {
+        let first_symbol = usize::from(symbols[0]);
+        writer.write_bits(1, u64::from(lengths[first_symbol] == 1))?;
+    }
+    Ok(())
+}
+
+fn write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits<const N: usize>(
+    writer: &mut BitWriter,
+    frequencies: &[usize; N],
+    scratch: &mut PrefixCodeScratch,
+    max_bits: u8,
+) -> Result<[DenseSymbolCode; N], CompressError> {
+    scratch.used.clear();
+    for (symbol, &frequency) in frequencies.iter().enumerate() {
+        if frequency != 0 {
+            scratch.used.push((symbol as u16, frequency));
+        }
+    }
+
+    let mut map = [MISSING_DENSE_SYMBOL_CODE; N];
+    if scratch.used.is_empty() {
+        write_simple_dense_prefix_code(writer, &[0], &mut map)?;
+        return Ok(map);
+    }
+    if scratch.used.len() <= MAX_SIMPLE_PREFIX_SYMBOLS {
+        let mut symbols = [0_u16; MAX_SIMPLE_PREFIX_SYMBOLS];
+        for (index, &(symbol, _)) in scratch.used.iter().enumerate() {
+            symbols[index] = symbol;
+        }
+        write_simple_dense_prefix_code(writer, &symbols[..scratch.used.len()], &mut map)?;
+        return Ok(map);
+    }
+
+    code_lengths_from_dense_frequencies_with_scratch(frequencies, max_bits, scratch);
+
+    fill_dense_symbol_code_map_from_lengths(&scratch.lengths, &mut map);
+    write_complex_prefix_code_lengths_with_scratch(writer, scratch)?;
+    Ok(map)
+}
+
+fn code_lengths_from_dense_frequencies_with_scratch<const N: usize>(
+    frequencies: &[usize; N],
+    max_bits: u8,
+    scratch: &mut PrefixCodeScratch,
+) {
+    scratch.used.clear();
+    for (symbol, &frequency) in frequencies.iter().enumerate() {
+        if frequency != 0 {
+            scratch.used.push((symbol as u16, frequency));
+        }
+    }
+    scratch.lengths.clear();
+    scratch.lengths.resize(N, 0);
+    if scratch.used.is_empty() {
+        scratch.lengths[0] = 1;
+        return;
+    }
+    if scratch.used.len() == 1 {
+        scratch.lengths[usize::from(scratch.used[0].0)] = 1;
+        return;
+    }
+
+    if huffman_code_lengths_with_scratch(frequencies, max_bits, scratch) {
+        return;
+    }
+
+    scratch.lengths.clear();
+    scratch.lengths.resize(N, 0);
+    balanced_code_lengths_into(N, &mut scratch.used, max_bits, &mut scratch.lengths);
+}
+
+fn code_lengths_from_frequencies(
+    alphabet_size: usize,
+    frequencies: &[usize],
+    max_bits: u8,
+) -> Result<Vec<u8>, CompressError> {
+    if frequencies.len() != alphabet_size {
+        return Err(BurliError::Format("Brotli prefix alphabet size mismatch"));
+    }
+
+    let mut used = frequencies
+        .iter()
+        .enumerate()
+        .filter_map(|(symbol, &frequency)| (frequency != 0).then_some((symbol as u16, frequency)))
+        .collect::<Vec<_>>();
+    if used.is_empty() {
+        let mut lengths = vec![0_u8; alphabet_size];
+        lengths[0] = 1;
+        return Ok(lengths);
+    }
+    if used.len() == 1 {
+        let mut lengths = vec![0_u8; alphabet_size];
+        lengths[usize::from(used[0].0)] = 1;
+        return Ok(lengths);
+    }
+
+    Ok(huffman_code_lengths(frequencies, max_bits)
+        .unwrap_or_else(|| balanced_code_lengths(alphabet_size, &mut used, max_bits)))
+}
+
 fn balanced_code_lengths(alphabet_size: usize, used: &mut [(u16, usize)], max_bits: u8) -> Vec<u8> {
-    used.sort_by(
+    used.sort_unstable_by(
         |&(left_symbol, left_frequency), &(right_symbol, right_frequency)| {
             right_frequency
                 .cmp(&left_frequency)
@@ -829,6 +1111,33 @@ fn balanced_code_lengths(alphabet_size: usize, used: &mut [(u16, usize)], max_bi
         };
     }
     lengths
+}
+
+fn balanced_code_lengths_into(
+    alphabet_size: usize,
+    used: &mut [(u16, usize)],
+    max_bits: u8,
+    lengths: &mut [u8],
+) {
+    debug_assert_eq!(lengths.len(), alphabet_size);
+    used.sort_unstable_by(
+        |&(left_symbol, left_frequency), &(right_symbol, right_frequency)| {
+            right_frequency
+                .cmp(&left_frequency)
+                .then_with(|| left_symbol.cmp(&right_symbol))
+        },
+    );
+
+    lengths.fill(0);
+    let base_bits = ceil_log2(used.len()).unwrap().min(max_bits);
+    let short_count = (1_usize << base_bits) - used.len();
+    for (rank, &(symbol, _)) in used.iter().enumerate() {
+        lengths[usize::from(symbol)] = if rank < short_count {
+            base_bits - 1
+        } else {
+            base_bits
+        };
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -859,24 +1168,23 @@ fn huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Option<Vec<u8>> 
         return None;
     }
 
-    let mut leaf_queue = leaves.iter().map(|&(_, index)| index).collect::<Vec<_>>();
-    leaf_queue.sort_by(|&left, &right| compare_huffman_nodes(&nodes, left, right));
+    leaves.sort_unstable_by(|&(_, left), &(_, right)| compare_huffman_nodes(&nodes, left, right));
     let mut leaf_head = 0;
     let mut parent_queue = Vec::with_capacity(leaves.len() - 1);
     let mut parent_head = 0;
-    let mut remaining = leaf_queue.len();
+    let mut remaining = leaves.len();
 
     while remaining > 1 {
         let first = pop_huffman_queue(
             &nodes,
-            &leaf_queue,
+            &leaves,
             &mut leaf_head,
             &parent_queue,
             &mut parent_head,
         )?;
         let second = pop_huffman_queue(
             &nodes,
-            &leaf_queue,
+            &leaves,
             &mut leaf_head,
             &parent_queue,
             &mut parent_head,
@@ -910,6 +1218,97 @@ fn huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Option<Vec<u8>> 
     Some(lengths)
 }
 
+fn huffman_code_lengths_with_scratch(
+    frequencies: &[usize],
+    max_bits: u8,
+    scratch: &mut PrefixCodeScratch,
+) -> bool {
+    scratch.nodes.clear();
+    scratch.leaves.clear();
+    scratch.parent_queue.clear();
+    scratch.lengths.clear();
+    scratch.lengths.resize(frequencies.len(), 0);
+
+    for (symbol, &frequency) in frequencies.iter().enumerate() {
+        if frequency == 0 {
+            continue;
+        }
+        let index = scratch.nodes.len();
+        scratch.nodes.push(HuffmanNode {
+            frequency: frequency as u64,
+            min_symbol: symbol as u16,
+            parent: None,
+        });
+        scratch.leaves.push((symbol, index));
+    }
+
+    if scratch.leaves.len() <= 1 {
+        return false;
+    }
+
+    {
+        let nodes = &scratch.nodes;
+        scratch
+            .leaves
+            .sort_unstable_by(|&(_, left), &(_, right)| compare_huffman_nodes(nodes, left, right));
+    }
+
+    let mut leaf_head = 0;
+    let mut parent_head = 0;
+    let mut remaining = scratch.leaves.len();
+
+    while remaining > 1 {
+        let Some(first) = pop_huffman_queue(
+            &scratch.nodes,
+            &scratch.leaves,
+            &mut leaf_head,
+            &scratch.parent_queue,
+            &mut parent_head,
+        ) else {
+            return false;
+        };
+        let Some(second) = pop_huffman_queue(
+            &scratch.nodes,
+            &scratch.leaves,
+            &mut leaf_head,
+            &scratch.parent_queue,
+            &mut parent_head,
+        ) else {
+            return false;
+        };
+        let parent = scratch.nodes.len();
+        scratch.nodes.push(HuffmanNode {
+            frequency: scratch.nodes[first].frequency + scratch.nodes[second].frequency,
+            min_symbol: scratch.nodes[first]
+                .min_symbol
+                .min(scratch.nodes[second].min_symbol),
+            parent: None,
+        });
+        scratch.nodes[first].parent = Some(parent);
+        scratch.nodes[second].parent = Some(parent);
+        scratch.parent_queue.push(parent);
+        remaining -= 1;
+    }
+
+    for &(symbol, node_index) in &scratch.leaves {
+        let mut depth = 0_u8;
+        let mut cursor = node_index;
+        while let Some(parent) = scratch.nodes[cursor].parent {
+            let Some(next_depth) = depth.checked_add(1) else {
+                return false;
+            };
+            depth = next_depth;
+            cursor = parent;
+        }
+        if depth == 0 || depth > max_bits {
+            return false;
+        }
+        scratch.lengths[symbol] = depth;
+    }
+
+    true
+}
+
 fn compare_huffman_nodes(nodes: &[HuffmanNode], left: usize, right: usize) -> core::cmp::Ordering {
     nodes[left]
         .frequency
@@ -919,12 +1318,12 @@ fn compare_huffman_nodes(nodes: &[HuffmanNode], left: usize, right: usize) -> co
 
 fn pop_huffman_queue(
     nodes: &[HuffmanNode],
-    leaf_queue: &[usize],
+    leaf_queue: &[(usize, usize)],
     leaf_head: &mut usize,
     parent_queue: &[usize],
     parent_head: &mut usize,
 ) -> Option<usize> {
-    let leaf = leaf_queue.get(*leaf_head).copied();
+    let leaf = leaf_queue.get(*leaf_head).map(|&(_, index)| index);
     let parent = parent_queue.get(*parent_head).copied();
 
     match (leaf, parent) {
@@ -953,75 +1352,502 @@ fn write_complex_prefix_code_lengths(
     writer: &mut BitWriter,
     lengths: &[u8],
 ) -> Result<(), CompressError> {
-    writer.write_bits(2, 0)?;
+    let tree = encode_code_length_tree(lengths)?;
+    let mut tree_frequencies = [0_usize; CODE_LENGTH_ALPHABET_SIZE];
+    for &entry in &tree {
+        tree_frequencies[usize::from(code_length_tree_symbol(entry))] += 1;
+    }
 
-    let mut length_frequencies = [0_usize; CODE_LENGTH_ALPHABET_SIZE];
+    let code_length_lengths =
+        code_lengths_from_frequencies(CODE_LENGTH_ALPHABET_SIZE, &tree_frequencies, 5)?;
+    write_code_length_code_lengths(writer, &code_length_lengths, &tree_frequencies)?;
+
+    let single_code = single_non_zero_symbol(&tree_frequencies);
+    let mut code_length_code_map = [MISSING_DENSE_SYMBOL_CODE; CODE_LENGTH_ALPHABET_SIZE];
+    fill_dense_symbol_code_map_from_lengths(&code_length_lengths, &mut code_length_code_map);
+    for &entry in &tree {
+        let symbol = code_length_tree_symbol(entry);
+        let extra_bits = code_length_tree_extra_bits(entry);
+        let mut width = 0;
+        let mut bits = 0;
+        if single_code != Some(usize::from(symbol)) {
+            let code = code_length_code_map[usize::from(symbol)];
+            debug_assert!(code.len != u8::MAX);
+            width = code.len;
+            bits = u64::from(code.bits);
+        }
+        match symbol {
+            16 => {
+                bits |= u64::from(extra_bits) << width;
+                width += 2;
+            }
+            17 => {
+                bits |= u64::from(extra_bits) << width;
+                width += 3;
+            }
+            _ => {}
+        }
+        writer.write_bits_trusted_fits(width, bits);
+    }
+    Ok(())
+}
+
+fn write_fast_complex_prefix_code_lengths(
+    writer: &mut BitWriter,
+    lengths: &[u8],
+) -> Result<(), CompressError> {
+    let mut tree = Vec::new();
+    encode_fast_code_length_tree_into(lengths, &mut tree)?;
+    writer.write_bits_trusted_fits(40, 0x00ff_5555_5554);
+    for &entry in &tree {
+        let symbol = code_length_tree_symbol(entry);
+        let extra_bits = code_length_tree_extra_bits(entry);
+        match symbol {
+            0..=14 => {
+                let len = STATIC_CODE_LENGTH_DEPTH[usize::from(symbol)];
+                let bits = STATIC_CODE_LENGTH_BITS[usize::from(symbol)];
+                writer.write_bits_trusted_fits(len, u64::from(bits));
+            }
+            16 => {
+                let len = STATIC_CODE_LENGTH_DEPTH[16];
+                let bits = STATIC_CODE_LENGTH_BITS[16] | (u16::from(extra_bits) << len);
+                writer.write_bits_trusted_fits(len + 2, u64::from(bits));
+            }
+            17 => {
+                let len = STATIC_CODE_LENGTH_DEPTH[17];
+                let bits = STATIC_CODE_LENGTH_BITS[17] | (u16::from(extra_bits) << len);
+                writer.write_bits_trusted_fits(len + 3, u64::from(bits));
+            }
+            _ => return Err(BurliError::Format("invalid Brotli code length symbol")),
+        }
+    }
+    Ok(())
+}
+
+fn encode_fast_code_length_tree_into(
+    lengths: &[u8],
+    tree: &mut Vec<u16>,
+) -> Result<(), CompressError> {
+    for &len in lengths {
+        if len > FAST_CODE_BITS {
+            return Err(BurliError::Format("Brotli Huffman code length exceeds 14"));
+        }
+    }
+
+    let trimmed_len = lengths
+        .iter()
+        .rposition(|&len| len != 0)
+        .map_or(0, |index| index + 1);
+    if trimmed_len == 0 {
+        return Err(BurliError::Format("empty Brotli Huffman code"));
+    }
+
+    tree.clear();
+    tree.reserve(trimmed_len);
+    let mut previous_value = 8_u8;
+    let mut index = 0;
+    while index < trimmed_len {
+        let value = lengths[index];
+        let mut repetitions = 1;
+        while index + repetitions < trimmed_len && lengths[index + repetitions] == value {
+            repetitions += 1;
+        }
+        if value == 0 {
+            push_zero_code_length_repetitions(repetitions, tree);
+        } else {
+            push_code_length_repetitions(previous_value, value, repetitions, tree);
+            previous_value = value;
+        }
+        index += repetitions;
+    }
+    Ok(())
+}
+
+fn write_complex_prefix_code_lengths_with_scratch(
+    writer: &mut BitWriter,
+    scratch: &mut PrefixCodeScratch,
+) -> Result<(), CompressError> {
+    encode_code_length_tree_into(&scratch.lengths, &mut scratch.tree)?;
+    write_encoded_code_length_tree(writer, scratch)
+}
+
+fn write_complex_prefix_code_lengths_from_lengths_with_scratch(
+    writer: &mut BitWriter,
+    lengths: &[u8],
+    scratch: &mut PrefixCodeScratch,
+) -> Result<(), CompressError> {
+    encode_code_length_tree_into(lengths, &mut scratch.tree)?;
+    write_encoded_code_length_tree(writer, scratch)
+}
+
+fn write_encoded_code_length_tree(
+    writer: &mut BitWriter,
+    scratch: &mut PrefixCodeScratch,
+) -> Result<(), CompressError> {
+    let mut tree_frequencies = [0_usize; CODE_LENGTH_ALPHABET_SIZE];
+    for &entry in &scratch.tree {
+        tree_frequencies[usize::from(code_length_tree_symbol(entry))] += 1;
+    }
+
+    code_lengths_from_frequencies_with_scratch(
+        CODE_LENGTH_ALPHABET_SIZE,
+        &tree_frequencies,
+        5,
+        scratch,
+    )?;
+    write_code_length_code_lengths(writer, &scratch.lengths, &tree_frequencies)?;
+
+    let single_code = single_non_zero_symbol(&tree_frequencies);
+    let mut code_length_code_map = [MISSING_DENSE_SYMBOL_CODE; CODE_LENGTH_ALPHABET_SIZE];
+    fill_dense_symbol_code_map_from_lengths(&scratch.lengths, &mut code_length_code_map);
+    for &entry in &scratch.tree {
+        let symbol = code_length_tree_symbol(entry);
+        let extra_bits = code_length_tree_extra_bits(entry);
+        let mut width = 0;
+        let mut bits = 0;
+        if single_code != Some(usize::from(symbol)) {
+            let code = code_length_code_map[usize::from(symbol)];
+            debug_assert!(code.len != u8::MAX);
+            width = code.len;
+            bits = u64::from(code.bits);
+        }
+        match symbol {
+            16 => {
+                bits |= u64::from(extra_bits) << width;
+                width += 2;
+            }
+            17 => {
+                bits |= u64::from(extra_bits) << width;
+                width += 3;
+            }
+            _ => {}
+        }
+        writer.write_bits_trusted_fits(width, bits);
+    }
+    Ok(())
+}
+
+fn write_q1_internal_command_prefix_codes(
+    writer: &mut BitWriter,
+    command_frequencies: &[usize; 128],
+    scratch: &mut PrefixCodeScratch,
+) -> Result<[DenseSymbolCode; 128], CompressError> {
+    let mut internal_command_frequencies = [0_usize; 64];
+    internal_command_frequencies.copy_from_slice(&command_frequencies[..64]);
+    code_lengths_from_dense_frequencies_with_scratch(
+        &internal_command_frequencies,
+        MAX_CODE_BITS,
+        scratch,
+    );
+    let mut internal_command_lengths = [0_u8; 64];
+    internal_command_lengths.copy_from_slice(&scratch.lengths[..64]);
+
+    let mut full_command_lengths = [0_u8; COMMAND_ALPHABET_SIZE];
+    for (code, &len) in internal_command_lengths.iter().enumerate() {
+        full_command_lengths[q1_internal_command_symbol(code)] = len;
+    }
+
+    let mut internal_map = q1_internal_command_code_map_from_lengths(&internal_command_lengths);
+    write_complex_prefix_code_lengths_from_lengths_with_scratch(
+        writer,
+        &full_command_lengths,
+        scratch,
+    )?;
+
+    let mut distance_frequencies = [0_usize; 64];
+    distance_frequencies.copy_from_slice(&command_frequencies[64..]);
+    let distance_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+        writer,
+        &distance_frequencies,
+        scratch,
+        14,
+    )?;
+
+    internal_map[64..].copy_from_slice(&distance_map);
+
+    Ok(internal_map)
+}
+
+fn q1_internal_command_code_map_from_lengths(
+    internal_command_lengths: &[u8; 64],
+) -> [DenseSymbolCode; 128] {
+    let mut remapped_lengths = [0_u8; 64];
+    remapped_lengths[..24].copy_from_slice(&internal_command_lengths[24..48]);
+    remapped_lengths[24..32].copy_from_slice(&internal_command_lengths[..8]);
+    remapped_lengths[32..40].copy_from_slice(&internal_command_lengths[48..56]);
+    remapped_lengths[40..48].copy_from_slice(&internal_command_lengths[8..16]);
+    remapped_lengths[48..56].copy_from_slice(&internal_command_lengths[56..64]);
+    remapped_lengths[56..64].copy_from_slice(&internal_command_lengths[16..24]);
+
+    let mut remapped_map = [MISSING_DENSE_SYMBOL_CODE; 64];
+    fill_dense_symbol_code_map_from_lengths(&remapped_lengths, &mut remapped_map);
+
+    let mut internal_map = [MISSING_DENSE_SYMBOL_CODE; 128];
+    internal_map[..8].copy_from_slice(&remapped_map[24..32]);
+    internal_map[8..16].copy_from_slice(&remapped_map[40..48]);
+    internal_map[16..24].copy_from_slice(&remapped_map[56..64]);
+    internal_map[24..48].copy_from_slice(&remapped_map[..24]);
+    internal_map[48..56].copy_from_slice(&remapped_map[32..40]);
+    internal_map[56..64].copy_from_slice(&remapped_map[48..56]);
+    internal_map
+}
+
+fn q1_internal_command_symbol(code: usize) -> usize {
+    match code {
+        0..=7 => 128 + code * 8,
+        8..=15 => 256 + (code - 8) * 8,
+        16..=23 => 448 + (code - 16) * 8,
+        24..=31 => code - 24,
+        32..=39 => 64 + (code - 32),
+        40..=47 => 128 + (code - 40),
+        48..=55 => 192 + (code - 48),
+        56..=63 => 384 + (code - 56),
+        _ => unreachable!(),
+    }
+}
+
+fn code_lengths_from_frequencies_with_scratch(
+    alphabet_size: usize,
+    frequencies: &[usize],
+    max_bits: u8,
+    scratch: &mut PrefixCodeScratch,
+) -> Result<(), CompressError> {
+    if frequencies.len() != alphabet_size {
+        return Err(BurliError::Format("Brotli prefix alphabet size mismatch"));
+    }
+
+    scratch.used.clear();
+    for (symbol, &frequency) in frequencies.iter().enumerate() {
+        if frequency != 0 {
+            scratch.used.push((symbol as u16, frequency));
+        }
+    }
+
+    scratch.lengths.clear();
+    scratch.lengths.resize(alphabet_size, 0);
+    if scratch.used.is_empty() {
+        scratch.lengths[0] = 1;
+        return Ok(());
+    }
+    if scratch.used.len() == 1 {
+        scratch.lengths[usize::from(scratch.used[0].0)] = 1;
+        return Ok(());
+    }
+
+    if huffman_code_lengths_with_scratch(frequencies, max_bits, scratch) {
+        return Ok(());
+    }
+
+    scratch.lengths.clear();
+    scratch.lengths.resize(alphabet_size, 0);
+    balanced_code_lengths_into(
+        alphabet_size,
+        &mut scratch.used,
+        max_bits,
+        &mut scratch.lengths,
+    );
+    Ok(())
+}
+
+fn encode_code_length_tree(lengths: &[u8]) -> Result<Vec<u16>, CompressError> {
+    let mut tree = Vec::new();
+    encode_code_length_tree_into(lengths, &mut tree)?;
+    Ok(tree)
+}
+
+fn encode_code_length_tree_into(lengths: &[u8], tree: &mut Vec<u16>) -> Result<(), CompressError> {
     for &len in lengths {
         if len > MAX_CODE_BITS {
             return Err(BurliError::Format("Brotli Huffman code length exceeds 15"));
         }
-        length_frequencies[usize::from(len)] += 1;
     }
 
-    let mut used_lengths = length_frequencies
+    let trimmed_len = lengths
         .iter()
-        .enumerate()
-        .filter_map(|(symbol, &frequency)| (frequency != 0).then_some((symbol as u16, frequency)))
-        .collect::<Vec<_>>();
-    used_lengths.sort_by(
-        |&(left_symbol, left_frequency), &(right_symbol, right_frequency)| {
-            right_frequency
-                .cmp(&left_frequency)
-                .then_with(|| left_symbol.cmp(&right_symbol))
-        },
-    );
+        .rposition(|&len| len != 0)
+        .map_or(0, |index| index + 1);
+    if trimmed_len == 0 {
+        return Err(BurliError::Format("empty Brotli Huffman code"));
+    }
 
-    let mut code_length_lengths = [0_u8; CODE_LENGTH_ALPHABET_SIZE];
-    if used_lengths.len() == 1 {
-        code_length_lengths[usize::from(used_lengths[0].0)] = 1;
+    let (use_rle_for_non_zero, use_rle_for_zero) = if trimmed_len > 50 {
+        choose_code_length_rle(lengths, trimmed_len)
     } else {
-        let base_bits = ceil_log2(used_lengths.len())?;
-        let short_count = (1_usize << base_bits) - used_lengths.len();
-        for (rank, &(symbol, _)) in used_lengths.iter().enumerate() {
-            code_length_lengths[usize::from(symbol)] = if rank < short_count {
-                base_bits - 1
-            } else {
-                base_bits
-            };
-        }
-    }
+        (false, false)
+    };
+    tree.clear();
+    tree.reserve(trimmed_len);
+    let mut previous_value = 8_u8;
+    let mut index = 0;
 
-    let entries_to_write = code_length_entries_to_write(&code_length_lengths);
-    for &symbol in CODE_LENGTH_ORDER.iter().take(entries_to_write) {
-        write_code_length_code_len(writer, code_length_lengths[usize::from(symbol)])?;
-    }
-
-    if used_lengths.len() != 1 {
-        let code_length_codes = symbol_codes_from_lengths(&code_length_lengths);
-        let code_length_code_map = symbol_code_map(&code_length_codes, CODE_LENGTH_ALPHABET_SIZE);
-        let entries_to_write = lengths
-            .iter()
-            .rposition(|&len| len != 0)
-            .map_or(lengths.len(), |index| index + 1);
-        for &len in lengths.iter().take(entries_to_write) {
-            let code = symbol_code(&code_length_code_map, u16::from(len))?;
-            writer.write_bits(code.len, u64::from(code.bits))?;
+    while index < trimmed_len {
+        let value = lengths[index];
+        let mut reps = 1;
+        if (value == 0 && use_rle_for_zero) || (value != 0 && use_rle_for_non_zero) {
+            while index + reps < trimmed_len && lengths[index + reps] == value {
+                reps += 1;
+            }
         }
+        if value == 0 {
+            push_zero_code_length_repetitions(reps, tree);
+        } else {
+            push_code_length_repetitions(previous_value, value, reps, tree);
+            previous_value = value;
+        }
+        index += reps;
     }
 
     Ok(())
 }
 
-fn code_length_entries_to_write(code_length_lengths: &[u8; CODE_LENGTH_ALPHABET_SIZE]) -> usize {
-    let non_zero = code_length_lengths.iter().filter(|&&len| len != 0).count();
-    if non_zero <= 1 {
-        return CODE_LENGTH_ORDER.len();
+fn choose_code_length_rle(lengths: &[u8], len: usize) -> (bool, bool) {
+    let mut total_reps_zero = 0_usize;
+    let mut total_reps_non_zero = 0_usize;
+    let mut count_reps_zero = 1_usize;
+    let mut count_reps_non_zero = 1_usize;
+    let mut index = 0;
+
+    while index < len {
+        let value = lengths[index];
+        let mut reps = 1;
+        while index + reps < len && lengths[index + reps] == value {
+            reps += 1;
+        }
+        if reps >= 3 && value == 0 {
+            total_reps_zero += reps;
+            count_reps_zero += 1;
+        }
+        if reps >= 4 && value != 0 {
+            total_reps_non_zero += reps;
+            count_reps_non_zero += 1;
+        }
+        index += reps;
     }
 
-    CODE_LENGTH_ORDER
+    (
+        total_reps_non_zero > count_reps_non_zero * 2,
+        total_reps_zero > count_reps_zero * 2,
+    )
+}
+
+fn push_code_length_repetitions(
+    previous_value: u8,
+    value: u8,
+    mut repetitions: usize,
+    tree: &mut Vec<u16>,
+) {
+    if previous_value != value {
+        tree.push(pack_code_length_tree_entry(value, 0));
+        repetitions -= 1;
+    }
+    if repetitions == 7 {
+        tree.push(pack_code_length_tree_entry(value, 0));
+        repetitions -= 1;
+    }
+    if repetitions < 3 {
+        for _ in 0..repetitions {
+            tree.push(pack_code_length_tree_entry(value, 0));
+        }
+        return;
+    }
+
+    let start = tree.len();
+    repetitions -= 3;
+    loop {
+        tree.push(pack_code_length_tree_entry(16, (repetitions & 0x03) as u8));
+        repetitions >>= 2;
+        if repetitions == 0 {
+            break;
+        }
+        repetitions -= 1;
+    }
+    tree[start..].reverse();
+}
+
+fn push_zero_code_length_repetitions(mut repetitions: usize, tree: &mut Vec<u16>) {
+    if repetitions == 11 {
+        tree.push(pack_code_length_tree_entry(0, 0));
+        repetitions -= 1;
+    }
+    if repetitions < 3 {
+        for _ in 0..repetitions {
+            tree.push(pack_code_length_tree_entry(0, 0));
+        }
+        return;
+    }
+
+    let start = tree.len();
+    repetitions -= 3;
+    loop {
+        tree.push(pack_code_length_tree_entry(17, (repetitions & 0x07) as u8));
+        repetitions >>= 3;
+        if repetitions == 0 {
+            break;
+        }
+        repetitions -= 1;
+    }
+    tree[start..].reverse();
+}
+
+fn pack_code_length_tree_entry(symbol: u8, extra_bits: u8) -> u16 {
+    u16::from(symbol) | (u16::from(extra_bits) << 8)
+}
+
+fn code_length_tree_symbol(entry: u16) -> u8 {
+    (entry & 0xff) as u8
+}
+
+fn code_length_tree_extra_bits(entry: u16) -> u8 {
+    (entry >> 8) as u8
+}
+
+fn write_code_length_code_lengths(
+    writer: &mut BitWriter,
+    code_length_lengths: &[u8],
+    tree_frequencies: &[usize; CODE_LENGTH_ALPHABET_SIZE],
+) -> Result<(), CompressError> {
+    let num_codes = tree_frequencies
         .iter()
-        .rposition(|&symbol| code_length_lengths[usize::from(symbol)] != 0)
-        .map_or(CODE_LENGTH_ORDER.len(), |index| index + 1)
+        .filter(|&&frequency| frequency != 0)
+        .count();
+    let mut codes_to_store = CODE_LENGTH_ORDER.len();
+    if num_codes > 1 {
+        while codes_to_store > 0
+            && code_length_lengths[usize::from(CODE_LENGTH_ORDER[codes_to_store - 1])] == 0
+        {
+            codes_to_store -= 1;
+        }
+    }
+
+    let mut skip = 0;
+    if code_length_lengths[usize::from(CODE_LENGTH_ORDER[0])] == 0
+        && code_length_lengths[usize::from(CODE_LENGTH_ORDER[1])] == 0
+    {
+        skip = 2;
+        if code_length_lengths[usize::from(CODE_LENGTH_ORDER[2])] == 0 {
+            skip = 3;
+        }
+    }
+
+    writer.write_bits_trusted_fits(2, skip as u64);
+    for &symbol in CODE_LENGTH_ORDER.iter().take(codes_to_store).skip(skip) {
+        write_code_length_code_len(writer, code_length_lengths[usize::from(symbol)])?;
+    }
+    Ok(())
+}
+
+fn single_non_zero_symbol(frequencies: &[usize]) -> Option<usize> {
+    let mut single = None;
+    for (symbol, &frequency) in frequencies.iter().enumerate() {
+        if frequency == 0 {
+            continue;
+        }
+        if single.is_some() {
+            return None;
+        }
+        single = Some(symbol);
+    }
+    single
 }
 
 fn ceil_log2(value: usize) -> Result<u8, CompressError> {
@@ -1191,15 +2017,6 @@ fn command_symbol_for_insert_copy(
     Ok((cell * 64 + insert_low * 8 + copy_low) as u16)
 }
 
-fn token_command_symbol(token: Token) -> Result<u16, CompressError> {
-    let insert = insert_length_code(token.insert_len)?;
-    if !token.is_copy() {
-        return command_symbol_for_insert(insert.code);
-    }
-    let copy = copy_length_code(token.copy_len)?;
-    command_symbol_for_insert_copy(insert.code, copy.code, token.use_last_distance)
-}
-
 #[derive(Clone, Copy, Debug)]
 struct DistanceCode {
     symbol: u16,
@@ -1268,6 +2085,17 @@ struct SymbolCode {
     bits: u16,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DenseSymbolCode {
+    len: u8,
+    bits: u16,
+}
+
+const MISSING_DENSE_SYMBOL_CODE: DenseSymbolCode = DenseSymbolCode {
+    len: u8::MAX,
+    bits: 0,
+};
+
 fn write_simple_prefix_code_symbols(
     writer: &mut BitWriter,
     alphabet_size: usize,
@@ -1286,6 +2114,61 @@ fn write_simple_prefix_code_symbols(
     }
 
     Ok(simple_symbol_codes(&symbols))
+}
+
+fn write_simple_dense_prefix_code<const N: usize>(
+    writer: &mut BitWriter,
+    symbols: &[u16],
+    map: &mut [DenseSymbolCode; N],
+) -> Result<(), CompressError> {
+    if symbols.is_empty() || symbols.len() > MAX_SIMPLE_PREFIX_SYMBOLS {
+        return Err(BurliError::Format(
+            "invalid Brotli simple prefix symbol count",
+        ));
+    }
+
+    let alphabet_bits = alphabet_bits(N);
+    writer.write_bits(2, 1)?;
+    writer.write_bits(2, (symbols.len() - 1) as u64)?;
+    for &symbol in symbols {
+        if usize::from(symbol) >= N {
+            return Err(BurliError::Format("Brotli prefix symbol exceeds alphabet"));
+        }
+        writer.write_bits(alphabet_bits, u64::from(symbol))?;
+    }
+    if symbols.len() == 4 {
+        writer.write_bits(1, 0)?;
+    }
+
+    fill_dense_simple_symbol_code_map(symbols, map);
+    Ok(())
+}
+
+fn fill_dense_simple_symbol_code_map<const N: usize>(
+    symbols: &[u16],
+    map: &mut [DenseSymbolCode; N],
+) {
+    match symbols.len() {
+        1 => {
+            map[usize::from(symbols[0])] = DenseSymbolCode { len: 0, bits: 0 };
+        }
+        2 => {
+            map[usize::from(symbols[0])] = DenseSymbolCode { len: 1, bits: 0 };
+            map[usize::from(symbols[1])] = DenseSymbolCode { len: 1, bits: 1 };
+        }
+        3 => {
+            map[usize::from(symbols[0])] = DenseSymbolCode { len: 1, bits: 0 };
+            map[usize::from(symbols[1])] = DenseSymbolCode { len: 2, bits: 1 };
+            map[usize::from(symbols[2])] = DenseSymbolCode { len: 2, bits: 3 };
+        }
+        4 => {
+            map[usize::from(symbols[0])] = DenseSymbolCode { len: 2, bits: 0 };
+            map[usize::from(symbols[1])] = DenseSymbolCode { len: 2, bits: 2 };
+            map[usize::from(symbols[2])] = DenseSymbolCode { len: 2, bits: 1 };
+            map[usize::from(symbols[3])] = DenseSymbolCode { len: 2, bits: 3 };
+        }
+        _ => unreachable!(),
+    }
 }
 
 fn sorted_unique_symbols(symbols: &[u16], alphabet_size: usize) -> Result<Vec<u16>, CompressError> {
@@ -1381,6 +2264,38 @@ fn symbol_code(codes: &[Option<SymbolCode>], symbol: u16) -> Result<SymbolCode, 
         .ok_or(BurliError::Format("missing Brotli prefix symbol"))
 }
 
+fn fill_dense_symbol_code_map_from_lengths<const N: usize>(
+    lengths: &[u8],
+    map: &mut [DenseSymbolCode; N],
+) {
+    debug_assert_eq!(lengths.len(), N);
+    let mut counts = [0_u16; 16];
+    for &len in lengths {
+        if len != 0 {
+            counts[usize::from(len)] += 1;
+        }
+    }
+
+    let mut next_code = [0_u16; 16];
+    let mut code = 0_u16;
+    for bits in 1..=15 {
+        code = (code + counts[bits - 1]) << 1;
+        next_code[bits] = code;
+    }
+
+    for (symbol, &len) in lengths.iter().enumerate() {
+        if len == 0 {
+            continue;
+        }
+        let code = next_code[usize::from(len)];
+        next_code[usize::from(len)] += 1;
+        map[symbol] = DenseSymbolCode {
+            len,
+            bits: reverse_bits_u16(code, len),
+        };
+    }
+}
+
 fn alphabet_bits(alphabet_size: usize) -> u8 {
     let value = alphabet_size.saturating_sub(1);
     (usize::BITS - value.leading_zeros()) as u8
@@ -1455,6 +2370,26 @@ mod tests {
     }
 
     #[test]
+    fn q1_round_trips_non_power_input_lengths() {
+        for len in [
+            1_usize, 15, 16, 17, 223, 224, 255, 256, 257, 383, 384, 385, 511, 512, 513, 717, 1023,
+            1024, 1025, 4095, 4096, 4097,
+        ] {
+            let mut input = Vec::with_capacity(len);
+            while input.len() < len {
+                input.extend_from_slice(b"<div class=\"item\">alpha beta gamma</div>\n");
+                input.extend_from_slice(b"function render(value){return value + 17;}\n");
+            }
+            input.truncate(len);
+
+            let encoded =
+                compress_with_options(&input, &Options::default().quality(1).unwrap()).unwrap();
+
+            assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+        }
+    }
+
+    #[test]
     fn q5_round_trips_long_literal_run() {
         let input = vec![b'a'; 3000];
         let encoded =
@@ -1491,6 +2426,25 @@ mod tests {
 
         assert!(encoded.len() < input.len());
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q1_collects_four_byte_matches_for_small_tables() {
+        let input = b"abcd----abcd----abcd----abcd----abcd----abcd----abcd----abcd----";
+        let mut workspace = q1::Workspace::default();
+        let batch = q1::collect(input, (1 << 22) - 16, &mut workspace).unwrap();
+
+        assert!(batch.has_copy());
+    }
+
+    #[test]
+    fn q1_collects_six_byte_matches_for_large_tables() {
+        let mut input = b"abcdef0123456789".repeat(5000);
+        input.extend_from_slice(b"abcdef0123456789abcdef0123456789");
+        let mut workspace = q1::Workspace::default();
+        let batch = q1::collect(&input, (1 << 22) - 16, &mut workspace).unwrap();
+
+        assert!(batch.has_copy());
     }
 }
 

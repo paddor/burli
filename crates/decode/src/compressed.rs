@@ -23,6 +23,7 @@ impl DistanceRing {
         }
     }
 
+    #[inline(always)]
     fn resolve(&self, symbol: usize) -> Result<usize, DecompressError> {
         let distance = match symbol {
             0 => self.distances[3],
@@ -49,6 +50,7 @@ impl DistanceRing {
         Ok(distance)
     }
 
+    #[inline(always)]
     fn push(&mut self, distance: usize) {
         self.distances = [
             self.distances[1],
@@ -113,19 +115,46 @@ pub(crate) fn decode_meta_block_with_base(
         header.distance_alphabet_size,
     )?;
     let window_size = (1_usize << window_bits) - 16;
+    let single_command_block = header.commands.types() == 1;
+    let single_distance_block = header.distances.types() == 1;
+    let single_distance_tree = distance_codes.len() == 1;
+    let single_literal_code = if header.literals.types() == 1 && literal_codes.len() == 1 {
+        Some(&literal_codes[0])
+    } else {
+        None
+    };
+    let no_postfix_distances = header.npostfix == 0 && header.ndirect == 0;
 
     while output.len() < needed {
-        let command_block_type = header.commands.current_type(reader)?;
+        let command_block_type = if single_command_block {
+            0
+        } else {
+            header.commands.current_type(reader)?
+        };
         let command = read_command(reader, &command_codes[command_block_type])?;
-        header.commands.consume_one();
-        copy_literals(
-            reader,
-            output,
-            needed,
-            command.insert_len,
-            &literal_codes,
-            &mut header,
-        )?;
+        if !single_command_block {
+            header.commands.consume_one();
+        }
+        if command.insert_len != 0 {
+            if let Some(literal_code) = single_literal_code {
+                copy_literals_single_code_checked(
+                    reader,
+                    output,
+                    needed,
+                    command.insert_len,
+                    literal_code,
+                )?;
+            } else {
+                copy_literals(
+                    reader,
+                    output,
+                    needed,
+                    command.insert_len,
+                    &literal_codes,
+                    &mut header,
+                )?;
+            }
+        }
         if output.len() == needed {
             break;
         }
@@ -136,23 +165,35 @@ pub(crate) fn decode_meta_block_with_base(
         let distance_symbol = if command.reuse_last_distance {
             0
         } else {
-            let distance_block_type = header.distances.current_type(reader)?;
-            let tree_index =
-                header.distance_context_map[distance_block_type * 4 + command.distance_context];
-            header.distances.consume_one();
+            let distance_block_type = if single_distance_block {
+                0
+            } else {
+                header.distances.current_type(reader)?
+            };
+            let tree_index = if single_distance_tree {
+                0
+            } else {
+                header.distance_context_map[distance_block_type * 4 + command.distance_context]
+            };
+            if !single_distance_block {
+                header.distances.consume_one();
+            }
             distance_codes[tree_index].decode(reader)? as usize
         };
-        let distance = read_distance(
-            reader,
-            distance_symbol,
-            header.npostfix,
-            header.ndirect,
-            distances,
-        )?;
+        let distance = if no_postfix_distances {
+            read_distance_no_postfix_with_ring(reader, distance_symbol, distances)?
+        } else {
+            read_distance(
+                reader,
+                distance_symbol,
+                header.npostfix,
+                header.ndirect,
+                distances,
+            )?
+        };
         copy_from_distance(
             output,
             CopyRequest {
-                meta_block_start: start,
                 needed,
                 window_size,
                 output_base,
@@ -169,7 +210,6 @@ pub(crate) fn decode_meta_block_with_base(
 
 #[derive(Clone, Copy, Debug)]
 struct CopyRequest {
-    meta_block_start: usize,
     needed: usize,
     window_size: usize,
     output_base: usize,
@@ -190,30 +230,35 @@ fn copy_from_distance(
         .ok_or(BurliError::Format("Brotli output length overflow"))?;
     let max_allowed_distance = request.window_size.min(global_produced);
     if request.distance > max_allowed_distance {
-        let word = crate::dictionary::lookup(request.distance, max_allowed_distance, request.len)?;
-        let end = produced
-            .checked_add(word.len())
-            .ok_or(BurliError::Format("Brotli dictionary copy length overflow"))?;
-        if end > request.needed {
-            return Err(BurliError::Format(
-                "Brotli dictionary copy exceeds meta-block size",
-            ));
-        }
-        output.extend_from_slice(&word);
+        crate::dictionary::append_lookup(
+            output,
+            request.distance,
+            max_allowed_distance,
+            request.len,
+            request.needed,
+        )?;
         return Ok(());
     }
     if request.distance == 0 || request.distance > produced {
         return Err(BurliError::Format("invalid Brotli backward distance"));
     }
 
-    checked_backward_copy_end(produced, request)?;
+    checked_backward_copy_end(produced, request.needed, request.len)?;
 
-    if request.distance < CHUNKED_COPY_MIN_DISTANCE {
+    if request.distance == 1 {
+        let byte = output[produced - 1];
+        output.resize(produced + request.len, byte);
+    } else if request.distance < CHUNKED_COPY_MIN_DISTANCE {
         for _ in 0..request.len {
             let src = output.len() - request.distance;
             let byte = output[src];
             output.push(byte);
         }
+    } else if request.len <= 16 && request.distance >= request.len {
+        let src = produced - request.distance;
+        let mut copy = [0_u8; 16];
+        copy[..request.len].copy_from_slice(&output[src..src + request.len]);
+        output.extend_from_slice(&copy[..request.len]);
     } else {
         let mut remaining = request.len;
         while remaining != 0 {
@@ -231,17 +276,13 @@ fn copy_from_distance(
 
 fn checked_backward_copy_end(
     produced: usize,
-    request: CopyRequest,
+    needed: usize,
+    len: usize,
 ) -> Result<usize, DecompressError> {
-    let end = produced
-        .checked_add(request.len)
-        .ok_or(BurliError::Format("Brotli copy length overflow"))?;
-    if end > request.needed {
+    if produced > needed || len > needed - produced {
         return Err(BurliError::Format("Brotli copy exceeds meta-block size"));
     }
-    if end < request.meta_block_start {
-        return Err(BurliError::Format("Brotli copy output position underflow"));
-    }
+    let end = produced + len;
     Ok(end)
 }
 
@@ -300,17 +341,25 @@ impl BlockCategory {
         self.block_types
     }
 
+    #[inline(always)]
     fn current_type(&mut self, reader: &mut BitReader<'_>) -> Result<usize, DecompressError> {
+        if self.block_types == 1 {
+            return Ok(0);
+        }
         if self.remaining == 0 {
             self.switch(reader)?;
         }
         Ok(self.current_type)
     }
 
+    #[inline(always)]
     fn consume_one(&mut self) {
-        self.remaining = self.remaining.saturating_sub(1);
+        if self.block_types != 1 {
+            self.remaining -= 1;
+        }
     }
 
+    #[cold]
     fn switch(&mut self, reader: &mut BitReader<'_>) -> Result<(), DecompressError> {
         let type_code = self
             .type_code
@@ -548,25 +597,190 @@ struct Command {
     distance_context: usize,
 }
 
+const COMMAND_LENGTH_CODE_BASES: [(usize, usize); 11] = [
+    (0, 0),
+    (0, 8),
+    (0, 0),
+    (0, 8),
+    (8, 0),
+    (8, 8),
+    (0, 16),
+    (16, 0),
+    (8, 16),
+    (16, 8),
+    (16, 16),
+];
+const COMMAND_DISTANCE_CONTEXTS: [[usize; 8]; 11] = [
+    [0, 1, 2, 3, 3, 3, 3, 3],
+    [3; 8],
+    [0, 1, 2, 3, 3, 3, 3, 3],
+    [3; 8],
+    [0, 1, 2, 3, 3, 3, 3, 3],
+    [3; 8],
+    [3; 8],
+    [0, 1, 2, 3, 3, 3, 3, 3],
+    [3; 8],
+    [3; 8],
+    [3; 8],
+];
+const COMMAND_PREFIXES: [CommandPrefix; COMMAND_ALPHABET_SIZE] = command_prefixes();
+
+#[derive(Clone, Copy, Debug)]
+struct CommandPrefix(u64);
+
+impl CommandPrefix {
+    const COPY_BASE_SHIFT: u64 = 16;
+    const INSERT_EXTRA_SHIFT: u64 = 32;
+    const COPY_EXTRA_SHIFT: u64 = 37;
+    const DISTANCE_CONTEXT_SHIFT: u64 = 42;
+    const REUSE_LAST_DISTANCE_SHIFT: u64 = 44;
+    const U16_MASK: u64 = 0xffff;
+    const U5_MASK: u64 = 0x1f;
+    const U2_MASK: u64 = 0x03;
+
+    const fn new(
+        insert_base: usize,
+        copy_base: usize,
+        insert_extra_bits: u8,
+        copy_extra_bits: u8,
+        distance_context: usize,
+        reuse_last_distance: bool,
+    ) -> Self {
+        Self(
+            (insert_base as u64)
+                | ((copy_base as u64) << Self::COPY_BASE_SHIFT)
+                | ((insert_extra_bits as u64) << Self::INSERT_EXTRA_SHIFT)
+                | ((copy_extra_bits as u64) << Self::COPY_EXTRA_SHIFT)
+                | ((distance_context as u64) << Self::DISTANCE_CONTEXT_SHIFT)
+                | ((reuse_last_distance as u64) << Self::REUSE_LAST_DISTANCE_SHIFT),
+        )
+    }
+
+    const fn insert_base(self) -> usize {
+        (self.0 & Self::U16_MASK) as usize
+    }
+
+    const fn copy_base(self) -> usize {
+        ((self.0 >> Self::COPY_BASE_SHIFT) & Self::U16_MASK) as usize
+    }
+
+    const fn insert_extra_bits(self) -> u8 {
+        ((self.0 >> Self::INSERT_EXTRA_SHIFT) & Self::U5_MASK) as u8
+    }
+
+    const fn copy_extra_bits(self) -> u8 {
+        ((self.0 >> Self::COPY_EXTRA_SHIFT) & Self::U5_MASK) as u8
+    }
+
+    const fn distance_context(self) -> usize {
+        ((self.0 >> Self::DISTANCE_CONTEXT_SHIFT) & Self::U2_MASK) as usize
+    }
+
+    const fn reuse_last_distance(self) -> bool {
+        ((self.0 >> Self::REUSE_LAST_DISTANCE_SHIFT) & 1) != 0
+    }
+}
+
+const fn command_prefixes() -> [CommandPrefix; COMMAND_ALPHABET_SIZE] {
+    let mut prefixes = [CommandPrefix(0); COMMAND_ALPHABET_SIZE];
+    let mut code = 0;
+    while code < COMMAND_ALPHABET_SIZE {
+        prefixes[code] = command_prefix(code);
+        code += 1;
+    }
+    prefixes
+}
+
+const fn command_prefix(code: usize) -> CommandPrefix {
+    let low = code & 0b111;
+    let high = (code >> 3) & 0b111;
+    let cell = code >> 6;
+    let (insert_base_code, copy_base_code) = COMMAND_LENGTH_CODE_BASES[cell];
+    let (insert_base, insert_extra_bits) = INSERT_LENGTH_PREFIXES[insert_base_code + high];
+    let (copy_base, copy_extra_bits) = COPY_LENGTH_PREFIXES[copy_base_code + low];
+    CommandPrefix::new(
+        insert_base,
+        copy_base,
+        insert_extra_bits,
+        copy_extra_bits,
+        COMMAND_DISTANCE_CONTEXTS[cell][low],
+        code < 128,
+    )
+}
+const INSERT_LENGTH_PREFIXES: [(usize, u8); 24] = [
+    (0, 0),
+    (1, 0),
+    (2, 0),
+    (3, 0),
+    (4, 0),
+    (5, 0),
+    (6, 1),
+    (8, 1),
+    (10, 2),
+    (14, 2),
+    (18, 3),
+    (26, 3),
+    (34, 4),
+    (50, 4),
+    (66, 5),
+    (98, 5),
+    (130, 6),
+    (194, 7),
+    (322, 8),
+    (578, 9),
+    (1090, 10),
+    (2114, 12),
+    (6210, 14),
+    (22594, 24),
+];
+const COPY_LENGTH_PREFIXES: [(usize, u8); 24] = [
+    (2, 0),
+    (3, 0),
+    (4, 0),
+    (5, 0),
+    (6, 0),
+    (7, 0),
+    (8, 0),
+    (9, 0),
+    (10, 1),
+    (12, 1),
+    (14, 2),
+    (18, 2),
+    (22, 3),
+    (30, 3),
+    (38, 4),
+    (54, 4),
+    (70, 5),
+    (102, 5),
+    (134, 6),
+    (198, 7),
+    (326, 8),
+    (582, 9),
+    (1094, 10),
+    (2118, 24),
+];
+
 fn read_command(
     reader: &mut BitReader<'_>,
     command_code: &PrefixCode,
 ) -> Result<Command, DecompressError> {
     let code = command_code.decode(reader)? as usize;
-    let (insert_code, copy_code, reuse_last_distance, distance_context) = command_code_parts(code)?;
-    let (insert_base, insert_extra_bits) = insert_length_prefix(insert_code)?;
-    let (copy_base, copy_extra_bits) = copy_length_prefix(copy_code)?;
-    let insert_len = insert_base + reader.read_bits(insert_extra_bits)? as usize;
-    let copy_len = copy_base + reader.read_bits(copy_extra_bits)? as usize;
+    if code >= COMMAND_ALPHABET_SIZE {
+        return Err(BurliError::Format("invalid Brotli command code"));
+    }
+    let prefix = COMMAND_PREFIXES[code];
+    let insert_len = prefix.insert_base() + reader.read_bits(prefix.insert_extra_bits())? as usize;
+    let copy_len = prefix.copy_base() + reader.read_bits(prefix.copy_extra_bits())? as usize;
 
     Ok(Command {
         insert_len,
         copy_len,
-        reuse_last_distance,
-        distance_context,
+        reuse_last_distance: prefix.reuse_last_distance(),
+        distance_context: prefix.distance_context(),
     })
 }
 
+#[cfg(test)]
 fn command_code_parts(code: usize) -> Result<(usize, usize, bool, usize), DecompressError> {
     if code >= COMMAND_ALPHABET_SIZE {
         return Err(BurliError::Format("invalid Brotli command code"));
@@ -603,45 +817,6 @@ fn command_code_parts(code: usize) -> Result<(usize, usize, bool, usize), Decomp
     ))
 }
 
-fn insert_length_prefix(code: usize) -> Result<(usize, u8), DecompressError> {
-    match code {
-        0..=5 => Ok((code, 0)),
-        6..=7 => Ok((6 + (code - 6) * 2, 1)),
-        8..=9 => Ok((10 + (code - 8) * 4, 2)),
-        10..=11 => Ok((18 + (code - 10) * 8, 3)),
-        12..=13 => Ok((34 + (code - 12) * 16, 4)),
-        14..=15 => Ok((66 + (code - 14) * 32, 5)),
-        16 => Ok((130, 6)),
-        17 => Ok((194, 7)),
-        18 => Ok((322, 8)),
-        19 => Ok((578, 9)),
-        20 => Ok((1090, 10)),
-        21 => Ok((2114, 12)),
-        22 => Ok((6210, 14)),
-        23 => Ok((22594, 24)),
-        _ => Err(BurliError::Format("invalid Brotli insert length code")),
-    }
-}
-
-fn copy_length_prefix(code: usize) -> Result<(usize, u8), DecompressError> {
-    match code {
-        0..=7 => Ok((code + 2, 0)),
-        8..=9 => Ok((10 + (code - 8) * 2, 1)),
-        10..=11 => Ok((14 + (code - 10) * 4, 2)),
-        12..=13 => Ok((22 + (code - 12) * 8, 3)),
-        14..=15 => Ok((38 + (code - 14) * 16, 4)),
-        16 => Ok((70, 5)),
-        17 => Ok((102, 5)),
-        18 => Ok((134, 6)),
-        19 => Ok((198, 7)),
-        20 => Ok((326, 8)),
-        21 => Ok((582, 9)),
-        22 => Ok((1094, 10)),
-        23 => Ok((2118, 24)),
-        _ => Err(BurliError::Format("invalid Brotli copy length code")),
-    }
-}
-
 fn copy_literals(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
@@ -650,60 +825,168 @@ fn copy_literals(
     literal_codes: &[PrefixCode],
     header: &mut CompressedHeader,
 ) -> Result<(), DecompressError> {
-    let end = output
-        .len()
-        .checked_add(count)
-        .ok_or(BurliError::Format("Brotli literal run length overflow"))?;
-    if end > needed {
+    let produced = output.len();
+    if produced > needed || count > needed - produced {
         return Err(BurliError::Format(
             "Brotli literal run exceeds meta-block size",
         ));
     }
 
+    if header.literals.types() == 1 {
+        if literal_codes.len() == 1 {
+            return copy_literals_single_code(reader, output, count, &literal_codes[0]);
+        }
+        return copy_literals_single_block(
+            reader,
+            output,
+            count,
+            literal_codes,
+            &header.literal_context_map[..64],
+            header.context_modes[0],
+        );
+    }
+
+    let mut previous = previous_literal_bytes(output);
     for _ in 0..count {
         let literal_block_type = header.literals.current_type(reader)?;
-        let context = literal_context(output, header, literal_block_type)?;
+        let context = literal_context(previous, header, literal_block_type);
         let tree_index = header.literal_context_map[literal_block_type * 64 + context];
-        let literal = literal_codes[tree_index].decode(reader)?;
+        let literal = read_literal(reader, &literal_codes[tree_index])?;
         header.literals.consume_one();
-        if literal > u16::from(u8::MAX) {
-            return Err(BurliError::Format("invalid Brotli literal symbol"));
-        }
-        output.push(literal as u8);
+        output.push(literal);
+        previous = (literal, previous.0);
     }
     Ok(())
 }
 
-fn literal_context(
-    output: &[u8],
-    header: &CompressedHeader,
-    block_type: usize,
-) -> Result<usize, DecompressError> {
-    literal_context_for_mode(output, header.context_modes[block_type])
+fn copy_literals_single_code(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    count: usize,
+    code: &PrefixCode,
+) -> Result<(), DecompressError> {
+    if let Some(symbol) = code.single_symbol() {
+        output.resize(output.len() + count, symbol as u8);
+        return Ok(());
+    }
+    let max_bits = usize::from(code.max_bits());
+    if max_bits != 0
+        && count
+            .checked_mul(max_bits)
+            .is_some_and(|bits| bits <= reader.remaining_bits())
+    {
+        for _ in 0..count {
+            output.push(code.decode_non_single_trusted_fast(reader) as u8);
+        }
+        return Ok(());
+    }
+    for _ in 0..count {
+        output.push(code.decode_non_single(reader)? as u8);
+    }
+    Ok(())
 }
 
-fn literal_context_for_mode(output: &[u8], mode: u8) -> Result<usize, DecompressError> {
-    let p1 = output.last().copied().unwrap_or(0);
-    let p2 = output
-        .len()
-        .checked_sub(2)
-        .and_then(|index| output.get(index))
-        .copied()
-        .unwrap_or(0);
-    let context = match mode {
+fn copy_literals_single_code_checked(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    needed: usize,
+    count: usize,
+    code: &PrefixCode,
+) -> Result<(), DecompressError> {
+    let produced = output.len();
+    if produced > needed || count > needed - produced {
+        return Err(BurliError::Format(
+            "Brotli literal run exceeds meta-block size",
+        ));
+    }
+    copy_literals_single_code(reader, output, count, code)
+}
+
+fn copy_literals_single_block(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    count: usize,
+    literal_codes: &[PrefixCode],
+    context_map: &[usize],
+    mode: u8,
+) -> Result<(), DecompressError> {
+    let mut previous = previous_literal_bytes(output);
+    match mode {
+        0 => {
+            for _ in 0..count {
+                let tree_index = context_map[usize::from(previous.0 & 0x3f)];
+                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        1 => {
+            for _ in 0..count {
+                let tree_index = context_map[usize::from(previous.0 >> 2)];
+                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        2 => {
+            for _ in 0..count {
+                let context = crate::context_lookup::CONTEXT_PAIR_LOOKUP[0]
+                    [(usize::from(previous.0) << 8) | usize::from(previous.1)];
+                let tree_index = context_map[usize::from(context)];
+                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        3 => {
+            for _ in 0..count {
+                let context = crate::context_lookup::CONTEXT_PAIR_LOOKUP[1]
+                    [(usize::from(previous.0) << 8) | usize::from(previous.1)];
+                let tree_index = context_map[usize::from(context)];
+                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        _ => unreachable!("Brotli literal context mode is a 2-bit field"),
+    }
+    Ok(())
+}
+
+#[inline(always)]
+fn read_literal(reader: &mut BitReader<'_>, code: &PrefixCode) -> Result<u8, DecompressError> {
+    Ok(code.decode(reader)? as u8)
+}
+
+fn literal_context(previous: (u8, u8), header: &CompressedHeader, block_type: usize) -> usize {
+    literal_context_for_mode(previous, header.context_modes[block_type])
+}
+
+fn previous_literal_bytes(output: &[u8]) -> (u8, u8) {
+    let len = output.len();
+    if len >= 2 {
+        (output[len - 1], output[len - 2])
+    } else if len == 1 {
+        (output[0], 0)
+    } else {
+        (0, 0)
+    }
+}
+
+fn literal_context_for_mode(previous: (u8, u8), mode: u8) -> usize {
+    let (p1, p2) = previous;
+    match mode {
         0 => p1 & 0x3f,
         1 => p1 >> 2,
         2 => {
-            crate::context_lookup::kContextLookup[2][usize::from(p1)]
-                | crate::context_lookup::kContextLookup[2][usize::from(p2) + 256]
+            crate::context_lookup::CONTEXT_PAIR_LOOKUP[0][(usize::from(p1) << 8) | usize::from(p2)]
         }
-        3 => {
-            crate::context_lookup::kContextLookup[3][usize::from(p1)]
-                | crate::context_lookup::kContextLookup[3][usize::from(p2) + 256]
+        _ => {
+            debug_assert_eq!(mode, 3);
+            crate::context_lookup::CONTEXT_PAIR_LOOKUP[1][(usize::from(p1) << 8) | usize::from(p2)]
         }
-        _ => return Err(BurliError::Format("invalid Brotli literal context mode")),
-    };
-    Ok(usize::from(context))
+    }
+    .into()
 }
 
 fn read_distance(
@@ -715,6 +998,9 @@ fn read_distance(
 ) -> Result<usize, DecompressError> {
     if symbol < 16 {
         return distances.resolve(symbol);
+    }
+    if npostfix == 0 && ndirect == 0 {
+        return read_distance_no_postfix(reader, symbol);
     }
     if symbol < 16 + ndirect {
         return Ok(symbol - 15);
@@ -730,6 +1016,33 @@ fn read_distance(
     let lcode = adjusted & ((1_usize << npostfix) - 1);
     let offset = ((2 + (hcode & 1)) << ndistbits) - 4;
     Ok(((offset + dextra) << npostfix) + lcode + ndirect + 1)
+}
+
+#[inline(always)]
+fn read_distance_no_postfix_with_ring(
+    reader: &mut BitReader<'_>,
+    symbol: usize,
+    distances: &DistanceRing,
+) -> Result<usize, DecompressError> {
+    if symbol < 16 {
+        return distances.resolve(symbol);
+    }
+    read_distance_no_postfix(reader, symbol)
+}
+
+#[inline(always)]
+fn read_distance_no_postfix(
+    reader: &mut BitReader<'_>,
+    symbol: usize,
+) -> Result<usize, DecompressError> {
+    let adjusted = symbol - 16;
+    let ndistbits = 1 + (adjusted >> 1);
+    if ndistbits > 24 {
+        return Err(BurliError::Format("invalid Brotli distance extra bits"));
+    }
+    let dextra = reader.read_bits(ndistbits as u8)? as usize;
+    let offset = ((2 + (adjusted & 1)) << ndistbits) - 4;
+    Ok(offset + dextra + 1)
 }
 
 #[cfg(test)]
@@ -779,7 +1092,6 @@ mod tests {
         copy_from_distance(
             &mut output,
             CopyRequest {
-                meta_block_start: 0,
                 needed: 20,
                 window_size: 1 << 16,
                 output_base: 0,
@@ -796,6 +1108,30 @@ mod tests {
     }
 
     #[test]
+    fn distance_one_copy_repeats_last_byte() {
+        let mut output = b"aaaaab".to_vec();
+        let mut distances = DistanceRing::new();
+
+        copy_from_distance(
+            &mut output,
+            CopyRequest {
+                needed: 10,
+                window_size: 1 << 16,
+                output_base: 0,
+                distance: 1,
+                len: 4,
+                push_distance: true,
+            },
+            &mut distances,
+        )
+        .unwrap();
+
+        assert_eq!(output, b"aaaaabbbbb");
+        let mut reader = BitReader::new(&[]);
+        assert_eq!(read_distance(&mut reader, 0, 0, 0, &distances).unwrap(), 1);
+    }
+
+    #[test]
     fn command_distance_context_comes_from_command_prefix() {
         assert_eq!(command_code_parts(0).unwrap().3, 0);
         assert_eq!(command_code_parts(2).unwrap().3, 2);
@@ -806,8 +1142,14 @@ mod tests {
 
     #[test]
     fn literal_context_uses_zero_second_previous_byte_until_two_bytes_exist() {
-        assert_eq!(literal_context_for_mode(b"\r", 3).unwrap(), 8);
-        assert_eq!(literal_context_for_mode(b"\r\n", 3).unwrap(), 9);
+        assert_eq!(
+            literal_context_for_mode(previous_literal_bytes(b"\r"), 3),
+            8
+        );
+        assert_eq!(
+            literal_context_for_mode(previous_literal_bytes(b"\r\n"), 3),
+            9
+        );
     }
 }
 
@@ -836,7 +1178,6 @@ mod verification {
 
         let produced = usize::from(produced);
         let request = CopyRequest {
-            meta_block_start: 0,
             needed: produced + usize::from(len),
             window_size: 16,
             output_base: 0,
@@ -845,7 +1186,7 @@ mod verification {
             push_distance: true,
         };
 
-        let end = checked_backward_copy_end(produced, request).unwrap();
+        let end = checked_backward_copy_end(produced, request.needed, request.len).unwrap();
 
         assert_eq!(end, request.needed);
         assert!(end <= request.needed);

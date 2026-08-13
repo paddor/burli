@@ -106,3 +106,21 @@ pub(crate) static kContextLookup: [[u8; 512]; 4] = [
         6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7,
     ],
 ];
+
+pub(crate) static CONTEXT_PAIR_LOOKUP: [[u8; 256 * 256]; 2] =
+    [build_context_pair_lookup(2), build_context_pair_lookup(3)];
+
+#[allow(clippy::large_stack_arrays)]
+const fn build_context_pair_lookup(mode: usize) -> [u8; 256 * 256] {
+    let mut out = [0_u8; 256 * 256];
+    let mut p1 = 0_usize;
+    while p1 < 256 {
+        let mut p2 = 0_usize;
+        while p2 < 256 {
+            out[(p1 << 8) | p2] = kContextLookup[mode][p1] | kContextLookup[mode][p2 + 256];
+            p2 += 1;
+        }
+        p1 += 1;
+    }
+    out
+}

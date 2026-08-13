@@ -11,6 +11,8 @@ pub mod options;
 pub mod simd;
 
 pub mod bits;
+#[doc(hidden)]
+pub mod dictionary;
 
 pub use error::{BurliError, CompressError, DecompressError, Result};
 pub use options::{Mode, Options, Quality, SimdMode};

@@ -4,8 +4,7 @@ use alloc::vec::Vec;
 use burli_core::{BurliError, DecompressError, bits::BitReader};
 
 const MAX_CODE_BITS: u8 = 15;
-const FAST_LOOKUP_BITS: u8 = 8;
-const FAST_LOOKUP_SIZE: usize = 1 << FAST_LOOKUP_BITS;
+const FAST_LOOKUP_BITS: u8 = 15;
 const CODE_LENGTH_CODES: usize = 18;
 const CODE_LENGTH_ORDER: [usize; CODE_LENGTH_CODES] =
     [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -14,9 +13,9 @@ const CODE_LENGTH_PREFIX_VALUE: [u8; 16] = [0, 4, 3, 2, 0, 4, 3, 1, 0, 4, 3, 2, 
 
 #[derive(Clone, Debug)]
 pub(crate) struct PrefixCode {
-    entries: Vec<Entry>,
-    fast: [Lookup; FAST_LOOKUP_SIZE],
+    fast: Vec<Lookup>,
     fast_bits: u8,
+    fast_mask: u64,
     single_symbol: Option<u16>,
     max_bits: u8,
 }
@@ -39,10 +38,12 @@ impl Lookup {
         Self(((len as u16) << 12) | symbol)
     }
 
+    #[inline(always)]
     const fn len(self) -> u8 {
         (self.0 >> 12) as u8
     }
 
+    #[inline(always)]
     const fn symbol(self) -> u16 {
         self.0 & Self::SYMBOL_MASK
     }
@@ -51,12 +52,22 @@ impl Lookup {
 impl PrefixCode {
     pub(crate) fn single(symbol: u16) -> Self {
         Self {
-            entries: Vec::new(),
-            fast: [Lookup::EMPTY; FAST_LOOKUP_SIZE],
+            fast: Vec::new(),
             fast_bits: 0,
+            fast_mask: 0,
             single_symbol: Some(symbol),
             max_bits: 0,
         }
+    }
+
+    #[inline(always)]
+    pub(crate) const fn single_symbol(&self) -> Option<u16> {
+        self.single_symbol
+    }
+
+    #[inline(always)]
+    pub(crate) const fn max_bits(&self) -> u8 {
+        self.max_bits
     }
 
     pub(crate) fn from_lengths(lengths: &[u8]) -> Result<Self, DecompressError> {
@@ -75,6 +86,18 @@ impl PrefixCode {
             }
         }
 
+        if non_zero > 1 {
+            validate_complete_counts(&counts)?;
+        }
+        Self::from_lengths_prechecked(lengths, counts, non_zero, max_bits)
+    }
+
+    fn from_lengths_prechecked(
+        lengths: &[u8],
+        counts: [u16; MAX_CODE_BITS as usize + 1],
+        non_zero: usize,
+        max_bits: u8,
+    ) -> Result<Self, DecompressError> {
         if non_zero == 0 {
             return Err(BurliError::Format("empty Brotli Huffman code"));
         }
@@ -86,17 +109,6 @@ impl PrefixCode {
             return Ok(Self::single(symbol as u16));
         }
 
-        let mut space = 1_i32 << MAX_CODE_BITS;
-        for bits in 1..=MAX_CODE_BITS {
-            space -= i32::from(counts[usize::from(bits)]) << (MAX_CODE_BITS - bits);
-            if space < 0 {
-                return Err(BurliError::Format("oversubscribed Brotli Huffman code"));
-            }
-        }
-        if space != 0 {
-            return Err(BurliError::Format("incomplete Brotli Huffman code"));
-        }
-
         let mut next_code = [0_u16; MAX_CODE_BITS as usize + 1];
         let mut code = 0_u16;
         for bits in 1..=MAX_CODE_BITS {
@@ -104,9 +116,9 @@ impl PrefixCode {
             next_code[usize::from(bits)] = code;
         }
 
-        let mut entries = Vec::with_capacity(non_zero);
         let fast_bits = max_bits.min(FAST_LOOKUP_BITS);
-        let mut fast = [Lookup::EMPTY; FAST_LOOKUP_SIZE];
+        let fast_mask = (1_u64 << fast_bits) - 1;
+        let mut fast = vec![Lookup::EMPTY; 1 << fast_bits];
         for (symbol, &len) in lengths.iter().enumerate() {
             if len == 0 {
                 continue;
@@ -119,13 +131,67 @@ impl PrefixCode {
                 code,
             };
             fill_fast_lookup(&mut fast, fast_bits, entry);
-            entries.push(entry);
         }
 
         Ok(Self {
-            entries,
             fast,
             fast_bits,
+            fast_mask,
+            single_symbol: None,
+            max_bits,
+        })
+    }
+
+    fn from_simple_lengths(symbol_lengths: &mut [(usize, u8)]) -> Result<Self, DecompressError> {
+        if symbol_lengths.is_empty() {
+            return Err(BurliError::Format("empty Brotli Huffman code"));
+        }
+        symbol_lengths.sort_unstable_by_key(|&(symbol, _)| symbol);
+
+        let mut counts = [0_u16; MAX_CODE_BITS as usize + 1];
+        let mut max_bits = 0_u8;
+        for &(symbol, len) in symbol_lengths.iter() {
+            if symbol > usize::from(u16::MAX) {
+                return Err(BurliError::Format("Brotli Huffman symbol exceeds range"));
+            }
+            if len == 0 || len > MAX_CODE_BITS {
+                return Err(BurliError::Format("Brotli Huffman code length exceeds 15"));
+            }
+            counts[usize::from(len)] += 1;
+            max_bits = max_bits.max(len);
+        }
+
+        if symbol_lengths.len() == 1 {
+            return Ok(Self::single(symbol_lengths[0].0 as u16));
+        }
+
+        validate_complete_counts(&counts)?;
+
+        let mut next_code = [0_u16; MAX_CODE_BITS as usize + 1];
+        let mut code = 0_u16;
+        for bits in 1..=MAX_CODE_BITS {
+            code = (code + counts[usize::from(bits - 1)]) << 1;
+            next_code[usize::from(bits)] = code;
+        }
+
+        let fast_bits = max_bits.min(FAST_LOOKUP_BITS);
+        let fast_mask = (1_u64 << fast_bits) - 1;
+        let mut fast = vec![Lookup::EMPTY; 1 << fast_bits];
+        for &(symbol, len) in symbol_lengths.iter() {
+            let code = next_code[usize::from(len)];
+            next_code[usize::from(len)] += 1;
+            let entry = Entry {
+                symbol: symbol as u16,
+                len,
+                code,
+            };
+            fill_fast_lookup(&mut fast, fast_bits, entry);
+        }
+
+        Ok(Self {
+            fast,
+            fast_bits,
+            fast_mask,
             single_symbol: None,
             max_bits,
         })
@@ -146,55 +212,104 @@ impl PrefixCode {
         read_complex_prefix_code(reader, alphabet_size, hskip)
     }
 
+    #[inline(always)]
     pub(crate) fn decode(&self, reader: &mut BitReader<'_>) -> Result<u16, DecompressError> {
         if let Some(symbol) = self.single_symbol {
             return Ok(symbol);
         }
 
-        if self.fast_bits != 0 && reader.remaining_bits() >= usize::from(self.fast_bits) {
-            let lookup = self.fast[reader.peek_bits(self.fast_bits)? as usize];
-            if lookup.len() != 0 {
-                reader.drop_bits(lookup.len())?;
-                return Ok(lookup.symbol());
-            }
+        self.decode_non_single(reader)
+    }
+
+    #[inline(always)]
+    pub(crate) fn decode_non_single(
+        &self,
+        reader: &mut BitReader<'_>,
+    ) -> Result<u16, DecompressError> {
+        debug_assert!(self.single_symbol.is_none());
+
+        if reader.has_bits(self.fast_bits) {
+            let lookup = self.fast
+                [reader.peek_bits_trusted_with_mask(self.fast_bits, self.fast_mask) as usize];
+            debug_assert!(lookup.len() != 0);
+            reader.drop_bits_trusted(lookup.len());
+            return Ok(lookup.symbol());
         }
 
-        let mut code = 0_u16;
-        for len in 1..=self.max_bits {
-            code = (code << 1) | u16::from(reader.read_bit()?);
-            if let Some(entry) = self
-                .entries
-                .iter()
-                .find(|entry| entry.len == len && entry.code == code)
-            {
-                return Ok(entry.symbol);
-            }
+        self.decode_non_single_with_padded_lookup(reader)
+    }
+
+    #[inline(always)]
+    pub(crate) fn decode_non_single_trusted_fast(&self, reader: &mut BitReader<'_>) -> u16 {
+        debug_assert!(self.single_symbol.is_none());
+        debug_assert!(reader.has_bits(self.fast_bits));
+
+        let lookup =
+            self.fast[reader.peek_bits_trusted_with_mask(self.fast_bits, self.fast_mask) as usize];
+        debug_assert!(lookup.len() != 0);
+        reader.drop_bits_trusted(lookup.len());
+        lookup.symbol()
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn decode_non_single_with_padded_lookup(
+        &self,
+        reader: &mut BitReader<'_>,
+    ) -> Result<u16, DecompressError> {
+        let remaining = reader.remaining_bits();
+        if remaining == 0 {
+            return Err(BurliError::Format("unexpected end of Brotli input"));
         }
 
-        Err(BurliError::Format("invalid Brotli Huffman code"))
+        let available = remaining.min(usize::from(self.fast_bits));
+        let index = reader.peek_bits(available as u8)? as usize;
+        let lookup = self.fast[index];
+        let len = lookup.len();
+        if len == 0 {
+            return Err(BurliError::Format("invalid Brotli Huffman code"));
+        }
+        if usize::from(len) > remaining {
+            return Err(BurliError::Format("unexpected end of Brotli input"));
+        }
+
+        reader.drop_bits(len)?;
+        Ok(lookup.symbol())
     }
 }
 
-fn fill_fast_lookup(fast: &mut [Lookup; FAST_LOOKUP_SIZE], fast_bits: u8, entry: Entry) {
+fn validate_complete_counts(
+    counts: &[u16; MAX_CODE_BITS as usize + 1],
+) -> Result<(), DecompressError> {
+    let mut space = 1_i32 << MAX_CODE_BITS;
+    for bits in 1..=MAX_CODE_BITS {
+        space -= i32::from(counts[usize::from(bits)]) << (MAX_CODE_BITS - bits);
+        if space < 0 {
+            return Err(BurliError::Format("oversubscribed Brotli Huffman code"));
+        }
+    }
+    if space != 0 {
+        return Err(BurliError::Format("incomplete Brotli Huffman code"));
+    }
+    Ok(())
+}
+
+fn fill_fast_lookup(fast: &mut [Lookup], fast_bits: u8, entry: Entry) {
     if entry.len > fast_bits || entry.symbol > Lookup::SYMBOL_MASK {
         return;
     }
 
     let prefix = reverse_low_bits(entry.code, entry.len);
-    let suffix_bits = fast_bits - entry.len;
-    for suffix in 0..(1_usize << suffix_bits) {
-        let index = usize::from(prefix) | (suffix << entry.len);
+    let step = 1_usize << entry.len;
+    let mut index = usize::from(prefix);
+    while index < fast.len() {
         fast[index] = Lookup::new(entry.symbol, entry.len);
+        index += step;
     }
 }
 
-fn reverse_low_bits(mut value: u16, width: u8) -> u16 {
-    let mut reversed = 0_u16;
-    for _ in 0..width {
-        reversed = (reversed << 1) | (value & 1);
-        value >>= 1;
-    }
-    reversed
+fn reverse_low_bits(value: u16, width: u8) -> u16 {
+    value.reverse_bits() >> (u16::BITS as u8 - width)
 }
 
 fn read_simple_prefix_code(
@@ -216,35 +331,33 @@ fn read_simple_prefix_code(
         return Ok(PrefixCode::single(symbols[0] as u16));
     }
 
-    let mut lengths = vec![0_u8; alphabet_size];
+    let mut symbol_lengths = [(0_usize, 0_u8); 4];
     match nsym {
         2 => {
-            let a = symbols[0].min(symbols[1]);
-            let b = symbols[0].max(symbols[1]);
-            lengths[a] = 1;
-            lengths[b] = 1;
+            symbol_lengths[0] = (symbols[0], 1);
+            symbol_lengths[1] = (symbols[1], 1);
         }
         3 => {
-            lengths[symbols[0]] = 1;
-            lengths[symbols[1]] = 2;
-            lengths[symbols[2]] = 2;
+            symbol_lengths[0] = (symbols[0], 1);
+            symbol_lengths[1] = (symbols[1], 2);
+            symbol_lengths[2] = (symbols[2], 2);
         }
         4 => {
             if reader.read_bit()? {
-                lengths[symbols[0]] = 1;
-                lengths[symbols[1]] = 2;
-                lengths[symbols[2]] = 3;
-                lengths[symbols[3]] = 3;
+                symbol_lengths[0] = (symbols[0], 1);
+                symbol_lengths[1] = (symbols[1], 2);
+                symbol_lengths[2] = (symbols[2], 3);
+                symbol_lengths[3] = (symbols[3], 3);
             } else {
-                for symbol in symbols {
-                    lengths[symbol] = 2;
+                for (slot, symbol) in symbol_lengths.iter_mut().zip(symbols) {
+                    *slot = (symbol, 2);
                 }
             }
         }
         _ => unreachable!(),
     }
 
-    PrefixCode::from_lengths(&lengths)
+    PrefixCode::from_simple_lengths(&mut symbol_lengths[..nsym])
 }
 
 fn alphabet_bits(alphabet_size: usize) -> u8 {
@@ -299,7 +412,12 @@ fn read_complex_prefix_code(
     };
 
     let code_lengths = read_symbol_code_lengths(reader, alphabet_size, &code_length_code)?;
-    PrefixCode::from_lengths(&code_lengths)
+    PrefixCode::from_lengths_prechecked(
+        &code_lengths.lengths,
+        code_lengths.counts,
+        code_lengths.non_zero,
+        code_lengths.max_bits,
+    )
 }
 
 fn read_code_length_code_len(reader: &mut BitReader<'_>) -> Result<u8, DecompressError> {
@@ -316,12 +434,32 @@ fn read_code_length_code_len(reader: &mut BitReader<'_>) -> Result<u8, Decompres
     Ok(CODE_LENGTH_PREFIX_VALUE[index])
 }
 
+#[derive(Clone, Debug)]
+struct CodeLengths {
+    lengths: Vec<u8>,
+    counts: [u16; MAX_CODE_BITS as usize + 1],
+    non_zero: usize,
+    max_bits: u8,
+}
+
+#[derive(Clone, Debug)]
+struct CodeLengthStats {
+    counts: [u16; MAX_CODE_BITS as usize + 1],
+    non_zero: usize,
+    max_bits: u8,
+}
+
 fn read_symbol_code_lengths(
     reader: &mut BitReader<'_>,
     alphabet_size: usize,
     code_length_code: &PrefixCode,
-) -> Result<Vec<u8>, DecompressError> {
+) -> Result<CodeLengths, DecompressError> {
     let mut lengths = vec![0_u8; alphabet_size];
+    let mut stats = CodeLengthStats {
+        counts: [0_u16; MAX_CODE_BITS as usize + 1],
+        non_zero: 0,
+        max_bits: 0,
+    };
     let mut cursor = 0_usize;
     let mut space = 1_i32 << MAX_CODE_BITS;
     let mut previous_non_zero = 8_u8;
@@ -333,6 +471,7 @@ fn read_symbol_code_lengths(
                 &mut lengths,
                 &mut cursor,
                 &mut space,
+                &mut stats,
                 &mut previous_non_zero,
                 &mut pending_repeat,
             )?;
@@ -345,6 +484,7 @@ fn read_symbol_code_lengths(
                 &mut lengths,
                 &mut cursor,
                 &mut space,
+                &mut stats,
                 &mut previous_non_zero,
                 &mut pending_repeat,
             )?;
@@ -359,6 +499,9 @@ fn read_symbol_code_lengths(
                 if space < 0 {
                     return Err(BurliError::Format("oversubscribed Brotli Huffman code"));
                 }
+                stats.counts[usize::from(symbol)] += 1;
+                stats.non_zero += 1;
+                stats.max_bits = stats.max_bits.max(symbol);
             }
             continue;
         }
@@ -373,6 +516,7 @@ fn read_symbol_code_lengths(
                     &mut lengths,
                     &mut cursor,
                     &mut space,
+                    &mut stats,
                     &mut previous_non_zero,
                     &mut pending_repeat,
                 )?;
@@ -385,6 +529,7 @@ fn read_symbol_code_lengths(
         &mut lengths,
         &mut cursor,
         &mut space,
+        &mut stats,
         &mut previous_non_zero,
         &mut pending_repeat,
     )?;
@@ -393,7 +538,14 @@ fn read_symbol_code_lengths(
         return Err(BurliError::Format("incomplete Brotli Huffman code"));
     }
 
-    Ok(lengths)
+    lengths.truncate(cursor);
+
+    Ok(CodeLengths {
+        lengths,
+        counts: stats.counts,
+        non_zero: stats.non_zero,
+        max_bits: stats.max_bits,
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -430,6 +582,7 @@ fn apply_pending_repeat(
     lengths: &mut [u8],
     cursor: &mut usize,
     space: &mut i32,
+    stats: &mut CodeLengthStats,
     previous_non_zero: &mut u8,
     pending_repeat: &mut Option<Repeat>,
 ) -> Result<(), DecompressError> {
@@ -457,6 +610,14 @@ fn apply_pending_repeat(
         if *space < 0 {
             return Err(BurliError::Format("oversubscribed Brotli Huffman code"));
         }
+        let count = u16::try_from(repeat.count)
+            .map_err(|_| BurliError::Format("Brotli code length repeat exceeds alphabet"))?;
+        let slot = &mut stats.counts[usize::from(repeat.value)];
+        *slot = slot
+            .checked_add(count)
+            .ok_or(BurliError::Format("Brotli code length repeat overflow"))?;
+        stats.non_zero += repeat.count;
+        stats.max_bits = stats.max_bits.max(repeat.value);
     }
 
     Ok(())
@@ -510,6 +671,18 @@ mod tests {
         assert_eq!(code.decode(&mut reader).unwrap(), 0);
         assert_eq!(code.decode(&mut reader).unwrap(), 2);
         assert_eq!(code.decode(&mut reader).unwrap(), 3);
+    }
+
+    #[test]
+    fn dense_lengths_still_reject_invalid_codes() {
+        assert!(matches!(
+            PrefixCode::from_lengths(&[1, 1, 1]),
+            Err(BurliError::Format("oversubscribed Brotli Huffman code"))
+        ));
+        assert!(matches!(
+            PrefixCode::from_lengths(&[2, 2]),
+            Err(BurliError::Format("incomplete Brotli Huffman code"))
+        ));
     }
 
     #[test]

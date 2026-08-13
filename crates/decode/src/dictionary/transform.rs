@@ -738,13 +738,44 @@ fn uppercase_one(bytes: &mut [u8]) -> Option<usize> {
     Some(3)
 }
 
+fn prefix_suffix_bytes(offset: u8) -> &'static [u8] {
+    let bytes = &kPrefixSuffix[usize::from(offset)..];
+    let len = bytes.iter().position(|&byte| byte == 0).unwrap_or(0);
+    &bytes[..len]
+}
+
 fn push_prefix_suffix(output: &mut alloc::vec::Vec<u8>, offset: u8) {
-    for &byte in &kPrefixSuffix[usize::from(offset)..] {
-        if byte == 0 {
-            break;
-        }
-        output.push(byte);
+    output.extend_from_slice(prefix_suffix_bytes(offset));
+}
+
+fn prefix_suffix_len(offset: u8) -> usize {
+    prefix_suffix_bytes(offset).len()
+}
+
+pub(crate) fn transformed_dictionary_word_len(word_len: usize, transform: usize) -> Option<usize> {
+    let transform = kTransforms.get(transform)?;
+    if transform.prefix_id == kPFix_EMPTY
+        && transform.transform == kIdentity
+        && transform.suffix_id == kPFix_EMPTY
+    {
+        return Some(word_len);
     }
+
+    let mut start = 0_usize;
+    let mut end = word_len;
+    if transform.transform >= kOmitFirst1 {
+        start = usize::from(transform.transform - (kOmitFirst1 - 1)).min(end);
+    }
+    if transform.transform <= kOmitLast9 {
+        end = end.saturating_sub(usize::from(transform.transform));
+    }
+    if start > end {
+        start = end;
+    }
+
+    prefix_suffix_len(transform.prefix_id)
+        .checked_add(end - start)?
+        .checked_add(prefix_suffix_len(transform.suffix_id))
 }
 
 pub(crate) fn transform_dictionary_word(
@@ -753,6 +784,14 @@ pub(crate) fn transform_dictionary_word(
     transform: usize,
 ) -> Option<()> {
     let transform = kTransforms.get(transform)?;
+    if transform.prefix_id == kPFix_EMPTY
+        && transform.transform == kIdentity
+        && transform.suffix_id == kPFix_EMPTY
+    {
+        output.extend_from_slice(word);
+        return Some(());
+    }
+
     push_prefix_suffix(output, transform.prefix_id);
 
     let mut start = 0_usize;

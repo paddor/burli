@@ -180,6 +180,7 @@ struct Args {
     files: Option<HashSet<String>>,
     small_only: bool,
     profile_encode_only: bool,
+    profile_decode_only: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -198,6 +199,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for input in &inputs {
                 if args.profile_encode_only {
                     profile_encode_only(&codec, input, *quality)?;
+                    continue;
+                }
+                if args.profile_decode_only {
+                    profile_decode_only(&codec, input, *quality)?;
                     continue;
                 }
                 match bench_codec(&codec, input, *quality) {
@@ -229,6 +234,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         files: None,
         small_only: false,
         profile_encode_only: false,
+        profile_decode_only: false,
     };
 
     let mut iter = std::env::args().skip(1);
@@ -256,6 +262,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             }
             "--small-only" => args.small_only = true,
             "--profile-encode-only" => args.profile_encode_only = true,
+            "--profile-decode-only" => args.profile_decode_only = true,
             other => return Err(format!("unknown arg: {other}").into()),
         }
     }
@@ -368,6 +375,27 @@ fn profile_encode_only(
     Ok(())
 }
 
+fn profile_decode_only(
+    codec: &str,
+    input: &BenchInput,
+    quality: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let compressed = compress_codec(codec, &input.data, quality)?;
+    verify_decodes(codec, &compressed, input)?;
+    let decompress_ns = bench_decompress(codec, &compressed, input.data.len())?;
+    let mbs = input.data.len() as f64 / decompress_ns * 1000.0;
+    println!(
+        "{} q{} {}: {} <- {} bytes, decode {:.1} MB/s",
+        codec_label(codec),
+        quality,
+        input.name,
+        input.data.len(),
+        compressed.len(),
+        mbs
+    );
+    Ok(())
+}
+
 fn bench_codec(
     codec: &str,
     input: &BenchInput,
@@ -382,24 +410,15 @@ fn bench_codec(
 
     let compress_ns = bench_compress(codec, &input.data, quality)?;
 
-    let decompress_ns = bench_loop(1, 100_000_000, 3, || match codec {
-        "burli" => {
-            let _ = burli_decompress(&compressed);
-        }
-        "google-brotli" => {
-            let _ = google_brotli_decompress(&compressed, input.data.len());
-        }
-        "rust-brotli" => {
-            let _ = rust_brotli_decompress(&compressed);
-        }
-        _ => unreachable!(),
-    });
+    let decompress_ns = bench_decompress(codec, &compressed, input.data.len())?;
 
+    let encoded_by = encoded_by_label(codec);
+    let decoded_by = decoded_by_label(codec);
     let codec = codec_label(codec);
     Ok(Some(BenchResult {
         codec: codec.clone(),
-        encoded_by: codec.clone(),
-        decoded_by: codec.clone(),
+        encoded_by,
+        decoded_by,
         input: input.name.clone(),
         quality,
         input_size: input.data.len(),
@@ -412,6 +431,28 @@ fn bench_codec(
     }))
 }
 
+fn bench_decompress(
+    codec: &str,
+    compressed: &[u8],
+    decoded_len: usize,
+) -> Result<f64, Box<dyn std::error::Error>> {
+    match codec {
+        "burli" => Ok(bench_loop(1, 100_000_000, 3, || {
+            let _ = burli_decompress_with_limit(compressed, decoded_len);
+        })),
+        "google-brotli" => Ok(bench_loop(1, 100_000_000, 3, || {
+            let _ = google_brotli_decompress(compressed, decoded_len);
+        })),
+        "google-brotli-burli" => Ok(bench_loop(1, 100_000_000, 3, || {
+            let _ = burli_decompress_with_limit(compressed, decoded_len);
+        })),
+        "rust-brotli" => Ok(bench_loop(1, 100_000_000, 3, || {
+            let _ = rust_brotli_decompress(compressed);
+        })),
+        other => Err(format!("unknown impl: {other}").into()),
+    }
+}
+
 fn compress_codec(
     codec: &str,
     input: &[u8],
@@ -420,6 +461,7 @@ fn compress_codec(
     match codec {
         "burli" => burli_compress(input, quality).map_err(Into::into),
         "google-brotli" => google_brotli_compress(input, quality),
+        "google-brotli-burli" => google_brotli_compress(input, quality),
         "rust-brotli" => rust_brotli_compress(input, quality),
         other => Err(format!("unknown impl: {other}").into()),
     }
@@ -437,6 +479,9 @@ fn bench_compress(
         "google-brotli" => Ok(bench_loop(1, 100_000_000, 3, || {
             let _ = google_brotli_compress(input, quality);
         })),
+        "google-brotli-burli" => Ok(bench_loop(1, 100_000_000, 3, || {
+            let _ = google_brotli_compress(input, quality);
+        })),
         "rust-brotli" => Ok(bench_loop(1, 100_000_000, 3, || {
             let _ = rust_brotli_compress(input, quality);
         })),
@@ -452,6 +497,7 @@ fn verify_decodes(
     let decoded = match codec {
         "burli" => burli_decompress(compressed)?,
         "google-brotli" => google_brotli_decompress(compressed, input.data.len())?,
+        "google-brotli-burli" => burli_decompress(compressed)?,
         "rust-brotli" => rust_brotli_decompress(compressed)?,
         _ => unreachable!(),
     };
@@ -473,6 +519,13 @@ fn burli_compress(input: &[u8], quality: u8) -> Result<Vec<u8>, burli::BurliErro
 
 fn burli_decompress(input: &[u8]) -> Result<Vec<u8>, burli::BurliError> {
     burli::decompress(input)
+}
+
+fn burli_decompress_with_limit(
+    input: &[u8],
+    decoded_len: usize,
+) -> Result<Vec<u8>, burli::BurliError> {
+    burli::decompress_with_limit(input, decoded_len)
 }
 
 fn google_brotli_compress(
@@ -540,6 +593,7 @@ fn rust_brotli_decompress(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::E
 }
 
 fn bench_loop<F: FnMut()>(warmup: usize, target_ns: u64, rounds: usize, mut f: F) -> f64 {
+    let target_ns = bench_target_ns(target_ns);
     for _ in 0..warmup {
         f();
     }
@@ -560,6 +614,14 @@ fn bench_loop<F: FnMut()>(warmup: usize, target_ns: u64, rounds: usize, mut f: F
         best = best.min(ns_per_op);
     }
     best
+}
+
+fn bench_target_ns(default: u64) -> u64 {
+    std::env::var("BURLI_BENCH_TARGET_NS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|&value| value != 0)
+        .unwrap_or(default)
 }
 
 fn cpu_nanos() -> u64 {
@@ -618,6 +680,20 @@ fn codec_label(codec: &str) -> String {
         "burli paranoid".to_owned()
     } else {
         codec.to_owned()
+    }
+}
+
+fn encoded_by_label(codec: &str) -> String {
+    match codec {
+        "google-brotli-burli" => "google-brotli".to_owned(),
+        _ => codec_label(codec),
+    }
+}
+
+fn decoded_by_label(codec: &str) -> String {
+    match codec {
+        "google-brotli-burli" => "burli".to_owned(),
+        _ => codec_label(codec),
     }
 }
 

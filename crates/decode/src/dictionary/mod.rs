@@ -1,24 +1,65 @@
 use alloc::vec::Vec;
 
-use burli_core::{BurliError, DecompressError};
-
-mod data;
-mod transform;
-
-use data::{
-    kBrotliDictionary, kBrotliDictionaryOffsetsByLength, kBrotliDictionarySizeBitsByLength,
-    kBrotliMaxDictionaryWordLength, kBrotliMinDictionaryWordLength,
+use burli_core::{
+    BurliError, DecompressError,
+    dictionary::{
+        kBrotliDictionary, kBrotliDictionaryOffsetsByLength, kBrotliDictionarySizeBitsByLength,
+        kBrotliMaxDictionaryWordLength, kBrotliMinDictionaryWordLength,
+    },
 };
-use transform::transform_dictionary_word;
 
+mod transform;
+use transform::{transform_dictionary_word, transformed_dictionary_word_len};
+
+pub(crate) fn append_lookup(
+    output: &mut Vec<u8>,
+    distance: usize,
+    max_allowed_distance: usize,
+    copy_len: usize,
+    needed: usize,
+) -> Result<(), DecompressError> {
+    let (word, transform_index) = lookup_word(distance, max_allowed_distance, copy_len)?;
+    let transformed_len = transformed_dictionary_word_len(word.len(), transform_index)
+        .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
+    let end = output
+        .len()
+        .checked_add(transformed_len)
+        .ok_or(BurliError::Format("Brotli dictionary copy length overflow"))?;
+    if end > needed {
+        return Err(BurliError::Format(
+            "Brotli dictionary copy exceeds meta-block size",
+        ));
+    }
+    transform_dictionary_word(output, word, transform_index)
+        .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
+    debug_assert_eq!(output.len(), end);
+    Ok(())
+}
+
+#[cfg(any(test, kani))]
 pub(crate) fn lookup(
     distance: usize,
     max_allowed_distance: usize,
     copy_len: usize,
 ) -> Result<Vec<u8>, DecompressError> {
+    let (word, transform_index) = lookup_word(distance, max_allowed_distance, copy_len)?;
+    let transformed_len = transformed_dictionary_word_len(word.len(), transform_index)
+        .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
+    let mut output = Vec::with_capacity(transformed_len);
+
+    transform_dictionary_word(&mut output, word, transform_index)
+        .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
+    Ok(output)
+}
+
+fn lookup_word(
+    distance: usize,
+    max_allowed_distance: usize,
+    copy_len: usize,
+) -> Result<(&'static [u8], usize), DecompressError> {
     let min_len = usize::from(kBrotliMinDictionaryWordLength);
     let max_len = usize::from(kBrotliMaxDictionaryWordLength);
-    if !(min_len..=max_len).contains(&copy_len) {
+    if copy_len < min_len || copy_len > max_len {
         return Err(BurliError::Format("invalid Brotli dictionary word length"));
     }
     if distance <= max_allowed_distance {
@@ -40,11 +81,7 @@ pub(crate) fn lookup(
     let word = kBrotliDictionary
         .get(offset..end)
         .ok_or(BurliError::Format("Brotli dictionary word out of bounds"))?;
-    let mut output = Vec::with_capacity(copy_len + 16);
-
-    transform_dictionary_word(&mut output, word, transform_index)
-        .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
-    Ok(output)
+    Ok((word, transform_index))
 }
 
 #[cfg(test)]

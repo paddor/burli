@@ -302,7 +302,9 @@ impl Workspace {
                     insert_start: 0,
                     insert_len: input.len(),
                     copy_len: 0,
+                    copy_len_code: 0,
                     distance: 0,
+                    distance_code: None,
                     use_last_distance: false,
                 },
             )?;
@@ -340,7 +342,9 @@ impl Workspace {
                         insert_start,
                         insert_len: pos - insert_start,
                         copy_len,
+                        copy_len_code: 0,
                         distance,
+                        distance_code: None,
                         use_last_distance: false,
                     };
                     token.use_last_distance = distance
@@ -371,7 +375,9 @@ impl Workspace {
                     insert_start,
                     insert_len: input.len() - insert_start,
                     copy_len: 0,
+                    copy_len_code: 0,
                     distance: 0,
+                    distance_code: None,
                     use_last_distance: false,
                 },
             )?;

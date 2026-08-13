@@ -31,25 +31,24 @@ impl<'a> BitReader<'a> {
         (self.input.len() * 8).saturating_sub(self.bit_pos)
     }
 
+    #[inline(always)]
+    pub fn has_bits(&self, width: u8) -> bool {
+        let total_bits = self.input.len() * 8;
+        self.bit_pos <= total_bits && total_bits - self.bit_pos >= usize::from(width)
+    }
+
     pub const fn is_byte_aligned(&self) -> bool {
         self.bit_pos.is_multiple_of(8)
     }
 
+    #[inline(always)]
     pub fn read_bit(&mut self) -> Result<bool> {
         Ok(self.read_bits(1)? != 0)
     }
 
+    #[inline(always)]
     pub fn read_bits(&mut self, width: u8) -> Result<u64> {
-        let value = self.peek_bits(width)?;
-        self.drop_bits(width)?;
-        Ok(value)
-    }
-
-    pub fn peek_bits(&self, width: u8) -> Result<u64> {
-        if width > MAX_BITS_PER_OP {
-            return Err(BurliError::Format("bit read width exceeds 56 bits"));
-        }
-
+        Self::validate_bit_width(width, "bit read width exceeds 56 bits")?;
         let width = usize::from(width);
         if self.remaining_bits() < width {
             return Err(BurliError::Format("unexpected end of Brotli input"));
@@ -58,30 +57,101 @@ impl<'a> BitReader<'a> {
             return Ok(0);
         }
 
-        let mut value = 0_u64;
+        let value = self.peek_bits_unchecked(width);
+        self.bit_pos += width;
+        Ok(value)
+    }
+
+    #[inline(always)]
+    pub fn peek_bits(&self, width: u8) -> Result<u64> {
+        Self::validate_bit_width(width, "bit read width exceeds 56 bits")?;
+        let width = usize::from(width);
+        if self.remaining_bits() < width {
+            return Err(BurliError::Format("unexpected end of Brotli input"));
+        }
+        if width == 0 {
+            return Ok(0);
+        }
+
+        Ok(self.peek_bits_unchecked(width))
+    }
+
+    #[inline(always)]
+    fn peek_bits_unchecked(&self, width: usize) -> u64 {
+        debug_assert!(width <= usize::from(MAX_BITS_PER_OP));
+        debug_assert!(self.remaining_bits() >= width);
+        debug_assert!(width != 0);
+        self.peek_bits_unchecked_with_mask(width, (1_u64 << width) - 1)
+    }
+
+    #[inline(always)]
+    fn peek_bits_unchecked_with_mask(&self, width: usize, mask: u64) -> u64 {
+        debug_assert!(width <= usize::from(MAX_BITS_PER_OP));
+        debug_assert!(self.remaining_bits() >= width);
+        debug_assert!(width != 0);
+
         let byte_pos = self.bit_pos / 8;
         let bit_offset = self.bit_pos % 8;
+        let mut value = if let Some(bytes) = self.input[byte_pos..].first_chunk::<8>() {
+            u64::from_le_bytes(*bytes)
+        } else {
+            self.peek_bits_tail(byte_pos, bit_offset, width)
+        };
+
+        value >>= bit_offset;
+        value & mask
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn peek_bits_tail(&self, byte_pos: usize, bit_offset: usize, width: usize) -> u64 {
         let byte_count = (bit_offset + width).div_ceil(8);
         let bytes = &self.input[byte_pos..byte_pos + byte_count];
+        let mut value = 0_u64;
         for (index, &byte) in bytes.iter().enumerate() {
             value |= u64::from(byte) << (index * 8);
         }
-
-        value >>= bit_offset;
-        Ok(value & ((1_u64 << width) - 1))
+        value
     }
 
+    #[inline(always)]
     pub fn drop_bits(&mut self, width: u8) -> Result<()> {
-        if width > MAX_BITS_PER_OP {
-            return Err(BurliError::Format("bit drop width exceeds 56 bits"));
-        }
-
+        Self::validate_bit_width(width, "bit drop width exceeds 56 bits")?;
         let width = usize::from(width);
         if self.remaining_bits() < width {
             return Err(BurliError::Format("unexpected end of Brotli input"));
         }
 
         self.bit_pos += width;
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn peek_bits_trusted(&self, width: u8) -> u64 {
+        let width = usize::from(width);
+        self.peek_bits_unchecked(width)
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn peek_bits_trusted_with_mask(&self, width: u8, mask: u64) -> u64 {
+        self.peek_bits_unchecked_with_mask(usize::from(width), mask)
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn drop_bits_trusted(&mut self, width: u8) {
+        debug_assert!(width <= MAX_BITS_PER_OP);
+        debug_assert!(self.remaining_bits() >= usize::from(width));
+        self.bit_pos += usize::from(width);
+    }
+
+    #[inline(always)]
+    fn validate_bit_width(width: u8, message: &'static str) -> Result<()> {
+        if width > MAX_BITS_PER_OP {
+            return Err(BurliError::Format(message));
+        }
         Ok(())
     }
 
@@ -204,11 +274,37 @@ impl BitWriter {
         let mask = (1_u64 << width) - 1;
         self.bit_buffer |= (value & mask) << self.bit_count;
         self.bit_count += width as u8;
-        while self.bit_count >= 8 {
-            self.output.push(self.bit_buffer as u8);
-            self.bit_buffer >>= 8;
-            self.bit_count -= 8;
+        self.flush_full_bytes();
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn write_bits_trusted_fits(&mut self, width: u8, value: u64) {
+        debug_assert!(width <= MAX_BITS_PER_OP);
+        debug_assert!(width == 0 || value < (1_u64 << width));
+        let width = usize::from(width);
+        if width == 0 {
+            return;
         }
+        debug_assert!(self.bit_len.checked_add(width).is_some());
+
+        self.bit_len = self.bit_len.wrapping_add(width);
+        self.bit_buffer |= value << self.bit_count;
+        self.bit_count += width as u8;
+        self.flush_full_bytes();
+    }
+
+    #[inline(always)]
+    fn flush_full_bytes(&mut self) {
+        let byte_count = self.bit_count / 8;
+        if byte_count == 0 {
+            return;
+        }
+        let bytes = self.bit_buffer.to_le_bytes();
+        self.output
+            .extend_from_slice(&bytes[..usize::from(byte_count)]);
+        self.bit_buffer >>= byte_count * 8;
+        self.bit_count -= byte_count * 8;
     }
 
     pub fn align_to_byte(&mut self) -> Result<()> {
