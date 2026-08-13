@@ -23,6 +23,7 @@ const SCORE_BASE: usize = DISTANCE_BIT_PENALTY * 8 * core::mem::size_of::<usize>
 const MIN_SCORE: usize = SCORE_BASE + 100;
 const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
+const LONG_MATCH_STORE_THRESHOLD: usize = 64;
 const CUTOFF_TRANSFORMS_COUNT: usize = 10;
 const CUTOFF_TRANSFORMS: u64 = 0x071b_520a_da2d_3200;
 
@@ -335,7 +336,12 @@ fn skip_sparse(
 }
 
 fn store_range(input: &[u8], table: &mut [u32], start: usize, end: usize) {
-    for pos in (start..end).step_by(2) {
+    let step = if end.saturating_sub(start) >= LONG_MATCH_STORE_THRESHOLD {
+        4
+    } else {
+        2
+    };
+    for pos in (start..end).step_by(step) {
         let key = table_key(input, pos, table);
         table[key] = pos as u32;
     }
