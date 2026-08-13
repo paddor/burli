@@ -516,10 +516,16 @@ impl Workspace {
                 let distance = pos - candidate;
                 let max_copy_len =
                     (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
-                let copy_len = match_len(input, candidate, pos, max_copy_len);
-                if copy_len < min_match {
+                if max_copy_len < min_match {
                     break;
                 }
+                let copy_len = min_match
+                    + match_len(
+                        input,
+                        candidate + min_match,
+                        pos + min_match,
+                        max_copy_len - min_match,
+                    );
 
                 self.batch.push_copy(
                     input,
@@ -732,10 +738,10 @@ fn collect_with_u32_table_m6<const TABLE_BITS: usize>(
         loop {
             let distance = pos - candidate;
             let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
-            let copy_len = match_len(input, candidate, pos, max_copy_len);
-            if copy_len < 6 {
+            if max_copy_len < 6 {
                 break;
             }
+            let copy_len = 6 + match_len(input, candidate + 6, pos + 6, max_copy_len - 6);
 
             batch.push_copy(
                 input,
@@ -810,10 +816,10 @@ fn collect_with_u16_table_m4<const TABLE_BITS: usize>(
         loop {
             let distance = pos - candidate;
             let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
-            let copy_len = match_len(input, candidate, pos, max_copy_len);
-            if copy_len < 4 {
+            if max_copy_len < 4 {
                 break;
             }
+            let copy_len = 4 + match_len(input, candidate + 4, pos + 4, max_copy_len - 4);
 
             batch.push_copy(
                 input,
