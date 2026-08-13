@@ -29,6 +29,7 @@ const MAX_DELAYED_SYMBOLS: usize = 0x2fff;
 const Q4_DELAYED_SYMBOLS: usize = 3840;
 const Q5_DELAYED_SYMBOLS: usize = 3584;
 const Q0_DIRECT_MAX_INPUT: usize = 384;
+const Q0_STATIC_ENTROPY_MAX_INPUT: usize = 640;
 const Q1_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
 const Q2_MEDIUM_H3_MIN_INPUT: usize = 8 * 1024;
 const Q2_MEDIUM_H3_MAX_INPUT: usize = 128 * 1024;
@@ -260,6 +261,20 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::FastOnePass {
+            if input.len() <= Q0_STATIC_ENTROPY_MAX_INPUT && input.len() > Q0_DIRECT_MAX_INPUT {
+                let tokens =
+                    q2::collect_without_dictionary(input, max_backward_distance, &mut workspace.q2);
+                if !tokens.iter().any(|token| token.is_copy()) {
+                    return write_compressed_literal_meta_block(writer, input);
+                }
+                return write_token_batches_with_symbol_limit(
+                    writer,
+                    input,
+                    &tokens,
+                    MAX_DELAYED_SYMBOLS,
+                );
+            }
+
             if input.len() > Q0_DIRECT_MAX_INPUT {
                 let has_copy = {
                     let batch = q1::collect(input, max_backward_distance, &mut workspace.q1)?;
@@ -2730,6 +2745,27 @@ mod tests {
 
         assert!(encoded.len() * 20 < input.len());
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q0_round_trips_non_power_input_lengths() {
+        for len in [
+            257_usize, 383, 384, 385, 511, 512, 513, 639, 640, 641, 717, 1023, 1024, 1025,
+        ] {
+            let mut input = Vec::with_capacity(len);
+            while input.len() < len {
+                input.extend_from_slice(
+                    b"<section data-kind=\"bench\">alpha beta gamma</section>\n",
+                );
+                input.extend_from_slice(b"const render = value => value + 17;\n");
+            }
+            input.truncate(len);
+
+            let encoded =
+                compress_with_options(&input, &Options::default().quality(0).unwrap()).unwrap();
+
+            assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+        }
     }
 
     #[test]
