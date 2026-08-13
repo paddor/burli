@@ -78,13 +78,8 @@ pub(crate) fn write_stream_chunk(
             "only q0..q5 Brotli encoding is implemented yet",
         ));
     }
-    let max_backward_distance = (1_usize << options.window_bits_value()) - 16;
-    write_compressed_chunk(
-        writer,
-        input,
-        options.quality_value(),
-        max_backward_distance.min(input.len()),
-    )
+    let plan = EncoderPlan::from_options(input.len(), options)?;
+    plan.write_meta_block(writer, input)
 }
 
 fn max_literal_only_size(input_len: usize) -> usize {
@@ -116,52 +111,147 @@ fn write_compressed_meta_blocks(
     input: &[u8],
     options: &Options,
 ) -> Result<(), CompressError> {
-    let max_backward_distance = (1_usize << options.window_bits_value()) - 16;
-    let block_size = match options.block_bits_value() {
-        Some(bits) => 1_usize << bits,
-        None if options.quality_value() == 0 && input.len() <= max_backward_distance => {
-            MAX_META_BLOCK_SIZE
-        }
-        None => 1_usize << MIN_BLOCK_BITS,
-    }
-    .min(MAX_META_BLOCK_SIZE);
+    let plan = EncoderPlan::from_options(input.len(), options)?;
 
-    for chunk in input.chunks(block_size) {
-        write_compressed_chunk(
-            writer,
-            chunk,
-            options.quality_value(),
-            max_backward_distance.min(chunk.len()),
-        )?;
+    for chunk in input.chunks(plan.block_size) {
+        plan.write_meta_block(writer, chunk)?;
     }
 
     Ok(())
 }
 
-fn write_compressed_chunk(
-    writer: &mut BitWriter,
-    input: &[u8],
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EncoderPlan {
     quality: u8,
+    path: EncoderPath,
+    block_size: usize,
     max_backward_distance: usize,
-) -> Result<(), CompressError> {
-    if input.len() < min_match_len(quality) {
-        return write_compressed_literal_meta_block(writer, input);
+}
+
+impl EncoderPlan {
+    fn from_options(input_len: usize, options: &Options) -> Result<Self, CompressError> {
+        let quality = options.quality_value();
+        if quality > MAX_LITERAL_ONLY_QUALITY {
+            return Err(BurliError::Unsupported(
+                "only q0..q5 Brotli encoding is implemented yet",
+            ));
+        }
+
+        let max_backward_distance = (1_usize << options.window_bits_value()) - 16;
+        let block_size = match options.block_bits_value() {
+            Some(bits) => 1_usize << bits,
+            None if quality == 0 && input_len <= max_backward_distance => MAX_META_BLOCK_SIZE,
+            None => 1_usize << MIN_BLOCK_BITS,
+        }
+        .min(MAX_META_BLOCK_SIZE);
+
+        Ok(Self {
+            quality,
+            path: EncoderPath::for_quality(quality),
+            block_size,
+            max_backward_distance,
+        })
     }
 
-    if quality == 0 {
-        let mut batch = collect_prepared_tokens_q0(input, max_backward_distance)?;
-        if !batch.has_copy {
+    fn write_meta_block(self, writer: &mut BitWriter, input: &[u8]) -> Result<(), CompressError> {
+        let max_backward_distance = self.max_backward_distance.min(input.len());
+        if input.len() < self.path.min_match_len() {
             return write_compressed_literal_meta_block(writer, input);
         }
-        batch.ensure_distance_frequencies();
-        return write_prepared_token_batch_with_len(writer, input, &batch, input.len());
+
+        let commands =
+            ParsedCommands::collect(input, self.path, self.quality, max_backward_distance)?;
+        if !commands.has_copy() {
+            return write_compressed_literal_meta_block(writer, input);
+        }
+        commands.write(writer, input, input.len())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EncoderPath {
+    FastOnePass,
+    FastTwoPass,
+    StaticEntropy,
+    RegularNoSplit,
+    RegularSplit,
+    ContextModeled,
+}
+
+impl EncoderPath {
+    const fn for_quality(quality: u8) -> Self {
+        match quality {
+            0 => Self::FastOnePass,
+            1 => Self::FastTwoPass,
+            2 => Self::StaticEntropy,
+            3 => Self::RegularNoSplit,
+            4 => Self::RegularSplit,
+            _ => Self::ContextModeled,
+        }
     }
 
-    let tokens = collect_tokens(input, quality, max_backward_distance);
-    if tokens.iter().all(|token| token.copy_len == 0) {
-        return write_compressed_literal_meta_block(writer, input);
+    const fn min_match_len(self) -> usize {
+        match self {
+            Self::FastOnePass => 5,
+            Self::FastTwoPass => min_match_len(1),
+            Self::StaticEntropy => min_match_len(2),
+            Self::RegularNoSplit => min_match_len(3),
+            Self::RegularSplit => min_match_len(4),
+            Self::ContextModeled => min_match_len(5),
+        }
     }
-    write_token_batches(writer, input, &tokens)
+}
+
+#[derive(Clone, Debug)]
+enum ParsedCommands {
+    Prepared(PreparedBatch),
+    Tokens(Vec<Token>),
+}
+
+impl ParsedCommands {
+    fn collect(
+        input: &[u8],
+        path: EncoderPath,
+        quality: u8,
+        max_backward_distance: usize,
+    ) -> Result<Self, CompressError> {
+        match path {
+            EncoderPath::FastOnePass => {
+                collect_prepared_tokens_q0(input, max_backward_distance).map(Self::Prepared)
+            }
+            EncoderPath::FastTwoPass
+            | EncoderPath::StaticEntropy
+            | EncoderPath::RegularNoSplit
+            | EncoderPath::RegularSplit
+            | EncoderPath::ContextModeled => Ok(Self::Tokens(collect_tokens(
+                input,
+                quality,
+                max_backward_distance,
+            ))),
+        }
+    }
+
+    fn has_copy(&self) -> bool {
+        match self {
+            Self::Prepared(batch) => batch.has_copy,
+            Self::Tokens(tokens) => tokens.iter().any(|token| token.is_copy()),
+        }
+    }
+
+    fn write(
+        mut self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        block_len: usize,
+    ) -> Result<(), CompressError> {
+        match &mut self {
+            Self::Prepared(batch) => {
+                batch.ensure_distance_frequencies();
+                write_prepared_token_batch_with_len(writer, input, batch, block_len)
+            }
+            Self::Tokens(tokens) => write_token_batches(writer, input, tokens),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -229,10 +319,6 @@ impl PreparedBatch {
 }
 
 fn collect_tokens(input: &[u8], quality: u8, max_backward_distance: usize) -> Vec<Token> {
-    if quality == 0 {
-        return collect_tokens_q0(input, max_backward_distance);
-    }
-
     let table_size = hash_table_size(quality);
     let mut table = vec![usize::MAX; table_size];
     let table_mask = table_size - 1;
@@ -276,88 +362,6 @@ fn collect_tokens(input: &[u8], quality: u8, max_backward_distance: usize) -> Ve
         }
 
         pos += 1;
-    }
-
-    if insert_start < input.len() {
-        tokens.push(Token {
-            insert_start,
-            insert_len: input.len() - insert_start,
-            copy_len: 0,
-            distance: 0,
-            use_last_distance: false,
-        });
-    }
-
-    mark_last_distance_tokens(&mut tokens);
-    tokens
-}
-
-fn collect_tokens_q0(input: &[u8], max_backward_distance: usize) -> Vec<Token> {
-    const TABLE_SIZE: usize = 1 << 15;
-    const TABLE_MASK: usize = TABLE_SIZE - 1;
-    const HASH_SHIFT: usize = 49;
-    const EMPTY: u32 = u32::MAX;
-
-    if input.len() < 8 {
-        return vec![Token {
-            insert_start: 0,
-            insert_len: input.len(),
-            copy_len: 0,
-            distance: 0,
-            use_last_distance: false,
-        }];
-    }
-
-    let mut table = vec![EMPTY; TABLE_SIZE];
-    let mut tokens = Vec::with_capacity(input.len() / 32);
-    let mut pos = 0;
-    let mut insert_start = 0;
-    let mut last_distance = None;
-    let mut word = read_u64_le(input, 0);
-
-    while pos + 8 <= input.len() {
-        let key = hash_word_q0(word, HASH_SHIFT) & TABLE_MASK;
-        let previous = table[key];
-        table[key] = pos as u32;
-
-        let previous = last_distance
-            .filter(|&distance| pos >= distance && is_match5(input, pos - distance, pos))
-            .map(|distance| pos - distance)
-            .or_else(|| {
-                (previous != EMPTY)
-                    .then_some(previous as usize)
-                    .filter(|&previous| {
-                        pos - previous <= max_backward_distance && is_match5(input, previous, pos)
-                    })
-            });
-
-        if let Some(previous) = previous {
-            let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
-            let copy_len = match_len(input, previous, pos, max_copy_len);
-            if copy_len >= 5 {
-                let distance = pos - previous;
-                tokens.push(Token {
-                    insert_start,
-                    insert_len: pos - insert_start,
-                    copy_len,
-                    distance,
-                    use_last_distance: false,
-                });
-                store_match_range_q0(input, &mut table, pos + 1, copy_len.saturating_sub(1));
-                pos += copy_len;
-                insert_start = pos;
-                last_distance = Some(distance);
-                if pos + 8 <= input.len() {
-                    word = read_u64_le(input, pos);
-                }
-                continue;
-            }
-        }
-
-        pos += 1;
-        if pos + 8 <= input.len() {
-            word = next_hash_word(word, input[pos + 7]);
-        }
     }
 
     if insert_start < input.len() {
@@ -572,7 +576,7 @@ fn push_unique(symbols: &mut Vec<u16>, symbol: u16) {
     }
 }
 
-fn min_match_len(quality: u8) -> usize {
+const fn min_match_len(quality: u8) -> usize {
     match quality {
         0 => 5,
         1 => 64,

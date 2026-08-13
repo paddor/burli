@@ -69,11 +69,15 @@ fn c_brotli_q0_to_q5_decode_through_burli() {
 #[test]
 fn burli_q0_to_q5_decode_through_c_brotli() {
     for quality in 0..=5 {
-        for input in representative_inputs() {
+        for (index, input) in representative_inputs().into_iter().enumerate() {
             let encoded = burli::compress(&input, quality).unwrap();
 
-            let decoded = c_brotli_decompress(&encoded, input.len())
-                .unwrap_or_else(|| panic!("burli q{quality} failed in C decoder"));
+            let decoded = c_brotli_decompress(&encoded, input.len()).unwrap_or_else(|| {
+                panic!(
+                    "burli q{quality} representative {index} len {} failed in C decoder",
+                    input.len()
+                )
+            });
             assert_bytes_eq(
                 &decoded,
                 &input,
