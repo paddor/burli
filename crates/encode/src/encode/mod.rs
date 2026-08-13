@@ -30,6 +30,7 @@ const Q4_DELAYED_SYMBOLS: usize = 3840;
 const Q5_DELAYED_SYMBOLS: usize = 3584;
 const Q0_DIRECT_MAX_INPUT: usize = 384;
 const Q1_STATIC_ENTROPY_MAX_INPUT: usize = 384;
+const Q4_TINY_CONTEXT_MAX_INPUT: usize = 768;
 const STATIC_CODE_LENGTH_DEPTH: [u8; CODE_LENGTH_ALPHABET_SIZE] =
     [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 0, 4, 4];
 const STATIC_CODE_LENGTH_BITS: [u16; CODE_LENGTH_ALPHABET_SIZE] =
@@ -341,6 +342,18 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::RegularSplit {
+            if input.len() <= Q4_TINY_CONTEXT_MAX_INPUT {
+                let tokens = q5::collect(input, max_backward_distance, &mut workspace.q5);
+                if !tokens.iter().any(|token| token.is_copy()) {
+                    return write_compressed_literal_meta_block(writer, input);
+                }
+                return write_regular_token_batches_with_symbol_limit(
+                    writer,
+                    input,
+                    &tokens,
+                    Q5_DELAYED_SYMBOLS,
+                );
+            }
             let tokens = q4::collect(input, max_backward_distance, &mut workspace.q4);
             if !tokens.iter().any(|token| token.is_copy()) {
                 return write_compressed_literal_meta_block(writer, input);
