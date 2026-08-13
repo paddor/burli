@@ -6,8 +6,8 @@ use burli_core::{
 };
 
 use super::{
-    LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE, PrefixCodeScratch, match_len, read_u32_le,
-    read_u64_le, write_block_and_context_header,
+    COMMAND_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE, PrefixCodeScratch,
+    match_len, read_u32_le, read_u64_le, write_block_and_context_header,
     write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits, write_meta_block_len,
     write_q1_internal_command_prefix_codes,
 };
@@ -264,6 +264,8 @@ impl Batch {
         if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
             return Err(BurliError::Format("invalid compressed Brotli block size"));
         }
+
+        prefix.reserve_for(LITERAL_ALPHABET_SIZE, COMMAND_ALPHABET_SIZE);
 
         write_meta_block_len(writer, block_len)?;
         write_block_and_context_header(writer)?;

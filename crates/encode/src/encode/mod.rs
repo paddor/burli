@@ -50,6 +50,30 @@ struct PrefixCodeScratch {
     tree: Vec<u16>,
 }
 
+impl PrefixCodeScratch {
+    fn reserve_for(&mut self, frequency_symbols: usize, tree_symbols: usize) {
+        self.used
+            .reserve(frequency_symbols.saturating_sub(self.used.capacity()));
+        self.nodes.reserve(
+            frequency_symbols
+                .saturating_mul(2)
+                .saturating_sub(1)
+                .saturating_sub(self.nodes.capacity()),
+        );
+        self.leaves
+            .reserve(frequency_symbols.saturating_sub(self.leaves.capacity()));
+        self.parent_queue.reserve(
+            frequency_symbols
+                .saturating_sub(1)
+                .saturating_sub(self.parent_queue.capacity()),
+        );
+        self.lengths
+            .reserve(frequency_symbols.saturating_sub(self.lengths.capacity()));
+        self.tree
+            .reserve(tree_symbols.saturating_sub(self.tree.capacity()));
+    }
+}
+
 pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
     let mut workspace = Workspace::default();
     compress_with_options_workspace(input, options, &mut workspace)
