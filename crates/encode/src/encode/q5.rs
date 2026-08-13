@@ -67,7 +67,7 @@ pub(super) fn collect(
     } else if input.len() >= LARGE_INPUT_THRESHOLD {
         collect_with_params::<15, 4, 5, 8>(input, max_backward_distance, workspace)
     } else {
-        collect_with_params::<14, 4, 4, 4>(input, max_backward_distance, workspace)
+        collect_with_params::<14, 3, 4, 4>(input, max_backward_distance, workspace)
     }
 }
 
