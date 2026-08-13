@@ -4,11 +4,10 @@ use burli_core::{BurliError, CompressError, bits::BitWriter};
 
 use super::{
     COMMAND_ALPHABET_SIZE, INITIAL_LAST_DISTANCE, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE,
-    Token, command_symbol_for_insert, command_symbol_for_insert_copy, copy_length_code,
-    distance_code, hash_word_q0, insert_length_code, is_match5, match_len, next_hash_word,
-    read_u64_le, symbol_code, symbol_code_map, token_supports_last_distance,
-    write_block_and_context_header, write_literal, write_meta_block_len,
-    write_prefix_code_from_frequencies,
+    PrefixCodeScratch, Token, command_symbol_for_insert, command_symbol_for_insert_copy,
+    copy_length_code, distance_code, hash_word_q0, insert_length_code, is_match5, match_len,
+    next_hash_word, read_u64_le, token_supports_last_distance, write_block_and_context_header,
+    write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits, write_meta_block_len,
 };
 
 const TABLE_SIZE: usize = 1 << 15;
@@ -41,6 +40,7 @@ pub(super) struct Batch {
 pub(super) struct Workspace {
     table: HashTable,
     batch: Batch,
+    prefix: PrefixCodeScratch,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -135,32 +135,42 @@ impl Batch {
         writer: &mut BitWriter,
         input: &[u8],
         block_len: usize,
+        prefix: &mut PrefixCodeScratch,
     ) -> Result<(), CompressError> {
         if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
             return Err(BurliError::Format("invalid compressed Brotli block size"));
         }
 
+        prefix.reserve_for(COMMAND_ALPHABET_SIZE, COMMAND_ALPHABET_SIZE);
+
         write_meta_block_len(writer, block_len)?;
         write_block_and_context_header(writer)?;
-        let literal_codes = write_prefix_code_from_frequencies(
-            writer,
-            LITERAL_ALPHABET_SIZE,
-            &self.literal_frequencies,
-        )?;
-        let command_codes = write_prefix_code_from_frequencies(
-            writer,
-            COMMAND_ALPHABET_SIZE,
-            &self.command_frequencies,
-        )?;
-        let distance_codes =
-            write_prefix_code_from_frequencies(writer, 64, &self.distance_frequencies)?;
-        let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
-        let command_code_map = symbol_code_map(&command_codes, COMMAND_ALPHABET_SIZE);
-        let distance_code_map = symbol_code_map(&distance_codes, 64);
+        let literal_code_map =
+            write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+                writer,
+                &self.literal_frequencies,
+                prefix,
+                15,
+            )?;
+        let command_code_map =
+            write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+                writer,
+                &self.command_frequencies,
+                prefix,
+                15,
+            )?;
+        let distance_code_map =
+            write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+                writer,
+                &self.distance_frequencies,
+                prefix,
+                15,
+            )?;
 
         for record in &self.records {
             let meta = unpack_record_meta(record.meta);
-            let command_code = symbol_code(&command_code_map, meta.command_symbol as u16)?;
+            let command_code = command_code_map[meta.command_symbol as usize];
+            debug_assert!(command_code.len != u8::MAX);
             writer.write_bits_trusted(command_code.len, u64::from(command_code.bits));
             writer.write_bits_trusted(meta.insert_extra_bits, u64::from(record.insert_extra));
             writer.write_bits_trusted(meta.copy_extra_bits, u64::from(record.copy_extra));
@@ -168,11 +178,14 @@ impl Batch {
             let insert_start = record.insert_start as usize;
             let insert_end = insert_start + record.insert_len as usize;
             for &literal in &input[insert_start..insert_end] {
-                write_literal(writer, &literal_code_map, literal)?;
+                let literal_code = literal_code_map[usize::from(literal)];
+                debug_assert!(literal_code.len != u8::MAX);
+                writer.write_bits_trusted(literal_code.len, u64::from(literal_code.bits));
             }
 
             if meta.distance_symbol != NO_DISTANCE_SYMBOL {
-                let distance_code = symbol_code(&distance_code_map, meta.distance_symbol as u16)?;
+                let distance_code = distance_code_map[meta.distance_symbol as usize];
+                debug_assert!(distance_code.len != u8::MAX);
                 writer.write_bits_trusted(distance_code.len, u64::from(distance_code.bits));
                 writer
                     .write_bits_trusted(meta.distance_extra_bits, u64::from(record.distance_extra));
@@ -190,6 +203,15 @@ impl Default for Batch {
 }
 
 impl Workspace {
+    fn write(
+        &mut self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        block_len: usize,
+    ) -> Result<(), CompressError> {
+        self.batch.write(writer, input, block_len, &mut self.prefix)
+    }
+
     fn reset(&mut self, record_capacity: usize) {
         self.table.reset();
         self.batch.reset(record_capacity);
@@ -286,6 +308,15 @@ pub(super) fn collect<'a>(
     workspace: &'a mut Workspace,
 ) -> Result<&'a Batch, CompressError> {
     workspace.collect(input, max_backward_distance)
+}
+
+pub(super) fn write(
+    writer: &mut BitWriter,
+    input: &[u8],
+    block_len: usize,
+    workspace: &mut Workspace,
+) -> Result<(), CompressError> {
+    workspace.write(writer, input, block_len)
 }
 
 impl Workspace {

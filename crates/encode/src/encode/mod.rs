@@ -250,11 +250,14 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::FastOnePass {
-            let batch = q0::collect(input, max_backward_distance, &mut workspace.q0)?;
-            if !batch.has_copy() {
+            let has_copy = {
+                let batch = q0::collect(input, max_backward_distance, &mut workspace.q0)?;
+                batch.has_copy()
+            };
+            if !has_copy {
                 return write_compressed_literal_meta_block(writer, input);
             }
-            return batch.write(writer, input, input.len());
+            return q0::write(writer, input, input.len(), &mut workspace.q0);
         }
 
         if self.path == EncoderPath::FastTwoPass {
