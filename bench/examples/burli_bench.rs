@@ -172,8 +172,16 @@ const CORPUS: &[CorpusEntry] = &[
 const SMALL_SIZES: &[usize] = &[
     512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072, 262_144,
 ];
+const CHART_SMALL_FILES: &[&str] = &["bootstrap-js", "bootstrap-css", "json-citm"];
+const CHART_SMALL_SIZES: &[usize] = &[
+    512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072,
+];
+const DEFAULT_TARGET_NS: u64 = 30_000_000;
+const DEFAULT_ROUNDS: usize = 3;
+const DEFAULT_WARMUP: usize = 1;
+const QUICK_TARGET_NS: u64 = 30_000_000;
+const QUICK_ROUNDS: usize = 1;
 
-#[derive(Default)]
 struct Args {
     impls: Vec<String>,
     qualities: Vec<u8>,
@@ -182,6 +190,14 @@ struct Args {
     small_only: bool,
     profile_encode_only: bool,
     profile_decode_only: bool,
+    bench: BenchConfig,
+}
+
+#[derive(Clone, Copy)]
+struct BenchConfig {
+    target_ns: u64,
+    rounds: usize,
+    warmup: usize,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -199,14 +215,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for quality in &args.qualities {
             for input in &inputs {
                 if args.profile_encode_only {
-                    profile_encode_only(&codec, input, *quality)?;
+                    profile_encode_only(&codec, input, *quality, args.bench)?;
                     continue;
                 }
                 if args.profile_decode_only {
-                    profile_decode_only(&codec, input, *quality)?;
+                    profile_decode_only(&codec, input, *quality, args.bench)?;
                     continue;
                 }
-                match bench_codec(&codec, input, *quality) {
+                match bench_codec(&codec, input, *quality, args.bench) {
                     Ok(Some(result)) => {
                         append_result(cache.as_deref().unwrap(), &result)?;
                         println!(
@@ -237,11 +253,16 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         small_only: false,
         profile_encode_only: false,
         profile_decode_only: false,
+        bench: BenchConfig::from_env(),
     };
 
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "-h" | "--help" => {
+                print_help();
+                std::process::exit(0);
+            }
             "--impl" => {
                 let value = iter.next().ok_or("--impl needs value")?;
                 args.impls = if value == "all" {
@@ -267,6 +288,45 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
                 args.small_sizes = parse_size_list(&value)?;
             }
             "--small-only" => args.small_only = true,
+            "--chart-small-only" | "--small-chart-only" => {
+                args.small_only = true;
+                args.files = Some(
+                    CHART_SMALL_FILES
+                        .iter()
+                        .map(|name| (*name).to_owned())
+                        .collect(),
+                );
+                args.small_sizes = CHART_SMALL_SIZES.to_vec();
+            }
+            "--quick" => {
+                args.bench = BenchConfig {
+                    target_ns: QUICK_TARGET_NS,
+                    rounds: QUICK_ROUNDS,
+                    warmup: 0,
+                };
+            }
+            "--target-ns" => {
+                args.bench.target_ns = parse_non_zero_u64(
+                    &iter.next().ok_or("--target-ns needs value")?,
+                    "--target-ns",
+                )?;
+            }
+            "--target-ms" => {
+                let millis = parse_non_zero_u64(
+                    &iter.next().ok_or("--target-ms needs value")?,
+                    "--target-ms",
+                )?;
+                args.bench.target_ns = millis
+                    .checked_mul(1_000_000)
+                    .ok_or("--target-ms value is too large")?;
+            }
+            "--rounds" => {
+                args.bench.rounds =
+                    parse_non_zero_usize(&iter.next().ok_or("--rounds needs value")?, "--rounds")?;
+            }
+            "--warmup" => {
+                args.bench.warmup = iter.next().ok_or("--warmup needs value")?.parse()?;
+            }
             "--profile-encode-only" => args.profile_encode_only = true,
             "--profile-decode-only" => args.profile_decode_only = true,
             other => return Err(format!("unknown arg: {other}").into()),
@@ -274,6 +334,59 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     }
 
     Ok(args)
+}
+
+fn print_help() {
+    println!(
+        "Usage: burli_bench [--impl burli|rust-brotli|google-brotli|all] \
+         [--qualities LIST] [--files LIST] [--small-only] [--chart-small-only] \
+         [--small-sizes LIST] [--quick] [--target-ms N] [--target-ns N] \
+         [--rounds N] [--warmup N]"
+    );
+}
+
+impl BenchConfig {
+    fn from_env() -> Self {
+        Self {
+            target_ns: env_non_zero_u64("BURLI_BENCH_TARGET_NS").unwrap_or(DEFAULT_TARGET_NS),
+            rounds: env_non_zero_usize("BURLI_BENCH_ROUNDS").unwrap_or(DEFAULT_ROUNDS),
+            warmup: env_usize("BURLI_BENCH_WARMUP").unwrap_or(DEFAULT_WARMUP),
+        }
+    }
+}
+
+fn env_non_zero_u64(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|&value| value != 0)
+}
+
+fn env_non_zero_usize(name: &str) -> Option<usize> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|&value| value != 0)
+}
+
+fn env_usize(name: &str) -> Option<usize> {
+    std::env::var(name).ok().and_then(|value| value.parse().ok())
+}
+
+fn parse_non_zero_u64(value: &str, name: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    let parsed: u64 = value.parse()?;
+    if parsed == 0 {
+        return Err(format!("{name} must be non-zero").into());
+    }
+    Ok(parsed)
+}
+
+fn parse_non_zero_usize(value: &str, name: &str) -> Result<usize, Box<dyn std::error::Error>> {
+    let parsed: usize = value.parse()?;
+    if parsed == 0 {
+        return Err(format!("{name} must be non-zero").into());
+    }
+    Ok(parsed)
 }
 
 fn parse_quality_list(value: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -381,10 +494,11 @@ fn profile_encode_only(
     codec: &str,
     input: &BenchInput,
     quality: u8,
+    bench: BenchConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let compressed = compress_codec(codec, &input.data, quality)?;
     verify_decodes(codec, &compressed, input)?;
-    let compress_ns = bench_compress(codec, &input.data, quality)?;
+    let compress_ns = bench_compress(codec, &input.data, quality, bench)?;
     let mbs = input.data.len() as f64 / compress_ns * 1000.0;
     println!(
         "{} q{} {}: {} -> {} bytes, encode {:.1} MB/s",
@@ -402,10 +516,11 @@ fn profile_decode_only(
     codec: &str,
     input: &BenchInput,
     quality: u8,
+    bench: BenchConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let compressed = compress_codec(codec, &input.data, quality)?;
     verify_decodes(codec, &compressed, input)?;
-    let decompress_ns = bench_decompress(codec, &compressed, input.data.len())?;
+    let decompress_ns = bench_decompress(codec, &compressed, input.data.len(), bench)?;
     let mbs = input.data.len() as f64 / decompress_ns * 1000.0;
     println!(
         "{} q{} {}: {} <- {} bytes, decode {:.1} MB/s",
@@ -423,6 +538,7 @@ fn bench_codec(
     codec: &str,
     input: &BenchInput,
     quality: u8,
+    bench: BenchConfig,
 ) -> Result<Option<BenchResult>, Box<dyn std::error::Error>> {
     let compressed = match compress_codec(codec, &input.data, quality) {
         Ok(output) => output,
@@ -431,9 +547,9 @@ fn bench_codec(
     };
     verify_decodes(codec, &compressed, input)?;
 
-    let compress_ns = bench_compress(codec, &input.data, quality)?;
+    let compress_ns = bench_compress(codec, &input.data, quality, bench)?;
 
-    let decompress_ns = bench_decompress(codec, &compressed, input.data.len())?;
+    let decompress_ns = bench_decompress(codec, &compressed, input.data.len(), bench)?;
 
     let encoded_by = encoded_by_label(codec);
     let decoded_by = decoded_by_label(codec);
@@ -458,18 +574,19 @@ fn bench_decompress(
     codec: &str,
     compressed: &[u8],
     decoded_len: usize,
+    bench: BenchConfig,
 ) -> Result<f64, Box<dyn std::error::Error>> {
     match codec {
-        "burli" => Ok(bench_loop(1, 100_000_000, 3, || {
+        "burli" => Ok(bench_loop(bench, || {
             let _ = burli_decompress_with_limit(compressed, decoded_len);
         })),
-        "google-brotli" => Ok(bench_loop(1, 100_000_000, 3, || {
+        "google-brotli" => Ok(bench_loop(bench, || {
             let _ = google_brotli_decompress(compressed, decoded_len);
         })),
-        "google-brotli-burli" => Ok(bench_loop(1, 100_000_000, 3, || {
+        "google-brotli-burli" => Ok(bench_loop(bench, || {
             let _ = burli_decompress_with_limit(compressed, decoded_len);
         })),
-        "rust-brotli" => Ok(bench_loop(1, 100_000_000, 3, || {
+        "rust-brotli" => Ok(bench_loop(bench, || {
             let _ = rust_brotli_decompress(compressed);
         })),
         other => Err(format!("unknown impl: {other}").into()),
@@ -494,18 +611,19 @@ fn bench_compress(
     codec: &str,
     input: &[u8],
     quality: u8,
+    bench: BenchConfig,
 ) -> Result<f64, Box<dyn std::error::Error>> {
     match codec {
-        "burli" => Ok(bench_loop(1, 100_000_000, 3, || {
+        "burli" => Ok(bench_loop(bench, || {
             let _ = burli_compress(input, quality);
         })),
-        "google-brotli" => Ok(bench_loop(1, 100_000_000, 3, || {
+        "google-brotli" => Ok(bench_loop(bench, || {
             let _ = google_brotli_compress(input, quality);
         })),
-        "google-brotli-burli" => Ok(bench_loop(1, 100_000_000, 3, || {
+        "google-brotli-burli" => Ok(bench_loop(bench, || {
             let _ = google_brotli_compress(input, quality);
         })),
-        "rust-brotli" => Ok(bench_loop(1, 100_000_000, 3, || {
+        "rust-brotli" => Ok(bench_loop(bench, || {
             let _ = rust_brotli_compress(input, quality);
         })),
         other => Err(format!("unknown impl: {other}").into()),
@@ -615,20 +733,19 @@ fn rust_brotli_decompress(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::E
     Ok(output)
 }
 
-fn bench_loop<F: FnMut()>(warmup: usize, target_ns: u64, rounds: usize, mut f: F) -> f64 {
-    let target_ns = bench_target_ns(target_ns);
-    for _ in 0..warmup {
+fn bench_loop<F: FnMut()>(bench: BenchConfig, mut f: F) -> f64 {
+    for _ in 0..bench.warmup {
         f();
     }
 
     let mut best = f64::MAX;
-    for _ in 0..rounds {
+    for _ in 0..bench.rounds {
         let mut iters = 0u64;
         let start = cpu_nanos();
         loop {
             std::hint::black_box(&mut f)();
             iters += 1;
-            if cpu_nanos() - start >= target_ns {
+            if cpu_nanos() - start >= bench.target_ns {
                 break;
             }
         }
@@ -637,14 +754,6 @@ fn bench_loop<F: FnMut()>(warmup: usize, target_ns: u64, rounds: usize, mut f: F
         best = best.min(ns_per_op);
     }
     best
-}
-
-fn bench_target_ns(default: u64) -> u64 {
-    std::env::var("BURLI_BENCH_TARGET_NS")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .filter(|&value| value != 0)
-        .unwrap_or(default)
 }
 
 fn cpu_nanos() -> u64 {

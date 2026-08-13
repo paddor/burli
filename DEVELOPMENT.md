@@ -79,10 +79,20 @@ cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
 cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
   --impl all --qualities 0,1,2,3,4,5 \
   --files bootstrap-js,bootstrap-css,json-citm --small-only
+cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
+  --impl burli --qualities 0,1,2,3,4,5 --chart-small-only --quick
 ```
 
 The harness lazily downloads pinned web corpus files into `bench/corpus/`.
 JSONL results append under `~/.cache/burli/`. Treat cache files as append-only.
+Default timing is 30 ms per round, 3 rounds, 1 warmup. `--quick` uses one
+30 ms round and no warmup for smoke checks. Use `--target-ms`, `--target-ns`,
+`--rounds`, `--warmup`, or matching `BURLI_BENCH_*` env vars for focused
+work.
+
+`--chart-small-only` restricts small-input runs to the files and sizes used by
+the checked-in small charts. It avoids benchmarking every small slice of every
+corpus file.
 
 Default implementation set:
 
