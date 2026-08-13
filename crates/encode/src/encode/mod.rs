@@ -723,28 +723,72 @@ fn write_static_entropy_token_batch(
     writer.write_bits_trusted_fits(56, 0x0092_6244_1630_7003);
     writer.write_bits_trusted_fits(3, 0);
     writer.write_bits_trusted_fits(28, 0x0369_dc03);
-    let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
+    let literal_code_map =
+        dense_symbol_code_map_from_symbol_codes::<LITERAL_ALPHABET_SIZE>(&literal_codes)?;
 
+    let mut pending_bits = 0_u64;
+    let mut pending_width = 0_u8;
     for prepared_token in &batch.prepared {
         let token = prepared_token.token;
         let insert = prepared_token.insert;
         let copy = prepared_token.copy;
         let command_code = static_command_code(prepared_token.command_symbol)?;
-        writer.write_bits_trusted_fits(command_code.len, u64::from(command_code.bits));
-        writer.write_bits_trusted(insert.extra_bits, insert.extra);
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            command_code.len,
+            u64::from(command_code.bits),
+        );
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            insert.extra_bits,
+            insert.extra,
+        );
         if let Some(copy) = copy {
-            writer.write_bits_trusted(copy.extra_bits, copy.extra);
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                copy.extra_bits,
+                copy.extra,
+            );
         }
 
         for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            write_literal(writer, &literal_code_map, literal)?;
+            let literal_code = literal_code_map[usize::from(literal)];
+            debug_assert!(literal_code.len != u8::MAX);
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                literal_code.len,
+                u64::from(literal_code.bits),
+            );
         }
 
         if let Some(distance) = prepared_token.distance {
             let distance_code = static_distance_code(distance.symbol)?;
-            writer.write_bits_trusted_fits(distance_code.len, u64::from(distance_code.bits));
-            writer.write_bits_trusted(distance.extra_bits, distance.extra);
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                distance_code.len,
+                u64::from(distance_code.bits),
+            );
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                distance.extra_bits,
+                distance.extra,
+            );
         }
+    }
+    if pending_width != 0 {
+        writer.write_bits_trusted_fits(pending_width, pending_bits);
     }
 
     Ok(())
@@ -2495,6 +2539,23 @@ fn symbol_code_map(codes: &[SymbolCode], alphabet_size: usize) -> Vec<Option<Sym
         }
     }
     map
+}
+
+fn dense_symbol_code_map_from_symbol_codes<const N: usize>(
+    codes: &[SymbolCode],
+) -> Result<[DenseSymbolCode; N], CompressError> {
+    let mut map = [MISSING_DENSE_SYMBOL_CODE; N];
+    for &code in codes {
+        let symbol = usize::from(code.symbol);
+        if symbol >= N {
+            return Err(BurliError::Format("Brotli prefix symbol exceeds alphabet"));
+        }
+        map[symbol] = DenseSymbolCode {
+            len: code.len,
+            bits: code.bits,
+        };
+    }
+    Ok(map)
 }
 
 fn symbol_code(codes: &[Option<SymbolCode>], symbol: u16) -> Result<SymbolCode, CompressError> {
