@@ -146,7 +146,7 @@ q1
 <rect x="337" y="501" width="31" height="12" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="371" y="508" width="31" height="53" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="371" y="498" width="31" height="10" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="371" y="480" width="31" height="18" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="371" y="481" width="31" height="17" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="405" y="484" width="31" height="77" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="405" y="474" width="31" height="10" opacity="1" fill="#3AAF60" stroke="none"/>
 <rect x="405" y="451" width="31" height="23" opacity="1" fill="#4ADE80" stroke="none"/>
@@ -232,8 +232,8 @@ q1
 <rect x="337" y="803" width="31" height="35" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="337" y="795" width="31" height="8" opacity="1" fill="#1D4ED8" stroke="none"/>
 <rect x="337" y="785" width="31" height="10" opacity="1" fill="#2563EB" stroke="none"/>
-<rect x="371" y="794" width="31" height="44" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="371" y="785" width="31" height="9" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="371" y="793" width="31" height="45" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="371" y="785" width="31" height="8" opacity="1" fill="#C45050" stroke="none"/>
 <rect x="371" y="771" width="31" height="14" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="405" y="788" width="31" height="50" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="405" y="780" width="31" height="8" opacity="1" fill="#3AAF60" stroke="none"/>
