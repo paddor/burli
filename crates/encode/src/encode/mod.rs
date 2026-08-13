@@ -818,30 +818,77 @@ fn write_prepared_token_batch_with_len(
     )?;
     let distance_codes =
         write_prefix_code_from_frequencies(writer, 64, &batch.distance_frequencies)?;
-    let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
-    let command_code_map = symbol_code_map(&command_codes, COMMAND_ALPHABET_SIZE);
-    let distance_code_map = symbol_code_map(&distance_codes, 64);
+    let literal_code_map =
+        dense_symbol_code_map_from_symbol_codes::<LITERAL_ALPHABET_SIZE>(&literal_codes)?;
+    let command_code_map =
+        dense_symbol_code_map_from_symbol_codes::<COMMAND_ALPHABET_SIZE>(&command_codes)?;
+    let distance_code_map = dense_symbol_code_map_from_symbol_codes::<64>(&distance_codes)?;
 
+    let mut pending_bits = 0_u64;
+    let mut pending_width = 0_u8;
     for prepared_token in &batch.prepared {
         let token = prepared_token.token;
         let insert = prepared_token.insert;
         let copy = prepared_token.copy;
-        let command_code = symbol_code(&command_code_map, prepared_token.command_symbol)?;
-        writer.write_bits_trusted(command_code.len, u64::from(command_code.bits));
-        writer.write_bits_trusted(insert.extra_bits, insert.extra);
+        let command_code = command_code_map[usize::from(prepared_token.command_symbol)];
+        debug_assert!(command_code.len != u8::MAX);
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            command_code.len,
+            u64::from(command_code.bits),
+        );
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            insert.extra_bits,
+            insert.extra,
+        );
         if let Some(copy) = copy {
-            writer.write_bits_trusted(copy.extra_bits, copy.extra);
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                copy.extra_bits,
+                copy.extra,
+            );
         }
 
         for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            write_literal(writer, &literal_code_map, literal)?;
+            let literal_code = literal_code_map[usize::from(literal)];
+            debug_assert!(literal_code.len != u8::MAX);
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                literal_code.len,
+                u64::from(literal_code.bits),
+            );
         }
 
         if let Some(distance) = prepared_token.distance {
-            let distance_code = symbol_code(&distance_code_map, distance.symbol)?;
-            writer.write_bits_trusted(distance_code.len, u64::from(distance_code.bits));
-            writer.write_bits_trusted(distance.extra_bits, distance.extra);
+            let distance_code = distance_code_map[usize::from(distance.symbol)];
+            debug_assert!(distance_code.len != u8::MAX);
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                distance_code.len,
+                u64::from(distance_code.bits),
+            );
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                distance.extra_bits,
+                distance.extra,
+            );
         }
+    }
+    if pending_width != 0 {
+        writer.write_bits_trusted_fits(pending_width, pending_bits);
     }
 
     Ok(())
