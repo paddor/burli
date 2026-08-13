@@ -21,6 +21,7 @@ const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
 const BUCKET_SWEEP: usize = 2;
 const BUCKET_SWEEP_MASK: usize = (BUCKET_SWEEP - 1) << 3;
+const LONG_MATCH_STORE_THRESHOLD: usize = 64;
 
 #[derive(Clone, Copy, Debug)]
 struct Match {
@@ -280,7 +281,12 @@ fn skip_sparse(
 }
 
 fn store_range(input: &[u8], table: &mut [u32], start: usize, end: usize) {
-    for pos in (start..end).step_by(2) {
+    let step = if end.saturating_sub(start) >= LONG_MATCH_STORE_THRESHOLD {
+        4
+    } else {
+        2
+    };
+    for pos in (start..end).step_by(step) {
         store(input, table, pos);
     }
 }
