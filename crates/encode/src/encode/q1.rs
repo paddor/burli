@@ -453,9 +453,9 @@ impl Workspace {
         }
 
         if self.table.len() != table_size {
-            self.table.resize(table_size, NO_POSITION);
+            self.table.resize(table_size, 0);
         } else {
-            self.table.fill(NO_POSITION);
+            self.table.fill(0);
         }
 
         let min_match = if table_bits <= 15 { 4 } else { 6 };
@@ -756,8 +756,7 @@ fn collect_with_u32_table_m6<const TABLE_BITS: usize>(
             let key = hash6_at_const::<TABLE_BITS>(input, pos);
             candidate = table[key] as usize;
             table[key] = pos as u32;
-            if candidate == NO_POSITION as usize
-                || candidate >= pos
+            if candidate >= pos
                 || pos - candidate > max_distance
                 || !is_match6(input, candidate, pos)
             {
@@ -888,10 +887,7 @@ fn scan_to_match_in_u32_table_m6<const TABLE_BITS: usize>(
 
         let candidate = table[key] as usize;
         table[key] = *pos as u32;
-        if candidate != NO_POSITION as usize
-            && candidate < *pos
-            && *pos - candidate <= max_distance
-            && is_match6(input, candidate, *pos)
+        if candidate < *pos && *pos - candidate <= max_distance && is_match6(input, candidate, *pos)
         {
             return Some(candidate);
         }
