@@ -1081,7 +1081,7 @@ fn write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits<const N:
         return Ok(map);
     }
 
-    code_lengths_from_dense_frequencies_with_scratch(frequencies, max_bits, scratch);
+    code_lengths_from_current_used_with_scratch(N, max_bits, scratch);
 
     fill_dense_symbol_code_map_from_lengths(&scratch.lengths, &mut map);
     write_complex_prefix_code_lengths_with_scratch(writer, scratch)?;
@@ -1114,11 +1114,41 @@ fn write_fast_dense_prefix_code_array_from_frequencies_with_scratch<const N: usi
         return Ok(map);
     }
 
-    code_lengths_from_dense_frequencies_with_scratch(frequencies, FAST_CODE_BITS, scratch);
+    code_lengths_from_current_used_with_scratch(N, FAST_CODE_BITS, scratch);
 
     fill_dense_symbol_code_map_from_lengths(&scratch.lengths, &mut map);
     write_fast_complex_prefix_code_lengths_with_scratch(writer, scratch)?;
     Ok(map)
+}
+
+fn code_lengths_from_current_used_with_scratch(
+    alphabet_size: usize,
+    max_bits: u8,
+    scratch: &mut PrefixCodeScratch,
+) {
+    scratch.lengths.clear();
+    scratch.lengths.resize(alphabet_size, 0);
+    if scratch.used.is_empty() {
+        scratch.lengths[0] = 1;
+        return;
+    }
+    if scratch.used.len() == 1 {
+        scratch.lengths[usize::from(scratch.used[0].0)] = 1;
+        return;
+    }
+
+    if huffman_code_lengths_from_current_used_with_scratch(max_bits, scratch) {
+        return;
+    }
+
+    scratch.lengths.clear();
+    scratch.lengths.resize(alphabet_size, 0);
+    balanced_code_lengths_into(
+        alphabet_size,
+        &mut scratch.used,
+        max_bits,
+        &mut scratch.lengths,
+    );
 }
 
 fn code_lengths_from_dense_frequencies_with_scratch<const N: usize>(
@@ -1132,24 +1162,7 @@ fn code_lengths_from_dense_frequencies_with_scratch<const N: usize>(
             scratch.used.push((symbol as u16, frequency));
         }
     }
-    scratch.lengths.clear();
-    scratch.lengths.resize(N, 0);
-    if scratch.used.is_empty() {
-        scratch.lengths[0] = 1;
-        return;
-    }
-    if scratch.used.len() == 1 {
-        scratch.lengths[usize::from(scratch.used[0].0)] = 1;
-        return;
-    }
-
-    if huffman_code_lengths_with_scratch(frequencies, max_bits, scratch) {
-        return;
-    }
-
-    scratch.lengths.clear();
-    scratch.lengths.resize(N, 0);
-    balanced_code_lengths_into(N, &mut scratch.used, max_bits, &mut scratch.lengths);
+    code_lengths_from_current_used_with_scratch(N, max_bits, scratch);
 }
 
 fn code_lengths_from_frequencies(
@@ -1330,6 +1343,91 @@ fn huffman_code_lengths_with_scratch(
             parent: None,
         });
         scratch.leaves.push((symbol, index));
+    }
+
+    if scratch.leaves.len() <= 1 {
+        return false;
+    }
+
+    {
+        let nodes = &scratch.nodes;
+        scratch
+            .leaves
+            .sort_unstable_by(|&(_, left), &(_, right)| compare_huffman_nodes(nodes, left, right));
+    }
+
+    let mut leaf_head = 0;
+    let mut parent_head = 0;
+    let mut remaining = scratch.leaves.len();
+
+    while remaining > 1 {
+        let Some(first) = pop_huffman_queue(
+            &scratch.nodes,
+            &scratch.leaves,
+            &mut leaf_head,
+            &scratch.parent_queue,
+            &mut parent_head,
+        ) else {
+            return false;
+        };
+        let Some(second) = pop_huffman_queue(
+            &scratch.nodes,
+            &scratch.leaves,
+            &mut leaf_head,
+            &scratch.parent_queue,
+            &mut parent_head,
+        ) else {
+            return false;
+        };
+        let parent = scratch.nodes.len();
+        scratch.nodes.push(HuffmanNode {
+            frequency: scratch.nodes[first].frequency + scratch.nodes[second].frequency,
+            min_symbol: scratch.nodes[first]
+                .min_symbol
+                .min(scratch.nodes[second].min_symbol),
+            parent: None,
+        });
+        scratch.nodes[first].parent = Some(parent);
+        scratch.nodes[second].parent = Some(parent);
+        scratch.parent_queue.push(parent);
+        remaining -= 1;
+    }
+
+    for &(symbol, node_index) in &scratch.leaves {
+        let mut depth = 0_u8;
+        let mut cursor = node_index;
+        while let Some(parent) = scratch.nodes[cursor].parent {
+            let Some(next_depth) = depth.checked_add(1) else {
+                return false;
+            };
+            depth = next_depth;
+            cursor = parent;
+        }
+        if depth == 0 || depth > max_bits {
+            return false;
+        }
+        scratch.lengths[symbol] = depth;
+    }
+
+    true
+}
+
+fn huffman_code_lengths_from_current_used_with_scratch(
+    max_bits: u8,
+    scratch: &mut PrefixCodeScratch,
+) -> bool {
+    scratch.nodes.clear();
+    scratch.leaves.clear();
+    scratch.parent_queue.clear();
+
+    for &(symbol, frequency) in &scratch.used {
+        let index = scratch.nodes.len();
+        scratch.nodes.push(HuffmanNode {
+            frequency: frequency as u64,
+            min_symbol: symbol,
+            parent: None,
+        });
+        scratch.leaves.push((usize::from(symbol), index));
     }
 
     if scratch.leaves.len() <= 1 {
