@@ -211,6 +211,7 @@ struct EncoderPlan {
     path: EncoderPath,
     block_size: usize,
     max_backward_distance: usize,
+    q1_fast_literal_prefix: bool,
 }
 
 impl EncoderPlan {
@@ -240,6 +241,7 @@ impl EncoderPlan {
             path: EncoderPath::for_quality(quality),
             block_size,
             max_backward_distance,
+            q1_fast_literal_prefix: quality != 1 || input_len <= max_backward_distance,
         })
     }
 
@@ -263,7 +265,13 @@ impl EncoderPlan {
                 if !has_copy {
                     return write_compressed_literal_meta_block(writer, input);
                 }
-                return q1::write(writer, input, input.len(), &mut workspace.q1);
+                return q1::write(
+                    writer,
+                    input,
+                    input.len(),
+                    &mut workspace.q1,
+                    self.q1_fast_literal_prefix,
+                );
             }
 
             let has_copy = {
@@ -297,7 +305,13 @@ impl EncoderPlan {
             if !has_copy {
                 return write_compressed_literal_meta_block(writer, input);
             }
-            return q1::write(writer, input, input.len(), &mut workspace.q1);
+            return q1::write(
+                writer,
+                input,
+                input.len(),
+                &mut workspace.q1,
+                self.q1_fast_literal_prefix,
+            );
         }
 
         if self.path == EncoderPath::StaticEntropy {
@@ -1074,6 +1088,39 @@ fn write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits<const N:
     Ok(map)
 }
 
+fn write_fast_dense_prefix_code_array_from_frequencies_with_scratch<const N: usize>(
+    writer: &mut BitWriter,
+    frequencies: &[usize; N],
+    scratch: &mut PrefixCodeScratch,
+) -> Result<[DenseSymbolCode; N], CompressError> {
+    scratch.used.clear();
+    for (symbol, &frequency) in frequencies.iter().enumerate() {
+        if frequency != 0 {
+            scratch.used.push((symbol as u16, frequency));
+        }
+    }
+
+    let mut map = [MISSING_DENSE_SYMBOL_CODE; N];
+    if scratch.used.is_empty() {
+        write_simple_dense_prefix_code(writer, &[0], &mut map)?;
+        return Ok(map);
+    }
+    if scratch.used.len() <= MAX_SIMPLE_PREFIX_SYMBOLS {
+        let mut symbols = [0_u16; MAX_SIMPLE_PREFIX_SYMBOLS];
+        for (index, &(symbol, _)) in scratch.used.iter().enumerate() {
+            symbols[index] = symbol;
+        }
+        write_simple_dense_prefix_code(writer, &symbols[..scratch.used.len()], &mut map)?;
+        return Ok(map);
+    }
+
+    code_lengths_from_dense_frequencies_with_scratch(frequencies, FAST_CODE_BITS, scratch);
+
+    fill_dense_symbol_code_map_from_lengths(&scratch.lengths, &mut map);
+    write_fast_complex_prefix_code_lengths_with_scratch(writer, scratch)?;
+    Ok(map)
+}
+
 fn code_lengths_from_dense_frequencies_with_scratch<const N: usize>(
     frequencies: &[usize; N],
     max_bits: u8,
@@ -1443,6 +1490,37 @@ fn write_fast_complex_prefix_code_lengths(
     encode_fast_code_length_tree_into(lengths, &mut tree)?;
     writer.write_bits_trusted_fits(40, 0x00ff_5555_5554);
     for &entry in &tree {
+        let symbol = code_length_tree_symbol(entry);
+        let extra_bits = code_length_tree_extra_bits(entry);
+        match symbol {
+            0..=14 => {
+                let len = STATIC_CODE_LENGTH_DEPTH[usize::from(symbol)];
+                let bits = STATIC_CODE_LENGTH_BITS[usize::from(symbol)];
+                writer.write_bits_trusted_fits(len, u64::from(bits));
+            }
+            16 => {
+                let len = STATIC_CODE_LENGTH_DEPTH[16];
+                let bits = STATIC_CODE_LENGTH_BITS[16] | (u16::from(extra_bits) << len);
+                writer.write_bits_trusted_fits(len + 2, u64::from(bits));
+            }
+            17 => {
+                let len = STATIC_CODE_LENGTH_DEPTH[17];
+                let bits = STATIC_CODE_LENGTH_BITS[17] | (u16::from(extra_bits) << len);
+                writer.write_bits_trusted_fits(len + 3, u64::from(bits));
+            }
+            _ => return Err(BurliError::Format("invalid Brotli code length symbol")),
+        }
+    }
+    Ok(())
+}
+
+fn write_fast_complex_prefix_code_lengths_with_scratch(
+    writer: &mut BitWriter,
+    scratch: &mut PrefixCodeScratch,
+) -> Result<(), CompressError> {
+    encode_fast_code_length_tree_into(&scratch.lengths, &mut scratch.tree)?;
+    writer.write_bits_trusted_fits(40, 0x00ff_5555_5554);
+    for &entry in &scratch.tree {
         let symbol = code_length_tree_symbol(entry);
         let extra_bits = code_length_tree_extra_bits(entry);
         match symbol {

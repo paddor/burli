@@ -5,7 +5,7 @@ use burli_core::{BurliError, CompressError, bits::BitWriter};
 use super::{
     COMMAND_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE, PrefixCodeScratch,
     append_pending_bits, match_len, read_u32_le, read_u64_le, write_block_and_context_header,
-    write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits, write_meta_block_len,
+    write_fast_dense_prefix_code_array_from_frequencies_with_scratch, write_meta_block_len,
     write_q1_internal_command_prefix_codes,
 };
 
@@ -257,6 +257,7 @@ impl Batch {
         input: &[u8],
         block_len: usize,
         prefix: &mut PrefixCodeScratch,
+        fast_literal_prefix: bool,
     ) -> Result<(), CompressError> {
         if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
             return Err(BurliError::Format("invalid compressed Brotli block size"));
@@ -266,13 +267,20 @@ impl Batch {
 
         write_meta_block_len(writer, block_len)?;
         write_block_and_context_header(writer)?;
-        let literal_code_map =
-            write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+        let literal_code_map = if fast_literal_prefix {
+            write_fast_dense_prefix_code_array_from_frequencies_with_scratch(
+                writer,
+                &self.literal_frequencies,
+                prefix,
+            )?
+        } else {
+            super::write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
                 writer,
                 &self.literal_frequencies,
                 prefix,
                 15,
-            )?;
+            )?
+        };
         let mut command_frequencies = self.command_frequencies;
         command_frequencies[1] += 1;
         command_frequencies[2] += 1;
@@ -364,8 +372,9 @@ pub(super) fn write(
     input: &[u8],
     block_len: usize,
     workspace: &mut Workspace,
+    fast_literal_prefix: bool,
 ) -> Result<(), CompressError> {
-    workspace.write(writer, input, block_len)
+    workspace.write(writer, input, block_len, fast_literal_prefix)
 }
 
 impl Workspace {
@@ -374,8 +383,15 @@ impl Workspace {
         writer: &mut BitWriter,
         input: &[u8],
         block_len: usize,
+        fast_literal_prefix: bool,
     ) -> Result<(), CompressError> {
-        self.batch.write(writer, input, block_len, &mut self.prefix)
+        self.batch.write(
+            writer,
+            input,
+            block_len,
+            &mut self.prefix,
+            fast_literal_prefix,
+        )
     }
 
     fn collect(
