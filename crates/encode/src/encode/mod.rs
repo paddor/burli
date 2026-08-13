@@ -553,6 +553,14 @@ fn write_regular_token_batches_with_symbol_limit(
     tokens: &[Token],
     symbol_limit: usize,
 ) -> Result<(), CompressError> {
+    if q2_token_batch_end_with_symbol_limit(tokens, symbol_limit) == tokens.len() {
+        debug_assert_eq!(
+            tokens.iter().map(|token| token.block_len()).sum::<usize>(),
+            input.len()
+        );
+        return write_token_batch_with_len(writer, input, tokens, input.len());
+    }
+
     let mut start = 0;
     while start < tokens.len() {
         let end = q2_token_batch_end_with_symbol_limit(&tokens[start..], symbol_limit) + start;
