@@ -178,6 +178,7 @@ struct Args {
     impls: Vec<String>,
     qualities: Vec<u8>,
     files: Option<HashSet<String>>,
+    small_sizes: Vec<usize>,
     small_only: bool,
     profile_encode_only: bool,
     profile_decode_only: bool,
@@ -232,6 +233,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         impls: vec!["burli".to_owned(), "rust-brotli".to_owned()],
         qualities: vec![DEFAULT_QUALITY],
         files: None,
+        small_sizes: SMALL_SIZES.to_vec(),
         small_only: false,
         profile_encode_only: false,
         profile_decode_only: false,
@@ -260,6 +262,10 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
                 let value = iter.next().ok_or("--files needs value")?;
                 args.files = Some(value.split(',').map(str::to_owned).collect());
             }
+            "--small-sizes" => {
+                let value = iter.next().ok_or("--small-sizes needs value")?;
+                args.small_sizes = parse_size_list(&value)?;
+            }
             "--small-only" => args.small_only = true,
             "--profile-encode-only" => args.profile_encode_only = true,
             "--profile-decode-only" => args.profile_decode_only = true,
@@ -285,6 +291,23 @@ fn parse_quality_list(value: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>
     Ok(qualities)
 }
 
+fn parse_size_list(value: &str) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
+    let mut sizes = Vec::new();
+    for item in value.split(',') {
+        let size: usize = item.parse()?;
+        if size == 0 {
+            return Err("small sizes must be non-zero".into());
+        }
+        sizes.push(size);
+    }
+    sizes.sort_unstable();
+    sizes.dedup();
+    if sizes.is_empty() {
+        return Err("--small-sizes needs at least one size".into());
+    }
+    Ok(sizes)
+}
+
 fn load_inputs(args: &Args) -> Result<Vec<BenchInput>, Box<dyn std::error::Error>> {
     let mut inputs = Vec::new();
     for entry in CORPUS {
@@ -298,12 +321,12 @@ fn load_inputs(args: &Args) -> Result<Vec<BenchInput>, Box<dyn std::error::Error
         let data = read_corpus_entry(entry)?;
         let sha256 = sha256_hex(&data);
         if args.small_only {
-            for size in SMALL_SIZES {
-                if *size <= data.len() {
+            for &size in &args.small_sizes {
+                if size <= data.len() {
                     inputs.push(BenchInput {
-                        name: format!("{}_{}", entry.label, size_label(*size)),
-                        data: data[..*size].to_vec(),
-                        sha256: sha256_hex(&data[..*size]),
+                        name: format!("{}_{}", entry.label, size_label(size)),
+                        data: data[..size].to_vec(),
+                        sha256: sha256_hex(&data[..size]),
                         is_small: true,
                     });
                 }
@@ -659,19 +682,19 @@ fn sha256_hex(data: &[u8]) -> String {
     out
 }
 
-fn size_label(size: usize) -> &'static str {
+fn size_label(size: usize) -> String {
     match size {
-        512 => "512",
-        1024 => "1k",
-        2048 => "2k",
-        4096 => "4k",
-        8192 => "8k",
-        16_384 => "16k",
-        32_768 => "32k",
-        65_536 => "64k",
-        131_072 => "128k",
-        262_144 => "256k",
-        _ => "custom",
+        512 => "512".to_owned(),
+        1024 => "1k".to_owned(),
+        2048 => "2k".to_owned(),
+        4096 => "4k".to_owned(),
+        8192 => "8k".to_owned(),
+        16_384 => "16k".to_owned(),
+        32_768 => "32k".to_owned(),
+        65_536 => "64k".to_owned(),
+        131_072 => "128k".to_owned(),
+        262_144 => "256k".to_owned(),
+        _ => format!("{size}b"),
     }
 }
 
