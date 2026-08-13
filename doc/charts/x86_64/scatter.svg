@@ -83,7 +83,7 @@ q3
 <text x="296" y="120" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#2563EB" font-weight="bold">
 q5
 </text>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="428,204 433,204 342,179 334,168 307,167 263,124 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="428,204 433,204 342,179 334,168 307,167 268,132 "/>
 <circle cx="428" cy="204" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <text x="434" y="204" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q0
@@ -95,8 +95,8 @@ q0
 q3
 </text>
 <circle cx="307" cy="167" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="263" cy="124" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="269" y="124" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="268" cy="132" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="274" y="132" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q5
 </text>
 <polyline fill="none" opacity="1" stroke="#4ADE80" stroke-width="1" points="360,287 348,278 318,172 312,164 287,153 249,120 "/>
@@ -199,7 +199,7 @@ q3
 <text x="334" y="449" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#2563EB" font-weight="bold">
 q5
 </text>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="472,554 472,554 378,526 369,512 345,504 306,452 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="472,554 472,554 378,526 369,512 345,504 313,459 "/>
 <circle cx="472" cy="554" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <text x="478" y="554" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q0
@@ -211,8 +211,8 @@ q0
 q3
 </text>
 <circle cx="345" cy="504" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="306" cy="452" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="312" y="452" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="313" cy="459" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="319" y="459" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q5
 </text>
 <polyline fill="none" opacity="1" stroke="#4ADE80" stroke-width="1" points="383,629 377,619 312,526 308,511 277,491 261,449 "/>
@@ -319,7 +319,7 @@ q3
 <text x="311" y="775" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#2563EB" font-weight="bold">
 q5
 </text>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="469,900 434,878 381,850 385,832 342,813 298,781 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="469,900 434,878 381,850 385,832 342,813 300,782 "/>
 <circle cx="469" cy="900" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <text x="475" y="900" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q0
@@ -331,8 +331,8 @@ q0
 q3
 </text>
 <circle cx="342" cy="813" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="298" cy="781" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="304" y="781" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="300" cy="782" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="306" y="782" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q5
 </text>
 <polyline fill="none" opacity="1" stroke="#4ADE80" stroke-width="1" points="341,974 347,960 337,868 317,845 284,813 252,780 "/>
