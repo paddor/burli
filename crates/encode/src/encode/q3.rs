@@ -81,7 +81,7 @@ fn collect_with_params<
     }
 
     let mut table = vec![0_u32; 1 << TABLE_BITS];
-    let mut tokens = Vec::new();
+    let mut tokens = Vec::with_capacity(input.len() / 8 + 8);
     let mut pos = 0_usize;
     let mut insert_start = 0_usize;
     let mut dist_cache = workspace.dist_cache;
