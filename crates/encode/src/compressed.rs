@@ -790,7 +790,6 @@ struct HuffmanNode {
 
 fn huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Option<Vec<u8>> {
     let mut nodes = Vec::new();
-    let mut active = Vec::new();
     let mut leaves = Vec::new();
 
     for (symbol, &frequency) in frequencies.iter().enumerate() {
@@ -803,7 +802,6 @@ fn huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Option<Vec<u8>> 
             min_symbol: symbol as u16,
             parent: None,
         });
-        active.push(index);
         leaves.push((symbol, index));
     }
 
@@ -811,15 +809,28 @@ fn huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Option<Vec<u8>> 
         return None;
     }
 
-    while active.len() > 1 {
-        active.sort_by(|&left, &right| {
-            nodes[left]
-                .frequency
-                .cmp(&nodes[right].frequency)
-                .then_with(|| nodes[left].min_symbol.cmp(&nodes[right].min_symbol))
-        });
-        let first = active.remove(0);
-        let second = active.remove(0);
+    let mut leaf_queue = leaves.iter().map(|&(_, index)| index).collect::<Vec<_>>();
+    leaf_queue.sort_by(|&left, &right| compare_huffman_nodes(&nodes, left, right));
+    let mut leaf_head = 0;
+    let mut parent_queue = Vec::with_capacity(leaves.len() - 1);
+    let mut parent_head = 0;
+    let mut remaining = leaf_queue.len();
+
+    while remaining > 1 {
+        let first = pop_huffman_queue(
+            &nodes,
+            &leaf_queue,
+            &mut leaf_head,
+            &parent_queue,
+            &mut parent_head,
+        )?;
+        let second = pop_huffman_queue(
+            &nodes,
+            &leaf_queue,
+            &mut leaf_head,
+            &parent_queue,
+            &mut parent_head,
+        )?;
         let parent = nodes.len();
         nodes.push(HuffmanNode {
             frequency: nodes[first].frequency + nodes[second].frequency,
@@ -828,7 +839,8 @@ fn huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Option<Vec<u8>> 
         });
         nodes[first].parent = Some(parent);
         nodes[second].parent = Some(parent);
-        active.push(parent);
+        parent_queue.push(parent);
+        remaining -= 1;
     }
 
     let mut lengths = vec![0_u8; frequencies.len()];
@@ -846,6 +858,45 @@ fn huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Option<Vec<u8>> 
     }
 
     Some(lengths)
+}
+
+fn compare_huffman_nodes(nodes: &[HuffmanNode], left: usize, right: usize) -> core::cmp::Ordering {
+    nodes[left]
+        .frequency
+        .cmp(&nodes[right].frequency)
+        .then_with(|| nodes[left].min_symbol.cmp(&nodes[right].min_symbol))
+}
+
+fn pop_huffman_queue(
+    nodes: &[HuffmanNode],
+    leaf_queue: &[usize],
+    leaf_head: &mut usize,
+    parent_queue: &[usize],
+    parent_head: &mut usize,
+) -> Option<usize> {
+    let leaf = leaf_queue.get(*leaf_head).copied();
+    let parent = parent_queue.get(*parent_head).copied();
+
+    match (leaf, parent) {
+        (Some(leaf), Some(parent)) => {
+            if compare_huffman_nodes(nodes, leaf, parent).is_le() {
+                *leaf_head += 1;
+                Some(leaf)
+            } else {
+                *parent_head += 1;
+                Some(parent)
+            }
+        }
+        (Some(leaf), None) => {
+            *leaf_head += 1;
+            Some(leaf)
+        }
+        (None, Some(parent)) => {
+            *parent_head += 1;
+            Some(parent)
+        }
+        (None, None) => None,
+    }
 }
 
 fn write_complex_prefix_code_lengths(
