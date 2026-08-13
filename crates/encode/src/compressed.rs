@@ -23,6 +23,9 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
             "only q0..q5 Brotli encoding is implemented yet",
         ));
     }
+    if options.quality_value() == 0 && !input.is_empty() && input.len() <= 256 {
+        return crate::stored::compress_stored_with_options(input, options);
+    }
 
     let mut writer = BitWriter::with_capacity(max_literal_only_size(input.len()));
     write_window_bits(&mut writer, options.window_bits_value())?;
@@ -1321,6 +1324,17 @@ mod tests {
         .unwrap();
 
         assert!(encoded.len() < stored.len());
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q0_stores_tiny_payloads() {
+        let input = b"<html><body>hello burli</body></html>".repeat(4);
+        let options = Options::default().quality(0).unwrap();
+        let encoded = compress_with_options(&input, &options).unwrap();
+        let stored = crate::stored::compress_stored_with_options(&input, &options).unwrap();
+
+        assert_eq!(encoded, stored);
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 
