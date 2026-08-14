@@ -22,10 +22,13 @@ const GROUP_BAR_FILL: f64 = 0.78;
 const GROUP_BAR_GAP_FRACTION: f64 = 0.025;
 const GROUP_BAR_MIN_GAP: f64 = 2.0;
 const GROUP_BAR_MAX_GAP: f64 = 4.0;
+const LEGEND_ITEM_GAP: f64 = 16.0;
+const LEGEND_CHAR_W: f64 = 5.5;
 
 const TRANSFER_RATE: f64 = 100e6;
 const QUALITY: u8 = 5;
 const DECODE_QUALITY: u8 = 5;
+const SUMMARY_QUALITIES: &[u8] = &[0, 1, 2, 3, 4, 5];
 const SCATTER_QUALITIES: &[u8] = &[0, 1, 2, 3, 4, 5];
 const MATRIX_QUALITIES: &[u8] = &[0, 1, 2, 3, 4, 5];
 const SMALL_QUALITIES: &[u8] = &[0, 1, 2, 3, 4, 5];
@@ -987,7 +990,7 @@ fn chart_header(
 }
 
 fn marker_item_width(style: &CodecStyle) -> f64 {
-    style.label.chars().count() as f64 * 7.0 + 34.0
+    style.label.chars().count() as f64 * LEGEND_CHAR_W + 34.0
 }
 
 fn draw_marker_legend(
@@ -1007,21 +1010,33 @@ fn draw_marker_legend(
         return Ok(0);
     }
 
-    let gap = 22.0;
     let widths = styles
         .iter()
         .map(|s| marker_item_width(s))
         .collect::<Vec<_>>();
-    let one_row_total = widths.iter().sum::<f64>() + styles.len().saturating_sub(1) as f64 * gap;
-    if one_row_total <= max_width || styles.len() == 1 {
-        let mut x = mid_x - one_row_total / 2.0;
-        for (style, item_w) in styles.iter().zip(widths) {
-            draw_marker_legend_item(area, style, x, y)?;
-            x += item_w + gap;
+    if styles.len() == 1 {
+        draw_marker_legend_item(area, styles[0], mid_x - widths[0] / 2.0, y)?;
+        return Ok(1);
+    }
+
+    let last_width = *widths.last().unwrap_or(&0.0);
+    let max_step = (max_width - last_width) / (styles.len() - 1) as f64;
+    let min_step = widths
+        .iter()
+        .take(styles.len() - 1)
+        .copied()
+        .fold(0.0, f64::max)
+        + LEGEND_ITEM_GAP;
+    if min_step <= max_step {
+        let total_width = (styles.len() - 1) as f64 * min_step + last_width;
+        let start = mid_x - total_width / 2.0;
+        for (i, style) in styles.iter().enumerate() {
+            draw_marker_legend_item(area, style, start + i as f64 * min_step, y)?;
         }
         return Ok(1);
     }
 
+    let gap = 22.0;
     let max_columns = preferred_columns.clamp(1, styles.len());
     let mut columns = 1;
     let mut rows = styles.len();
@@ -1419,20 +1434,29 @@ fn draw_scatter_panel(
 }
 
 fn draw_summary(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
-    let data = load_level_data(cfg, &cfg.summary_codecs, QUALITY, Some(MAIN_CORPUS));
+    let data = load_all_data(cfg, &cfg.summary_codecs, Some(MAIN_CORPUS));
     let main_inputs = input_names(MAIN_CORPUS);
-    require_named_rows(&data, &cfg.summary_codecs, &main_inputs, "summary")?;
+    require_named_quality_rows(
+        &data,
+        &cfg.summary_codecs,
+        &main_inputs,
+        SUMMARY_QUALITIES,
+        "summary",
+    )?;
     let mut stacks: BTreeMap<String, (f64, f64, f64)> = BTreeMap::new();
     for key in &cfg.summary_codecs {
         let rows = data.get(*key).cloned().unwrap_or_default();
         let mut comp = Vec::new();
         let mut xfer = Vec::new();
         let mut decomp = Vec::new();
-        for row in rows {
+        for row in rows
+            .iter()
+            .filter(|row| SUMMARY_QUALITIES.contains(&row.quality))
+        {
             if row.compress_ns <= 0.0 {
                 continue;
             }
-            let (c, t, d) = compute_pipeline(&row);
+            let (c, t, d) = compute_pipeline(row);
             comp.push(c.ln());
             xfer.push(t.ln());
             decomp.push(d.ln());
@@ -1454,21 +1478,20 @@ fn draw_summary(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
         .summary_codecs
         .iter()
         .copied()
-        .filter(|c| stacks.contains_key(*c))
+        .filter(|codec| stacks.contains_key(*codec))
         .collect::<Vec<_>>();
     if codecs.is_empty() {
         return Ok(());
     }
 
     let width = 700;
-    let leg_rows = codecs.len().div_ceil(2);
-    let height = 63 + 250 + 52 + (leg_rows as f64 * LEGEND_ROW_H) as u32 + 58;
+    let height = 420;
     let path = output_path(out_dir, "summary.svg");
     let area = root(&path, width, height)?;
     chart_header(
         &area,
         width,
-        "14-file web corpus: Pipeline @100 MB/s geomean, q5 (lower is better)",
+        "14-file web corpus: q0..q5 pipeline geomean @100 MB/s (lower is better)",
         cfg.hw_label.as_deref(),
         22,
     )?;
@@ -1478,10 +1501,9 @@ fn draw_summary(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
     let plot_w = x_right - x_left;
     let p_top = if cfg.hw_label.is_some() { 63.0 } else { 48.0 };
     let p_bot = p_top + 250.0;
-    let y_max = codecs
-        .iter()
-        .filter_map(|c| stacks.get(*c))
-        .map(|(a, b, c)| a + b + c)
+    let y_max = stacks
+        .values()
+        .map(|(comp, transfer, decomp)| comp + transfer + decomp)
         .fold(0.0, f64::max)
         * 1.15;
 
@@ -1495,19 +1517,18 @@ fn draw_summary(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
     )?;
     draw_y_grid(&area, x_left, x_right, p_top, p_bot, y_max, true)?;
 
-    let bar_w = (plot_w * 0.7 / codecs.len() as f64).min(80.0);
-    let gap = bar_w * 0.4;
-    let total = codecs.len() as f64 * bar_w + (codecs.len() - 1) as f64 * gap;
-    let start = x_left + (plot_w - total) / 2.0;
-    for (i, key) in codecs.iter().enumerate() {
-        let Some(style) = cfg.style(key) else {
+    let bars = grouped_bar_rects(x_left, plot_w, codecs.len(), 80.0);
+    for (codec, (x, bar_w)) in codecs.iter().zip(bars.iter().copied()) {
+        let Some(parts) = stacks.get(*codec) else {
             continue;
         };
-        let x = start + i as f64 * (bar_w + gap);
-        draw_stack(&area, x, bar_w, p_top, p_bot, y_max, stacks[*key], style)?;
+        let Some(style) = cfg.style(codec) else {
+            continue;
+        };
+        draw_stack(&area, x, bar_w, p_top, p_bot, y_max, *parts, style)?;
         text(
             &area,
-            *key,
+            *codec,
             px(x + bar_w / 2.0),
             px(p_bot + 16.0),
             10,
@@ -1518,7 +1539,7 @@ fn draw_summary(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
     }
     let mid = width as f64 / 2.0;
     let leg_y = p_bot + 52.0;
-    let legend_rows = draw_marker_legend(
+    draw_marker_legend(
         &area,
         cfg,
         &codecs,
@@ -1527,7 +1548,7 @@ fn draw_summary(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
         x_right - x_left,
         codecs.len().max(1),
     )?;
-    draw_segment_legend(&area, mid, leg_y + legend_rows as f64 * LEGEND_ROW_H + 18.0)?;
+    draw_segment_legend(&area, mid, leg_y + LEGEND_ROW_H + 18.0)?;
     area.present()?;
     drop(area);
     finish_svg(&path, width, height)?;
