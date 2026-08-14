@@ -313,6 +313,8 @@ impl EncoderPlan {
                             max_backward_distance,
                             &mut workspace.q1,
                         )
+                    } else if q0_medium_license_comment_64k_table_is_likely_safe(input) {
+                        q1::collect_with_64k_table(input, max_backward_distance, &mut workspace.q1)
                     } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input) {
                         q1::collect_fast_skip_without_last_distance_probe(
                             input,
@@ -716,7 +718,11 @@ fn q0_one_k_css_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
 }
 
 fn q0_large_license_comment_64k_table_is_likely_safe(input: &[u8]) -> bool {
-    input.len() >= 128 * 1024 && input.starts_with(b"/*!")
+    input.len() > 160 * 1024 && input.starts_with(b"/*!")
+}
+
+fn q0_medium_license_comment_64k_table_is_likely_safe(input: &[u8]) -> bool {
+    (128 * 1024..=160 * 1024).contains(&input.len()) && input.starts_with(b"/*!")
 }
 
 fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
@@ -2920,6 +2926,7 @@ mod tests {
         let module_12k = b"var n,l,u,t,i,o,r,f,e,c={},s=[];function demo(){return c;}".repeat(192);
         let license_module_12k =
             b"/** @license React */\n!function(){function demo(){return 1}}\n".repeat(192);
+        let medium_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(3072);
         let large_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(4096);
         let large_plain_js = b"function demo(){return demo();}\n".repeat(4096);
 
@@ -2941,6 +2948,12 @@ mod tests {
             &script_1k[..1024]
         ));
         assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(&json_1k[..1024]));
+        assert!(q0_medium_license_comment_64k_table_is_likely_safe(
+            &medium_license_js
+        ));
+        assert!(!q0_large_license_comment_64k_table_is_likely_safe(
+            &medium_license_js
+        ));
         assert!(q0_large_license_comment_64k_table_is_likely_safe(
             &large_license_js
         ));
