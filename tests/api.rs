@@ -271,6 +271,69 @@ fn q5_repeated_output_decodes_with_rust_brotli() {
 }
 
 #[test]
+fn q2_dictionary_after_split_meta_block_uses_global_base() {
+    let mut input = vec![b'x'; 1 << 16];
+    input.extend_from_slice(b"time_");
+    for index in 0..4096 {
+        input.push((index * 37 + 11) as u8);
+    }
+    let options = Options::default()
+        .quality(2)
+        .unwrap()
+        .window_bits(10)
+        .unwrap()
+        .block_bits(Some(16))
+        .unwrap();
+    let encoded = burli::compress_with_options(&input, &options).unwrap();
+
+    assert_eq!(burli::decompress(&encoded).unwrap(), input);
+}
+
+#[test]
+fn q4_q5_dictionary_after_split_meta_block_uses_global_base() {
+    let mut input = vec![b'x'; 2048];
+    input.extend_from_slice(b"time time time after a split meta-block");
+
+    for quality in 4..=5 {
+        let options = Options::default()
+            .quality(quality)
+            .unwrap()
+            .window_bits(10)
+            .unwrap();
+        let encoded = burli::compress_with_options(&input, &options).unwrap();
+
+        assert_eq!(
+            burli::decompress(&encoded)
+                .unwrap_or_else(|error| panic!("q{quality} decode failed: {error:?}")),
+            input
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "std")]
+fn stream_encoder_dictionary_after_split_meta_block_uses_global_base() {
+    let mut input = vec![b'x'; 1 << 16];
+    input.extend_from_slice(b"time_");
+    for index in 0..4096 {
+        input.push((index * 37 + 11) as u8);
+    }
+    let options = Options::default()
+        .quality(2)
+        .unwrap()
+        .window_bits(10)
+        .unwrap()
+        .block_bits(Some(16))
+        .unwrap();
+    let mut encoder = burli::StreamEncoder::with_options(Vec::new(), options).unwrap();
+
+    encoder.write_all(&input).unwrap();
+    let encoded = encoder.finish().unwrap();
+
+    assert_eq!(burli::decompress(&encoded).unwrap(), input);
+}
+
+#[test]
 fn burli_decodes_rust_brotli_empty_stream() {
     let mut encoder = rust_brotli::CompressorReader::new(&b""[..], 4096, 0, 22);
     let mut encoded = Vec::new();
@@ -322,6 +385,35 @@ fn burli_decodes_rust_brotli_representative_compressed_streams() {
                     .unwrap_or_else(|error| panic!("q{quality} failed: {error:?}")),
                 *input
             );
+        }
+    }
+}
+
+#[test]
+#[ignore = "uses local benchmark corpus if already downloaded"]
+fn local_silesia_q4_q5_round_trip_through_burli() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/corpus/silesia");
+    let entries = [
+        "dickens", "mozilla", "mr", "nci", "ooffice", "osdb", "reymont", "samba", "sao", "webster",
+        "x-ray", "xml",
+    ];
+    if !root.exists() {
+        return;
+    }
+
+    for entry in entries {
+        let path = root.join(entry);
+        if !path.exists() {
+            continue;
+        }
+        let input = std::fs::read(&path).unwrap();
+        for quality in 4..=5 {
+            let encoded = burli::compress(&input, quality)
+                .unwrap_or_else(|error| panic!("q{quality} {entry} encode failed: {error:?}"));
+            let decoded = burli::decompress(&encoded)
+                .unwrap_or_else(|error| panic!("q{quality} {entry} decode failed: {error:?}"));
+
+            assert_eq!(decoded, input, "q{quality} {entry}");
         }
     }
 }

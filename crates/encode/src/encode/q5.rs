@@ -34,6 +34,7 @@ struct Match {
 
 #[derive(Clone, Copy, Debug)]
 struct SearchParams {
+    input_base: usize,
     max_backward_distance: usize,
     best_len_in: usize,
     min_score: usize,
@@ -60,21 +61,52 @@ impl Workspace {
 
 pub(super) fn collect(
     input: &[u8],
+    input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
     if input.len() <= 1024 {
-        collect_with_params::<8, 4, 4, 4, false>(input, max_backward_distance, workspace)
+        collect_with_params::<8, 4, 4, 4, false>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
     } else if input.len() <= 96 * 1024 {
-        collect_with_params::<13, 3, 4, 4, true>(input, max_backward_distance, workspace)
+        collect_with_params::<13, 3, 4, 4, true>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
     } else if input.len() <= 160 * 1024 {
-        collect_with_params::<15, 3, 4, 4, true>(input, max_backward_distance, workspace)
+        collect_with_params::<15, 3, 4, 4, true>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
     } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
-        collect_with_params::<13, 3, 4, 4, true>(input, max_backward_distance, workspace)
+        collect_with_params::<13, 3, 4, 4, true>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
     } else if input.len() >= LARGE_INPUT_THRESHOLD {
-        collect_with_params::<15, 4, 5, 8, true>(input, max_backward_distance, workspace)
+        collect_with_params::<15, 4, 5, 8, true>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
     } else {
-        collect_with_params::<14, 3, 4, 4, false>(input, max_backward_distance, workspace)
+        collect_with_params::<14, 3, 4, 4, false>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
     }
 }
 
@@ -86,6 +118,7 @@ fn collect_with_params<
     const SKIP_DICT_AFTER_MATCH: bool,
 >(
     input: &[u8],
+    input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
@@ -116,6 +149,7 @@ fn collect_with_params<
                 max_len,
                 dist_cache,
                 SearchParams {
+                    input_base,
                     max_backward_distance,
                     best_len_in: 0,
                     min_score: MIN_SCORE,
@@ -155,6 +189,7 @@ fn collect_with_params<
                 lazy_max_len,
                 dist_cache,
                 SearchParams {
+                    input_base,
                     max_backward_distance,
                     best_len_in,
                     min_score: MIN_SCORE,
@@ -170,7 +205,7 @@ fn collect_with_params<
         }
 
         apply_sparse_search = pos + 2 * found.len + SPARSE_SEARCH_WINDOW;
-        let max_backward_at_pos = pos.min(max_backward_distance);
+        let max_backward_at_pos = input_base.saturating_add(pos).min(max_backward_distance);
         let distance_code = compute_distance_code(found.distance, max_backward_at_pos, dist_cache);
         let mut token = Token {
             insert_start,
@@ -256,7 +291,10 @@ fn find_match<
     let mut best_score = params.min_score;
     let mut best_len = best_check;
     let mut out = None;
-    let dictionary_base = pos.min(params.max_backward_distance);
+    let dictionary_base = params
+        .input_base
+        .saturating_add(pos)
+        .min(params.max_backward_distance);
 
     for (index, &distance) in dist_cache.iter().enumerate() {
         if distance == 0 || distance > params.max_backward_distance || pos < distance {

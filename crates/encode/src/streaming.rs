@@ -12,6 +12,7 @@ pub struct StreamEncoder<W> {
     workspace: crate::encode::Workspace,
     buffered: Vec<u8>,
     block_size: usize,
+    input_pos: usize,
 }
 
 impl<W: Write> StreamEncoder<W> {
@@ -38,6 +39,7 @@ impl<W: Write> StreamEncoder<W> {
             workspace: crate::encode::Workspace::default(),
             buffered: Vec::new(),
             block_size: 1_usize << block_bits,
+            input_pos: 0,
         })
     }
 
@@ -58,7 +60,11 @@ impl<W: Write> StreamEncoder<W> {
         self.inner
     }
 
-    fn write_meta_block(&mut self, input: &[u8]) -> io::Result<()> {
+    fn write_meta_block(
+        &mut self,
+        input: &[u8],
+        allow_cross_collector_shortcuts: bool,
+    ) -> io::Result<()> {
         if input.is_empty() {
             return Ok(());
         }
@@ -68,11 +74,17 @@ impl<W: Write> StreamEncoder<W> {
             crate::encode::write_stream_chunk_with_workspace(
                 &mut self.writer,
                 input,
+                self.input_pos,
+                allow_cross_collector_shortcuts,
                 &self.options,
                 &mut self.workspace,
             )
         };
         result.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        self.input_pos = self
+            .input_pos
+            .checked_add(input.len())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Brotli input overflow"))?;
         self.write_full_bytes()
     }
 
@@ -81,7 +93,7 @@ impl<W: Write> StreamEncoder<W> {
             return Ok(());
         }
         let chunk = core::mem::take(&mut self.buffered);
-        self.write_meta_block(&chunk)
+        self.write_meta_block(&chunk, self.input_pos == 0)
     }
 
     fn write_full_bytes(&mut self) -> io::Result<()> {
@@ -106,7 +118,7 @@ impl<W: Write> Write for StreamEncoder<W> {
         self.buffered.extend_from_slice(buf);
         while self.buffered.len() >= self.block_size {
             let chunk: Vec<u8> = self.buffered.drain(..self.block_size).collect();
-            self.write_meta_block(&chunk)?;
+            self.write_meta_block(&chunk, false)?;
         }
         Ok(buf.len())
     }

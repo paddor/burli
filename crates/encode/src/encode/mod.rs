@@ -180,6 +180,8 @@ pub(crate) fn write_stream_header(
 pub(crate) fn write_stream_chunk_with_workspace(
     writer: &mut BitWriter,
     input: &[u8],
+    input_base: usize,
+    allow_cross_collector_shortcuts: bool,
     options: &Options,
     workspace: &mut Workspace,
 ) -> Result<(), CompressError> {
@@ -192,7 +194,13 @@ pub(crate) fn write_stream_chunk_with_workspace(
         ));
     }
     let plan = EncoderPlan::from_options(input.len(), options)?;
-    plan.write_meta_block_with_workspace(writer, input, workspace)
+    plan.write_meta_block_with_workspace(
+        writer,
+        input,
+        input_base,
+        allow_cross_collector_shortcuts,
+        workspace,
+    )
 }
 
 fn max_literal_only_size(input_len: usize) -> usize {
@@ -208,9 +216,20 @@ fn write_compressed_meta_blocks(
     workspace: &mut Workspace,
 ) -> Result<(), CompressError> {
     let plan = EncoderPlan::from_options(input.len(), options)?;
+    let allow_cross_collector_shortcuts = input.len() <= plan.block_size;
 
+    let mut input_base = 0_usize;
     for chunk in input.chunks(plan.block_size) {
-        plan.write_meta_block_with_workspace(writer, chunk, workspace)?;
+        plan.write_meta_block_with_workspace(
+            writer,
+            chunk,
+            input_base,
+            allow_cross_collector_shortcuts,
+            workspace,
+        )?;
+        input_base = input_base
+            .checked_add(chunk.len())
+            .ok_or(BurliError::Format("Brotli input position overflow"))?;
     }
 
     Ok(())
@@ -259,9 +278,12 @@ impl EncoderPlan {
         self,
         writer: &mut BitWriter,
         input: &[u8],
+        input_base: usize,
+        allow_cross_collector_shortcuts: bool,
         workspace: &mut Workspace,
     ) -> Result<(), CompressError> {
-        let max_backward_distance = self.max_backward_distance.min(input.len());
+        let local_max_backward_distance = self.max_backward_distance.min(input.len());
+        let global_max_backward_distance = self.max_backward_distance;
         if input.len() < self.path.min_match_len() {
             return write_compressed_literal_meta_block(writer, input);
         }
@@ -273,7 +295,7 @@ impl EncoderPlan {
 
             if q0_one_k_css_q1_meta_block_is_likely_safe(input) {
                 let has_copy = {
-                    let batch = q1::collect(input, max_backward_distance, &mut workspace.q1)?;
+                    let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
                     batch.has_copy()
                 };
                 if !has_copy {
@@ -290,7 +312,7 @@ impl EncoderPlan {
 
             if q0_tiny_json_q1_meta_block_is_likely_safe(input) {
                 let has_copy = {
-                    let batch = q1::collect(input, max_backward_distance, &mut workspace.q1)?;
+                    let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
                     batch.has_copy()
                 };
                 if !has_copy {
@@ -308,13 +330,13 @@ impl EncoderPlan {
                 let tokens = if q0_one_k_license_or_css_no_last_probe_is_likely_safe(input) {
                     q2::collect_without_dictionary_no_lazy_no_last_distance_probe(
                         input,
-                        max_backward_distance,
+                        local_max_backward_distance,
                         &mut workspace.q2,
                     )
                 } else {
                     q2::collect_without_dictionary_no_lazy(
                         input,
-                        max_backward_distance,
+                        local_max_backward_distance,
                         &mut workspace.q2,
                     )
                 };
@@ -334,63 +356,71 @@ impl EncoderPlan {
                     let batch = if q0_huge_license_comment_32k_table_is_likely_safe(input) {
                         q1::collect_with_32k_fast_skip(
                             input,
-                            max_backward_distance,
+                            local_max_backward_distance,
                             &mut workspace.q1,
                         )
                     } else if q0_large_license_comment_64k_table_is_likely_safe(input) {
                         q1::collect_with_64k_fast_skip(
                             input,
-                            max_backward_distance,
+                            local_max_backward_distance,
                             &mut workspace.q1,
                         )
                     } else if q0_medium_license_comment_64k_table_is_likely_safe(input) {
                         q1::collect_with_64k_medium_skip(
                             input,
-                            max_backward_distance,
+                            local_max_backward_distance,
                             &mut workspace.q1,
                         )
                     } else if q0_medium_json_32k_table_is_likely_safe(input) {
                         q1::collect_with_32k_json_skip(
                             input,
-                            max_backward_distance,
+                            local_max_backward_distance,
                             &mut workspace.q1,
                         )
                     } else if q0_small_license_js_u16_medium_skip_is_likely_safe(input) {
-                        q1::collect_medium_skip(input, max_backward_distance, &mut workspace.q1)?
+                        q1::collect_medium_skip(
+                            input,
+                            local_max_backward_distance,
+                            &mut workspace.q1,
+                        )?
                     } else if q0_medium_license_js_64k_medium_skip_is_likely_safe(input) {
                         q1::collect_with_64k_medium_skip(
                             input,
-                            max_backward_distance,
+                            local_max_backward_distance,
                             &mut workspace.q1,
                         )
                     } else if q0_medium_css_64k_fast_skip_is_likely_safe(input) {
                         q1::collect_with_64k_fast_skip(
                             input,
-                            max_backward_distance,
+                            local_max_backward_distance,
                             &mut workspace.q1,
                         )
                     } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input) {
                         q1::collect_fast_skip_without_last_distance_probe(
                             input,
-                            max_backward_distance,
+                            local_max_backward_distance,
                             &mut workspace.q1,
                         )?
                     } else if q0_no_last_distance_probe_is_likely_safe(input) {
                         q1::collect_without_last_distance_probe(
                             input,
-                            max_backward_distance,
+                            local_max_backward_distance,
                             &mut workspace.q1,
                         )?
                     } else if q0_medium_minified_js_medium_skip_is_likely_safe(input) {
                         q1::collect_medium_skip_without_last_distance_probe(
                             input,
-                            max_backward_distance,
+                            local_max_backward_distance,
                             &mut workspace.q1,
                         )?
                     } else if q0_fast_skip_is_likely_safe(input) {
-                        q1::collect_fast_skip(input, max_backward_distance, &mut workspace.q1)?
+                        q1::collect_fast_skip(
+                            input,
+                            local_max_backward_distance,
+                            &mut workspace.q1,
+                        )?
                     } else {
-                        q1::collect(input, max_backward_distance, &mut workspace.q1)?
+                        q1::collect(input, local_max_backward_distance, &mut workspace.q1)?
                     };
                     batch.has_copy()
                 };
@@ -442,7 +472,7 @@ impl EncoderPlan {
             }
 
             let has_copy = {
-                let batch = q0::collect(input, max_backward_distance, &mut workspace.q0)?;
+                let batch = q0::collect(input, local_max_backward_distance, &mut workspace.q0)?;
                 batch.has_copy()
             };
             if !has_copy {
@@ -455,7 +485,7 @@ impl EncoderPlan {
             if input.len() <= Q1_STATIC_ENTROPY_MAX_INPUT {
                 let tokens = q2::collect_without_dictionary_no_lazy(
                     input,
-                    max_backward_distance,
+                    local_max_backward_distance,
                     &mut workspace.q2,
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
@@ -471,9 +501,13 @@ impl EncoderPlan {
 
             let has_copy = {
                 let batch = if q1_medium_64k_table_is_likely_safe(input) {
-                    q1::collect_with_64k_table(input, max_backward_distance, &mut workspace.q1)
+                    q1::collect_with_64k_table(
+                        input,
+                        local_max_backward_distance,
+                        &mut workspace.q1,
+                    )
                 } else {
-                    q1::collect(input, max_backward_distance, &mut workspace.q1)?
+                    q1::collect(input, local_max_backward_distance, &mut workspace.q1)?
                 };
                 batch.has_copy()
             };
@@ -490,13 +524,19 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::StaticEntropy {
-            if (Q2_MEDIUM_H3_MIN_INPUT..=Q2_MEDIUM_H3_MAX_INPUT).contains(&input.len()) {
+            if allow_cross_collector_shortcuts
+                && (Q2_MEDIUM_H3_MIN_INPUT..=Q2_MEDIUM_H3_MAX_INPUT).contains(&input.len())
+            {
                 let tokens = if input.len() <= Q2_FAST_H3_MAX_INPUT {
-                    q3::collect_fast_sweep_no_lazy(input, max_backward_distance, &mut workspace.q3)
+                    q3::collect_fast_sweep_no_lazy(
+                        input,
+                        local_max_backward_distance,
+                        &mut workspace.q3,
+                    )
                 } else if input.len() <= Q2_SWEEP1_H3_MAX_INPUT {
-                    q3::collect_fast_sweep(input, max_backward_distance, &mut workspace.q3)
+                    q3::collect_fast_sweep(input, local_max_backward_distance, &mut workspace.q3)
                 } else {
-                    q3::collect(input, max_backward_distance, &mut workspace.q3)
+                    q3::collect(input, local_max_backward_distance, &mut workspace.q3)
                 };
                 if !tokens.iter().any(|token| token.is_copy()) {
                     return write_compressed_literal_meta_block(writer, input);
@@ -510,9 +550,18 @@ impl EncoderPlan {
             }
 
             let tokens = if input.len() < Q2_STATIC_NO_DICTIONARY_MAX_INPUT {
-                q2::collect_without_dictionary(input, max_backward_distance, &mut workspace.q2)
+                q2::collect_without_dictionary(
+                    input,
+                    local_max_backward_distance,
+                    &mut workspace.q2,
+                )
             } else {
-                q2::collect(input, max_backward_distance, &mut workspace.q2)
+                q2::collect(
+                    input,
+                    input_base,
+                    global_max_backward_distance,
+                    &mut workspace.q2,
+                )
             };
             if !tokens.iter().any(|token| token.is_copy()) {
                 return write_compressed_literal_meta_block(writer, input);
@@ -529,9 +578,9 @@ impl EncoderPlan {
             let use_medium_sweep1 =
                 (Q3_MEDIUM_SWEEP1_MIN_INPUT..=Q3_MEDIUM_SWEEP1_MAX_INPUT).contains(&input.len());
             let tokens = if input.len() <= Q3_FAST_SWEEP_MAX_INPUT || use_medium_sweep1 {
-                q3::collect_fast_sweep(input, max_backward_distance, &mut workspace.q3)
+                q3::collect_fast_sweep(input, local_max_backward_distance, &mut workspace.q3)
             } else {
-                q3::collect(input, max_backward_distance, &mut workspace.q3)
+                q3::collect(input, local_max_backward_distance, &mut workspace.q3)
             };
             if !tokens.iter().any(|token| token.is_copy()) {
                 return write_compressed_literal_meta_block(writer, input);
@@ -545,8 +594,13 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::RegularSplit {
-            if input.len() <= Q4_TINY_CONTEXT_MAX_INPUT {
-                let tokens = q5::collect(input, max_backward_distance, &mut workspace.q5);
+            if allow_cross_collector_shortcuts && input.len() <= Q4_TINY_CONTEXT_MAX_INPUT {
+                let tokens = q5::collect(
+                    input,
+                    input_base,
+                    global_max_backward_distance,
+                    &mut workspace.q5,
+                );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     return write_compressed_literal_meta_block(writer, input);
                 }
@@ -557,7 +611,12 @@ impl EncoderPlan {
                     Q5_DELAYED_SYMBOLS,
                 );
             }
-            let tokens = q4::collect(input, max_backward_distance, &mut workspace.q4);
+            let tokens = q4::collect(
+                input,
+                input_base,
+                global_max_backward_distance,
+                &mut workspace.q4,
+            );
             if !tokens.iter().any(|token| token.is_copy()) {
                 return write_compressed_literal_meta_block(writer, input);
             }
@@ -570,7 +629,12 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::ContextModeled {
-            let tokens = q5::collect(input, max_backward_distance, &mut workspace.q5);
+            let tokens = q5::collect(
+                input,
+                input_base,
+                global_max_backward_distance,
+                &mut workspace.q5,
+            );
             if !tokens.iter().any(|token| token.is_copy()) {
                 return write_compressed_literal_meta_block(writer, input);
             }
@@ -1056,7 +1120,6 @@ fn write_token_batch_with_len(
     if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
         return Err(BurliError::Format("invalid compressed Brotli block size"));
     }
-
     let mut batch = PreparedBatch::with_capacity(tokens.len());
     for &token in tokens {
         batch.push(input, token)?;
