@@ -743,23 +743,21 @@ fn write_fast_compressed_literal_meta_block(
 
     write_meta_block_len(writer, input.len())?;
     write_block_and_context_header(writer)?;
-    let mut literal_frequencies = vec![0_usize; LITERAL_ALPHABET_SIZE];
+    let mut literal_frequencies = [0_usize; LITERAL_ALPHABET_SIZE];
     for &literal in input {
         literal_frequencies[usize::from(literal)] += 1;
     }
-    let literal_codes = write_fast_prefix_code_from_frequencies(
+    let mut prefix = PrefixCodeScratch::default();
+    prefix.reserve_for(LITERAL_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE);
+    let literal_code_map = write_fast_dense_prefix_code_array_from_frequencies_with_scratch(
         writer,
-        LITERAL_ALPHABET_SIZE,
         &literal_frequencies,
-        8,
+        &mut prefix,
     )?;
-    let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
     write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, command_symbol)?;
     write_simple_prefix_code_single(writer, 64, 0)?;
     writer.write_bits_trusted(insert.extra_bits, insert.extra);
-    for &literal in input {
-        write_literal(writer, &literal_code_map, literal)?;
-    }
+    write_literals_dense(writer, input, &literal_code_map)?;
     Ok(())
 }
 
@@ -2293,6 +2291,32 @@ fn write_literal(
 ) -> Result<(), CompressError> {
     let code = symbol_code(codes, u16::from(literal))?;
     writer.write_bits_trusted(code.len, u64::from(code.bits));
+    Ok(())
+}
+
+fn write_literals_dense(
+    writer: &mut BitWriter,
+    input: &[u8],
+    codes: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
+) -> Result<(), CompressError> {
+    let mut pending_bits = 0_u64;
+    let mut pending_width = 0_u8;
+    for &literal in input {
+        let code = codes[usize::from(literal)];
+        if code.len == u8::MAX {
+            return Err(BurliError::Format("missing Brotli prefix symbol"));
+        }
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            code.len,
+            u64::from(code.bits),
+        );
+    }
+    if pending_width != 0 {
+        writer.write_bits_trusted_fits(pending_width, pending_bits);
+    }
     Ok(())
 }
 
