@@ -10,6 +10,7 @@ const CODE_LENGTH_ORDER: [usize; CODE_LENGTH_CODES] =
     [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const CODE_LENGTH_PREFIX_LEN: [u8; 16] = [2, 2, 2, 3, 2, 2, 2, 4, 2, 2, 2, 3, 2, 2, 2, 4];
 const CODE_LENGTH_PREFIX_VALUE: [u8; 16] = [0, 4, 3, 2, 0, 4, 3, 1, 0, 4, 3, 2, 0, 4, 3, 5];
+const REVERSE_BYTE: [u8; 256] = reverse_byte_table();
 
 #[derive(Clone, Debug)]
 pub(crate) struct PrefixCode {
@@ -309,7 +310,19 @@ fn fill_fast_lookup(fast: &mut [Lookup], fast_bits: u8, entry: Entry) {
 }
 
 fn reverse_low_bits(value: u16, width: u8) -> u16 {
-    value.reverse_bits() >> (u16::BITS as u8 - width)
+    let reversed = (u16::from(REVERSE_BYTE[usize::from(value & 0xff)]) << 8)
+        | u16::from(REVERSE_BYTE[usize::from(value >> 8)]);
+    reversed >> (u16::BITS as u8 - width)
+}
+
+const fn reverse_byte_table() -> [u8; 256] {
+    let mut table = [0_u8; 256];
+    let mut index = 0_usize;
+    while index < table.len() {
+        table[index] = (index as u8).reverse_bits();
+        index += 1;
+    }
+    table
 }
 
 fn read_simple_prefix_code(
