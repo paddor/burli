@@ -571,6 +571,7 @@ impl Workspace {
         Ok(&self.batch)
     }
 
+    #[allow(clippy::large_stack_arrays)]
     fn collect_with_64k_table(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
         self.reset(input.len());
 
@@ -579,17 +580,8 @@ impl Workspace {
             return &self.batch;
         }
 
-        if self.table.len() != (1 << 16) {
-            self.table.resize(1 << 16, 0);
-        } else {
-            self.table.fill(0);
-        }
-        collect_with_u32_table_m6::<16>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-            &mut self.table,
-        );
+        let mut table = [0_u32; 1 << 16];
+        collect_with_u32_table_m6::<16>(&mut self.batch, input, max_backward_distance, &mut table);
         &self.batch
     }
 
