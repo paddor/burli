@@ -2077,12 +2077,6 @@ fn encode_fast_code_length_tree_into(
     lengths: &[u8],
     tree: &mut Vec<u16>,
 ) -> Result<(), CompressError> {
-    for &len in lengths {
-        if len > FAST_CODE_BITS {
-            return Err(BurliError::Format("Brotli Huffman code length exceeds 14"));
-        }
-    }
-
     let trimmed_len = lengths
         .iter()
         .rposition(|&len| len != 0)
@@ -2097,6 +2091,9 @@ fn encode_fast_code_length_tree_into(
     let mut index = 0;
     while index < trimmed_len {
         let value = lengths[index];
+        if value > FAST_CODE_BITS {
+            return Err(BurliError::Format("Brotli Huffman code length exceeds 14"));
+        }
         let mut repetitions = 1;
         while index + repetitions < trimmed_len && lengths[index + repetitions] == value {
             repetitions += 1;
