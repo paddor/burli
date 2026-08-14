@@ -37,7 +37,7 @@ const INTERNAL_INSERT_OFFSET: [usize; 24] = [
 pub(super) struct Batch {
     commands: Vec<u32>,
     literal_spans: Vec<LiteralSpan>,
-    literal_frequencies: [usize; LITERAL_ALPHABET_SIZE],
+    literal_frequencies: [u32; LITERAL_ALPHABET_SIZE],
     command_frequencies: [usize; INTERNAL_COMMAND_ALPHABET_SIZE],
     has_copy: bool,
 }
@@ -316,13 +316,13 @@ impl Batch {
         if fast_literal_prefix {
             return write_fast_dense_prefix_code_array_from_frequencies_with_scratch(
                 writer,
-                &self.literal_frequencies,
+                &literal_frequencies_as_usize(&self.literal_frequencies),
                 prefix,
             );
         }
         super::write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
             writer,
-            &self.literal_frequencies,
+            &literal_frequencies_as_usize(&self.literal_frequencies),
             prefix,
             15,
         )
@@ -336,10 +336,20 @@ impl Batch {
         prefix.reserve_for(LITERAL_ALPHABET_SIZE, COMMAND_ALPHABET_SIZE);
         super::write_balanced_fast_dense_prefix_code_array_from_frequencies_with_scratch(
             writer,
-            &self.literal_frequencies,
+            &literal_frequencies_as_usize(&self.literal_frequencies),
             prefix,
         )
     }
+}
+
+fn literal_frequencies_as_usize(
+    frequencies: &[u32; LITERAL_ALPHABET_SIZE],
+) -> [usize; LITERAL_ALPHABET_SIZE] {
+    let mut converted = [0_usize; LITERAL_ALPHABET_SIZE];
+    for (dst, &src) in converted.iter_mut().zip(frequencies.iter()) {
+        *dst = src as usize;
+    }
+    converted
 }
 
 #[inline(never)]
