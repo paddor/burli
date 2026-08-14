@@ -4,7 +4,7 @@ use burli_core::{BurliError, CompressError, bits::BitWriter};
 
 use super::{
     COMMAND_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE, PrefixCodeScratch,
-    append_pending_bits, match_len, read_u32_le, read_u64_le, write_block_and_context_header,
+    append_pending_bits, match_len, read_u64_le, write_block_and_context_header,
     write_fast_dense_prefix_code_array_from_frequencies_with_scratch, write_meta_block_len,
     write_q1_internal_command_prefix_codes,
 };
@@ -1168,6 +1168,29 @@ fn hash6_word_at_offset_const<const TABLE_BITS: usize>(word: u64, offset: usize)
 }
 
 #[inline(always)]
+fn read_u32_le(input: &[u8], pos: usize) -> u32 {
+    debug_assert!(pos.checked_add(4).is_some_and(|end| end <= input.len()));
+    read_u32_le_trusted(input, pos)
+}
+
+#[cfg(not(feature = "paranoid"))]
+#[inline(always)]
+fn read_u32_le_trusted(input: &[u8], pos: usize) -> u32 {
+    // SAFETY: q1 hash probes check the input margin before calling this helper.
+    // The load may be unaligned, and `to_le` matches the safe fallback.
+    unsafe { core::ptr::read_unaligned(input.as_ptr().add(pos).cast::<u32>()).to_le() }
+}
+
+#[cfg(feature = "paranoid")]
+#[inline(always)]
+fn read_u32_le_trusted(input: &[u8], pos: usize) -> u32 {
+    let bytes = input[pos..]
+        .first_chunk::<4>()
+        .expect("read_u32_le range checked by caller");
+    u32::from_le_bytes(*bytes)
+}
+
+#[inline(always)]
 fn is_match6(input: &[u8], candidate: usize, pos: usize) -> bool {
     let diff = read_u64_le(input, candidate) ^ read_u64_le(input, pos);
     diff.trailing_zeros() >= 48
@@ -1180,5 +1203,20 @@ fn is_match(input: &[u8], candidate: usize, pos: usize, min_match: usize) -> boo
     } else {
         let diff = read_u64_le(input, candidate) ^ read_u64_le(input, pos);
         diff.trailing_zeros() >= 48
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trusted_u32_load_matches_safe_little_endian_chunks() {
+        let input: Vec<u8> = (0..=255).cycle().take(512).collect();
+        for pos in 0..=input.len() - 4 {
+            let expected = u32::from_le_bytes(input[pos..pos + 4].try_into().unwrap());
+
+            assert_eq!(read_u32_le(&input, pos), expected);
+        }
     }
 }
