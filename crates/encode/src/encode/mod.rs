@@ -2302,12 +2302,6 @@ fn encode_code_length_tree(lengths: &[u8]) -> Result<Vec<u16>, CompressError> {
 }
 
 fn encode_code_length_tree_into(lengths: &[u8], tree: &mut Vec<u16>) -> Result<(), CompressError> {
-    for &len in lengths {
-        if len > MAX_CODE_BITS {
-            return Err(BurliError::Format("Brotli Huffman code length exceeds 15"));
-        }
-    }
-
     let trimmed_len = lengths
         .iter()
         .rposition(|&len| len != 0)
@@ -2328,6 +2322,9 @@ fn encode_code_length_tree_into(lengths: &[u8], tree: &mut Vec<u16>) -> Result<(
 
     while index < trimmed_len {
         let value = lengths[index];
+        if value > MAX_CODE_BITS {
+            return Err(BurliError::Format("Brotli Huffman code length exceeds 15"));
+        }
         let mut reps = 1;
         if (value == 0 && use_rle_for_zero) || (value != 0 && use_rle_for_non_zero) {
             while index + reps < trimmed_len && lengths[index + reps] == value {
