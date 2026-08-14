@@ -26,6 +26,7 @@ struct Key {
     input: String,
     quality: u8,
     is_small: bool,
+    input_size: usize,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -178,6 +179,7 @@ fn load_latest(cache: &Path, codec: &str) -> Result<BTreeMap<Key, BenchRow>, Box
             input: row.input.clone(),
             quality: row.quality,
             is_small: row.is_small,
+            input_size: row.input_size,
         };
         match rows.get(&key) {
             Some(old) if old.timestamp_secs >= row.timestamp_secs => {}
