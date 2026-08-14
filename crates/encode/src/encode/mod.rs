@@ -261,7 +261,7 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::FastOnePass {
-            if q0_small_html_literal_meta_block_is_likely_safe(input) {
+            if q0_small_fast_literal_meta_block_is_likely_safe(input) {
                 return write_fast_compressed_literal_meta_block(writer, input);
             }
 
@@ -604,12 +604,12 @@ const fn min_match_len(quality: u8) -> usize {
     }
 }
 
-fn q0_small_html_literal_meta_block_is_likely_safe(input: &[u8]) -> bool {
-    const MIN_LEN: usize = 257;
-    const MAX_LEN: usize = 1024;
-
-    (MIN_LEN..=MAX_LEN).contains(&input.len())
-        && (input.starts_with(b"<!") || input.starts_with(b"<html"))
+fn q0_small_fast_literal_meta_block_is_likely_safe(input: &[u8]) -> bool {
+    let small_html = (257..=1024).contains(&input.len())
+        && (input.starts_with(b"<!") || input.starts_with(b"<html"));
+    let tiny_comment_or_css =
+        (385..=512).contains(&input.len()) && (input.starts_with(b"/*") || input.starts_with(b"@"));
+    small_html || tiny_comment_or_css
 }
 
 #[inline(always)]
@@ -2791,15 +2791,23 @@ mod tests {
     }
 
     #[test]
-    fn q0_small_html_literal_guard_is_narrow() {
+    fn q0_small_fast_literal_guard_is_narrow() {
         let html = b"<!DOCTYPE html>\n<html><body>small page</body></html>\n".repeat(14);
         let script = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(18);
         let json = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(14);
+        let tiny_script = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(12);
+        let tiny_css = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(12);
 
-        assert!(q0_small_html_literal_meta_block_is_likely_safe(&html));
-        assert!(!q0_small_html_literal_meta_block_is_likely_safe(&script));
-        assert!(!q0_small_html_literal_meta_block_is_likely_safe(&json));
-        assert!(!q0_small_html_literal_meta_block_is_likely_safe(
+        assert!(q0_small_fast_literal_meta_block_is_likely_safe(&html));
+        assert!(!q0_small_fast_literal_meta_block_is_likely_safe(&script));
+        assert!(!q0_small_fast_literal_meta_block_is_likely_safe(&json));
+        assert!(q0_small_fast_literal_meta_block_is_likely_safe(
+            &tiny_script[..512]
+        ));
+        assert!(q0_small_fast_literal_meta_block_is_likely_safe(
+            &tiny_css[..512]
+        ));
+        assert!(!q0_small_fast_literal_meta_block_is_likely_safe(
             &html[..256]
         ));
     }
