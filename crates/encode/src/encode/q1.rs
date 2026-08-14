@@ -1127,7 +1127,10 @@ fn collect_with_u16_table(
 ) -> Result<(), CompressError> {
     match table_bits {
         14 => {
-            collect_with_u16_table_m4::<14, DEFAULT_U16_SKIP_START, true>(
+            let table: &mut [u16; 16384] = table
+                .try_into()
+                .map_err(|_| BurliError::Format("invalid Brotli q1 table size"))?;
+            collect_with_u16_table_m4::<14, 16384, DEFAULT_U16_SKIP_START, true>(
                 batch,
                 input,
                 max_backward_distance,
@@ -1136,7 +1139,10 @@ fn collect_with_u16_table(
             Ok(())
         }
         15 => {
-            collect_with_u16_table_m4::<15, DEFAULT_U16_SKIP_START, true>(
+            let table: &mut [u16; 32768] = table
+                .try_into()
+                .map_err(|_| BurliError::Format("invalid Brotli q1 table size"))?;
+            collect_with_u16_table_m4::<15, 32768, DEFAULT_U16_SKIP_START, true>(
                 batch,
                 input,
                 max_backward_distance,
@@ -1169,7 +1175,7 @@ fn collect_with_stack_u16_table<
     max_backward_distance: usize,
 ) {
     let mut table = [NO_POSITION_16; TABLE_LEN];
-    collect_with_u16_table_m4::<TABLE_BITS, SKIP_START, USE_LAST_DISTANCE>(
+    collect_with_u16_table_m4::<TABLE_BITS, TABLE_LEN, SKIP_START, USE_LAST_DISTANCE>(
         batch,
         input,
         max_backward_distance,
@@ -1264,15 +1270,16 @@ fn collect_with_u32_table_m6<
 
 fn collect_with_u16_table_m4<
     const TABLE_BITS: usize,
+    const TABLE_LEN: usize,
     const SKIP_START: usize,
     const USE_LAST_DISTANCE: bool,
 >(
     batch: &mut Batch,
     input: &[u8],
     _max_backward_distance: usize,
-    table: &mut [u16],
+    table: &mut [u16; TABLE_LEN],
 ) {
-    debug_assert_eq!(table.len(), 1_usize << TABLE_BITS);
+    debug_assert_eq!(TABLE_LEN, 1_usize << TABLE_BITS);
     let len_limit = input
         .len()
         .saturating_sub(4)
@@ -1289,7 +1296,7 @@ fn collect_with_u16_table_m4<
     let mut last_distance = NO_LAST_DISTANCE;
 
     while let Some(mut candidate) =
-        scan_to_match_in_u16_table_m4::<TABLE_BITS, SKIP_START, USE_LAST_DISTANCE>(
+        scan_to_match_in_u16_table_m4::<TABLE_BITS, TABLE_LEN, SKIP_START, USE_LAST_DISTANCE>(
             table,
             input,
             &mut pos,
@@ -1318,7 +1325,8 @@ fn collect_with_u16_table_m4<
             pos += copy_len;
             insert_start = pos;
             last_distance = distance;
-            let current_key = store_tail_hashes_in_u16_table_m4::<TABLE_BITS>(table, input, pos);
+            let current_key =
+                store_tail_hashes_in_u16_table_m4::<TABLE_BITS, TABLE_LEN>(table, input, pos);
 
             if pos > len_limit {
                 break;
@@ -1433,10 +1441,11 @@ fn push_literals_to_batch(batch: &mut Batch, input: &[u8], insert_start: usize, 
 #[allow(clippy::too_many_arguments)]
 fn scan_to_match_in_u16_table_m4<
     const TABLE_BITS: usize,
+    const TABLE_LEN: usize,
     const SKIP_START: usize,
     const USE_LAST_DISTANCE: bool,
 >(
-    table: &mut [u16],
+    table: &mut [u16; TABLE_LEN],
     input: &[u8],
     pos: &mut usize,
     next_word: &mut u32,
@@ -1478,8 +1487,8 @@ fn scan_to_match_in_u16_table_m4<
     }
 }
 
-fn store_tail_hashes_in_u16_table_m4<const TABLE_BITS: usize>(
-    table: &mut [u16],
+fn store_tail_hashes_in_u16_table_m4<const TABLE_BITS: usize, const TABLE_LEN: usize>(
+    table: &mut [u16; TABLE_LEN],
     input: &[u8],
     copy_end: usize,
 ) -> Option<usize> {
