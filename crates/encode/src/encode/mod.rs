@@ -664,7 +664,7 @@ fn q0_small_fast_literal_meta_block_is_likely_safe(input: &[u8]) -> bool {
 }
 
 fn q0_one_k_css_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
-    (513..=1024).contains(&input.len())
+    (513..=768).contains(&input.len())
         && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
 }
 
@@ -2783,6 +2783,7 @@ mod tests {
         let json = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(14);
         let tiny_script = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(12);
         let tiny_css = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(12);
+        let css_768 = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(18);
         let css_1k = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(24);
         let script_1k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(24);
         let json_1k = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(24);
@@ -2801,7 +2802,8 @@ mod tests {
         assert!(!q0_small_fast_literal_meta_block_is_likely_safe(
             &html[..256]
         ));
-        assert!(q0_one_k_css_q1_meta_block_is_likely_safe(&css_1k[..1024]));
+        assert!(q0_one_k_css_q1_meta_block_is_likely_safe(&css_768[..768]));
+        assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(&css_1k[..1024]));
         assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(
             &script_1k[..1024]
         ));
