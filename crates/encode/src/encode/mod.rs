@@ -363,6 +363,12 @@ impl EncoderPlan {
                             max_backward_distance,
                             &mut workspace.q1,
                         )
+                    } else if q0_medium_css_64k_fast_skip_is_likely_safe(input) {
+                        q1::collect_with_64k_fast_skip(
+                            input,
+                            max_backward_distance,
+                            &mut workspace.q1,
+                        )
                     } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input) {
                         q1::collect_fast_skip_without_last_distance_probe(
                             input,
@@ -817,6 +823,12 @@ fn q0_small_license_js_u16_medium_skip_is_likely_safe(input: &[u8]) -> bool {
 
 fn q0_medium_license_js_64k_medium_skip_is_likely_safe(input: &[u8]) -> bool {
     input.len() > 32 * 1024 && input.len() <= 64 * 1024 && input.starts_with(b"/*!")
+}
+
+fn q0_medium_css_64k_fast_skip_is_likely_safe(input: &[u8]) -> bool {
+    input.len() > 32 * 1024
+        && input.len() <= 128 * 1024
+        && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
 }
 
 fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
@@ -3160,6 +3172,12 @@ mod tests {
         ));
         assert!(q0_medium_license_js_64k_medium_skip_is_likely_safe(
             &script_4k.repeat(16)[..64 * 1024]
+        ));
+        assert!(q0_medium_css_64k_fast_skip_is_likely_safe(
+            &css_2k.repeat(32)[..64 * 1024]
+        ));
+        assert!(!q0_medium_css_64k_fast_skip_is_likely_safe(
+            &css_2k.repeat(65)[..130 * 1024]
         ));
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
