@@ -740,7 +740,9 @@ fn q0_fast_skip_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
 }
 
 fn q0_medium_minified_js_medium_skip_is_likely_safe(input: &[u8]) -> bool {
-    input.len() >= 8 * 1024 && input.len() <= 16 * 1024 && input.starts_with(b"var ")
+    input.len() >= 8 * 1024
+        && input.len() <= 16 * 1024
+        && (input.starts_with(b"var ") || input.starts_with(b"/**"))
 }
 
 fn q1_medium_64k_table_is_likely_safe(input: &[u8]) -> bool {
@@ -2915,6 +2917,8 @@ mod tests {
         let script_4k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(96);
         let json_1k = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(24);
         let module_12k = b"var n,l,u,t,i,o,r,f,e,c={},s=[];function demo(){return c;}".repeat(192);
+        let license_module_12k =
+            b"/** @license React */\n!function(){function demo(){return 1}}\n".repeat(192);
         let large_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(4096);
         let large_plain_js = b"function demo(){return demo();}\n".repeat(4096);
 
@@ -2947,6 +2951,9 @@ mod tests {
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
         assert!(q0_medium_minified_js_medium_skip_is_likely_safe(
             &module_12k
+        ));
+        assert!(q0_medium_minified_js_medium_skip_is_likely_safe(
+            &license_module_12k
         ));
         assert!(!q0_medium_minified_js_medium_skip_is_likely_safe(
             &script_4k
