@@ -83,18 +83,18 @@ q3
 <text x="296" y="120" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#2563EB" font-weight="bold">
 q5
 </text>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="443,220 440,206 357,176 349,171 315,168 276,133 "/>
-<circle cx="443" cy="220" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="449" y="220" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="441,220 437,206 355,176 345,171 311,168 276,133 "/>
+<circle cx="441" cy="220" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="447" y="220" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q0
 </text>
-<circle cx="440" cy="206" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="357" cy="176" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="349" cy="171" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="355" y="171" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="437" cy="206" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="355" cy="176" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="345" cy="171" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="351" y="171" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q3
 </text>
-<circle cx="315" cy="168" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="311" cy="168" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="276" cy="133" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <text x="282" y="133" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q5
@@ -199,18 +199,18 @@ q3
 <text x="334" y="449" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#2563EB" font-weight="bold">
 q5
 </text>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="480,560 481,554 387,530 377,517 353,504 320,460 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="480,560 479,554 383,530 374,517 350,504 320,460 "/>
 <circle cx="480" cy="560" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <text x="486" y="560" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q0
 </text>
-<circle cx="481" cy="554" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="387" cy="530" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="377" cy="517" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="383" y="517" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="479" cy="554" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="383" cy="530" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="374" cy="517" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="380" y="517" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q3
 </text>
-<circle cx="353" cy="504" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="350" cy="504" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="320" cy="460" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <text x="326" y="460" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q5
@@ -319,20 +319,20 @@ q3
 <text x="311" y="775" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#2563EB" font-weight="bold">
 q5
 </text>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="484,901 445,886 398,867 366,843 337,803 302,782 "/>
-<circle cx="484" cy="901" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="490" y="901" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="480,901 441,886 396,867 362,843 332,803 300,782 "/>
+<circle cx="480" cy="901" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="486" y="901" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q0
 </text>
-<circle cx="445" cy="886" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="398" cy="867" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="366" cy="843" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="372" y="843" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="441" cy="886" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="396" cy="867" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="362" cy="843" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="368" y="843" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q3
 </text>
-<circle cx="337" cy="803" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="302" cy="782" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="308" y="782" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="332" cy="803" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="300" cy="782" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="306" y="782" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q5
 </text>
 <polyline fill="none" opacity="1" stroke="#4ADE80" stroke-width="1" points="341,974 347,960 337,868 317,845 284,813 252,780 "/>
@@ -357,16 +357,16 @@ encode MB/s (log)
 <text x="16" y="526" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#E6EDF3" font-weight="bold" transform="rotate(270, 16, 526)">
 compression ratio
 </text>
-<rect x="202" y="1035" width="12" height="12" opacity="1" fill="#2563EB" stroke="none"/>
-<text x="220" y="1041" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
+<rect x="196" y="1035" width="12" height="12" opacity="1" fill="#2563EB" stroke="none"/>
+<text x="214" y="1041" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 Google Brotli C 1.1.0
 </text>
-<rect x="405" y="1035" width="12" height="12" opacity="1" fill="#F87171" stroke="none"/>
-<text x="423" y="1041" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
+<rect x="361" y="1035" width="12" height="12" opacity="1" fill="#F87171" stroke="none"/>
+<text x="379" y="1041" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 burli
 </text>
-<rect x="496" y="1035" width="12" height="12" opacity="1" fill="#4ADE80" stroke="none"/>
-<text x="514" y="1041" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
+<rect x="527" y="1035" width="12" height="12" opacity="1" fill="#4ADE80" stroke="none"/>
+<text x="545" y="1041" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 rust-brotli 8.0.4
 </text>
 </svg>
