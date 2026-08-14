@@ -305,6 +305,8 @@ impl EncoderPlan {
                 let has_copy = {
                     let batch = if q0_large_license_comment_64k_table_is_likely_safe(input) {
                         q1::collect_with_64k_table(input, max_backward_distance, &mut workspace.q1)
+                    } else if q0_fast_skip_is_likely_safe(input) {
+                        q1::collect_fast_skip(input, max_backward_distance, &mut workspace.q1)?
                     } else {
                         q1::collect(input, max_backward_distance, &mut workspace.q1)?
                     };
@@ -681,6 +683,16 @@ fn q0_one_k_css_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
 
 fn q0_large_license_comment_64k_table_is_likely_safe(input: &[u8]) -> bool {
     input.len() >= 128 * 1024 && input.starts_with(b"/*!")
+}
+
+fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
+    let css = input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
+        && input.len() <= 32 * 1024
+        && (input.starts_with(b"@charset") || input.starts_with(b"@media"));
+    let tiny_license_js = input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
+        && input.len() <= 2 * 1024
+        && input.starts_with(b"/*!");
+    css || tiny_license_js
 }
 
 #[inline(always)]
@@ -2796,7 +2808,10 @@ mod tests {
         let tiny_css = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(12);
         let css_768 = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(18);
         let css_1k = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(24);
+        let css_2k = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(48);
         let script_1k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(24);
+        let script_2k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(48);
+        let script_4k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(96);
         let json_1k = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(24);
         let large_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(4096);
         let large_plain_js = b"function demo(){return demo();}\n".repeat(4096);
@@ -2825,6 +2840,9 @@ mod tests {
         assert!(!q0_large_license_comment_64k_table_is_likely_safe(
             &large_plain_js
         ));
+        assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
+        assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
+        assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
     }
 
     #[test]
