@@ -383,6 +383,14 @@ pub(super) fn collect_fast_skip<'a>(
     workspace.collect_fast_skip(input, max_backward_distance)
 }
 
+pub(super) fn collect_fast_skip_without_last_distance_probe<'a>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &'a mut Workspace,
+) -> Result<&'a Batch, CompressError> {
+    workspace.collect_fast_skip_without_last_distance_probe(input, max_backward_distance)
+}
+
 pub(super) fn collect_without_last_distance_probe<'a>(
     input: &[u8],
     max_backward_distance: usize,
@@ -589,6 +597,31 @@ impl Workspace {
         }
 
         self.collect(input, max_backward_distance)
+    }
+
+    fn collect_fast_skip_without_last_distance_probe(
+        &mut self,
+        input: &[u8],
+        max_backward_distance: usize,
+    ) -> Result<&Batch, CompressError> {
+        self.reset(input.len());
+
+        if input.len() < INPUT_MARGIN_BYTES {
+            self.push_literals(input, 0, input.len());
+            return Ok(&self.batch);
+        }
+
+        let table_size = table_size(input.len());
+        if table_size == 32768 {
+            collect_with_stack_u16_table::<15, 32768, FASTER_U16_SKIP_START, false>(
+                &mut self.batch,
+                input,
+                max_backward_distance,
+            );
+            return Ok(&self.batch);
+        }
+
+        self.collect_fast_skip(input, max_backward_distance)
     }
 
     fn collect_without_last_distance_probe(
@@ -811,6 +844,7 @@ fn collect_with_u16_table(
 
 const DEFAULT_U16_SKIP_START: usize = 61;
 const FAST_U16_SKIP_START: usize = 96;
+const FASTER_U16_SKIP_START: usize = 128;
 
 #[allow(clippy::large_stack_arrays)]
 #[inline(never)]
