@@ -353,7 +353,11 @@ impl EncoderPlan {
             }
 
             let has_copy = {
-                let batch = q1::collect(input, max_backward_distance, &mut workspace.q1)?;
+                let batch = if q1_medium_64k_table_is_likely_safe(input) {
+                    q1::collect_with_64k_table(input, max_backward_distance, &mut workspace.q1)
+                } else {
+                    q1::collect(input, max_backward_distance, &mut workspace.q1)?
+                };
                 batch.has_copy()
             };
             if !has_copy {
@@ -693,6 +697,10 @@ fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
         && input.len() <= 2 * 1024
         && input.starts_with(b"/*!");
     css || tiny_license_js
+}
+
+fn q1_medium_64k_table_is_likely_safe(input: &[u8]) -> bool {
+    input.len() >= 64 * 1024 && input.len() <= 320 * 1024
 }
 
 #[inline(always)]
@@ -2843,6 +2851,17 @@ mod tests {
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
+    }
+
+    #[test]
+    fn q1_medium_64k_table_guard_is_narrow() {
+        assert!(!q1_medium_64k_table_is_likely_safe(&vec![0; 64 * 1024 - 1]));
+        assert!(q1_medium_64k_table_is_likely_safe(&vec![0; 64 * 1024]));
+        assert!(q1_medium_64k_table_is_likely_safe(&vec![0; 320 * 1024]));
+        assert!(!q1_medium_64k_table_is_likely_safe(&vec![
+            0;
+            320 * 1024 + 1
+        ]));
     }
 
     #[test]
