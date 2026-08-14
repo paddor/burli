@@ -278,7 +278,7 @@ impl Batch {
         let command_code_map =
             write_q1_internal_command_prefix_codes(writer, &command_frequencies, prefix)?;
 
-        write_batch_body(writer, input, self, &literal_code_map, &command_code_map)
+        write_batch_body::<false>(writer, input, self, &literal_code_map, &command_code_map)
     }
 
     pub(super) fn write_balanced_literal_command_prefixes(
@@ -306,7 +306,7 @@ impl Batch {
             prefix,
         )?;
 
-        write_batch_body(writer, input, self, &literal_code_map, &command_code_map)
+        write_batch_body::<false>(writer, input, self, &literal_code_map, &command_code_map)
     }
 
     pub(super) fn write_balanced_command_prefixes(
@@ -335,7 +335,7 @@ impl Batch {
             prefix,
         )?;
 
-        write_batch_body(writer, input, self, &literal_code_map, &command_code_map)
+        write_batch_body::<false>(writer, input, self, &literal_code_map, &command_code_map)
     }
 
     pub(super) fn write_fast_command_prefixes(
@@ -361,7 +361,33 @@ impl Batch {
         let command_code_map =
             write_q1_internal_fast_command_prefix_codes(writer, &command_frequencies, prefix)?;
 
-        write_batch_body(writer, input, self, &literal_code_map, &command_code_map)
+        write_batch_body::<false>(writer, input, self, &literal_code_map, &command_code_map)
+    }
+
+    pub(super) fn write_packed_literal_body(
+        &self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        block_len: usize,
+        prefix: &mut PrefixCodeScratch,
+        fast_literal_prefix: bool,
+    ) -> Result<(), CompressError> {
+        if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
+            return Err(BurliError::Format("invalid compressed Brotli block size"));
+        }
+
+        write_meta_block_len(writer, block_len)?;
+        write_block_and_context_header(writer)?;
+        let literal_code_map = self.write_literal_prefix(writer, prefix, fast_literal_prefix)?;
+        let mut command_frequencies = self.command_frequencies;
+        command_frequencies[1] += 1;
+        command_frequencies[2] += 1;
+        command_frequencies[64] += 1;
+        command_frequencies[84] += 1;
+        let command_code_map =
+            write_q1_internal_command_prefix_codes(writer, &command_frequencies, prefix)?;
+
+        write_batch_body::<true>(writer, input, self, &literal_code_map, &command_code_map)
     }
 
     fn write_literal_prefix(
@@ -411,7 +437,7 @@ fn literal_frequencies_as_usize(
 }
 
 #[inline(never)]
-fn write_batch_body(
+fn write_batch_body<const PACK_LITERALS: bool>(
     writer: &mut BitWriter,
     input: &[u8],
     batch: &Batch,
@@ -449,7 +475,7 @@ fn write_batch_body(
             let start = span.start as usize;
             let end = start + span.len as usize;
             debug_assert!(end <= input.len());
-            append_literal_span_bits(
+            append_literal_span_bits::<PACK_LITERALS>(
                 writer,
                 &mut pending_bits,
                 &mut pending_width,
@@ -471,7 +497,71 @@ fn write_batch_body(
 }
 
 #[inline(always)]
-fn append_literal_span_bits(
+fn append_literal_span_bits<const PACK_LITERALS: bool>(
+    writer: &mut BitWriter,
+    pending_bits: &mut u64,
+    pending_width: &mut u8,
+    literals: &[u8],
+    literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
+) {
+    if PACK_LITERALS {
+        return append_literal_span_bits_packed(
+            writer,
+            pending_bits,
+            pending_width,
+            literals,
+            literal_code_map,
+        );
+    }
+
+    append_literal_span_bits_paired(
+        writer,
+        pending_bits,
+        pending_width,
+        literals,
+        literal_code_map,
+    );
+}
+
+#[inline(always)]
+fn append_literal_span_bits_paired(
+    writer: &mut BitWriter,
+    pending_bits: &mut u64,
+    pending_width: &mut u8,
+    literals: &[u8],
+    literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
+) {
+    let mut pairs = literals.chunks_exact(2);
+    for pair in &mut pairs {
+        let first = literal_code_map[usize::from(pair[0])];
+        let second = literal_code_map[usize::from(pair[1])];
+        debug_assert!(first.len != u8::MAX);
+        debug_assert!(second.len != u8::MAX);
+        append_literal_pair_bits(
+            writer,
+            pending_bits,
+            pending_width,
+            first,
+            second,
+            first.len + second.len,
+        );
+    }
+
+    if let &[literal] = pairs.remainder() {
+        let literal_code = literal_code_map[usize::from(literal)];
+        debug_assert!(literal_code.len != u8::MAX);
+        append_pending_bits(
+            writer,
+            pending_bits,
+            pending_width,
+            literal_code.len,
+            u64::from(literal_code.bits),
+        );
+    }
+}
+
+#[inline(always)]
+fn append_literal_span_bits_packed(
     writer: &mut BitWriter,
     pending_bits: &mut u64,
     pending_width: &mut u8,
@@ -518,34 +608,13 @@ fn append_literal_span_bits(
         }
     }
 
-    let mut remainder = chunks.remainder();
-    if remainder.len() >= 2 {
-        let first = literal_code_map[usize::from(remainder[0])];
-        let second = literal_code_map[usize::from(remainder[1])];
-        debug_assert!(first.len != u8::MAX);
-        debug_assert!(second.len != u8::MAX);
-        append_literal_pair_bits(
-            writer,
-            pending_bits,
-            pending_width,
-            first,
-            second,
-            first.len + second.len,
-        );
-        remainder = &remainder[2..];
-    }
-
-    if let &[literal] = remainder {
-        let literal_code = literal_code_map[usize::from(literal)];
-        debug_assert!(literal_code.len != u8::MAX);
-        append_pending_bits(
-            writer,
-            pending_bits,
-            pending_width,
-            literal_code.len,
-            u64::from(literal_code.bits),
-        );
-    }
+    append_literal_span_bits_paired(
+        writer,
+        pending_bits,
+        pending_width,
+        chunks.remainder(),
+        literal_code_map,
+    );
 }
 
 #[inline(always)]
@@ -700,6 +769,16 @@ pub(super) fn write_fast_command_prefixes(
     workspace.write_fast_command_prefixes(writer, input, block_len, fast_literal_prefix)
 }
 
+pub(super) fn write_packed_literal_body(
+    writer: &mut BitWriter,
+    input: &[u8],
+    block_len: usize,
+    workspace: &mut Workspace,
+    fast_literal_prefix: bool,
+) -> Result<(), CompressError> {
+    workspace.write_packed_literal_body(writer, input, block_len, fast_literal_prefix)
+}
+
 impl Workspace {
     fn write(
         &mut self,
@@ -755,6 +834,22 @@ impl Workspace {
         fast_literal_prefix: bool,
     ) -> Result<(), CompressError> {
         self.batch.write_fast_command_prefixes(
+            writer,
+            input,
+            block_len,
+            &mut self.prefix,
+            fast_literal_prefix,
+        )
+    }
+
+    fn write_packed_literal_body(
+        &mut self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        block_len: usize,
+        fast_literal_prefix: bool,
+    ) -> Result<(), CompressError> {
+        self.batch.write_packed_literal_body(
             writer,
             input,
             block_len,

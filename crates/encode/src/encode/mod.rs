@@ -423,6 +423,15 @@ impl EncoderPlan {
                         self.q1_fast_literal_prefix,
                     );
                 }
+                if q0_medium_json_32k_table_is_likely_safe(input) {
+                    return q1::write_packed_literal_body(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
+                }
                 return q1::write(
                     writer,
                     input,
