@@ -6,7 +6,8 @@ use super::{
     COMMAND_ALPHABET_SIZE, DenseSymbolCode, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE,
     PrefixCodeScratch, append_pending_bits, match_len, read_u64_le, write_block_and_context_header,
     write_fast_dense_prefix_code_array_from_frequencies_with_scratch, write_meta_block_len,
-    write_q1_internal_command_prefix_codes, write_q1_internal_command_static_distance_prefix_codes,
+    write_q1_internal_balanced_command_static_distance_prefix_codes,
+    write_q1_internal_command_prefix_codes,
 };
 
 const MAX_TABLE_SIZE: usize = 1 << 17;
@@ -297,7 +298,7 @@ impl Batch {
         command_frequencies[2] += 1;
         command_frequencies[64] += 1;
         command_frequencies[84] += 1;
-        let command_code_map = write_q1_internal_command_static_distance_prefix_codes(
+        let command_code_map = write_q1_internal_balanced_command_static_distance_prefix_codes(
             writer,
             &command_frequencies,
             prefix,

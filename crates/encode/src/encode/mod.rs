@@ -1059,18 +1059,25 @@ fn write_static_distance_prefix_code(writer: &mut BitWriter) {
     writer.write_bits_trusted_fits(28, 0x0369_dc03);
 }
 
-fn write_q1_internal_command_static_distance_prefix_codes(
+fn write_q1_internal_balanced_command_static_distance_prefix_codes(
     writer: &mut BitWriter,
     command_frequencies: &[usize; 128],
     scratch: &mut PrefixCodeScratch,
 ) -> Result<[DenseSymbolCode; 128], CompressError> {
-    let mut internal_command_frequencies = [0_usize; 64];
-    internal_command_frequencies.copy_from_slice(&command_frequencies[..64]);
-    code_lengths_from_dense_frequencies_with_scratch(
-        &internal_command_frequencies,
-        MAX_CODE_BITS,
-        scratch,
-    );
+    scratch.used.clear();
+    for (symbol, &frequency) in command_frequencies[..64].iter().enumerate() {
+        if frequency != 0 {
+            scratch.used.push((symbol as u16, frequency));
+        }
+    }
+
+    scratch.lengths.clear();
+    scratch.lengths.resize(64, 0);
+    match scratch.used.len() {
+        0 => scratch.lengths[0] = 1,
+        1 => scratch.lengths[usize::from(scratch.used[0].0)] = 1,
+        _ => balanced_code_lengths_into(64, &mut scratch.used, MAX_CODE_BITS, &mut scratch.lengths),
+    }
     let mut internal_command_lengths = [0_u8; 64];
     internal_command_lengths.copy_from_slice(&scratch.lengths[..64]);
 
