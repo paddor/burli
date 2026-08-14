@@ -173,9 +173,7 @@ const SMALL_SIZES: &[usize] = &[
     512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072, 262_144,
 ];
 const CHART_SMALL_FILES: &[&str] = &["bootstrap-js", "bootstrap-css", "json-citm"];
-const CHART_SMALL_SIZES: &[usize] = &[
-    512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072,
-];
+const CHART_SMALL_SIZES: &[usize] = &[512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072];
 const DEFAULT_TARGET_NS: u64 = 30_000_000;
 const DEFAULT_ROUNDS: usize = 3;
 const DEFAULT_WARMUP: usize = 1;
@@ -370,7 +368,9 @@ fn env_non_zero_usize(name: &str) -> Option<usize> {
 }
 
 fn env_usize(name: &str) -> Option<usize> {
-    std::env::var(name).ok().and_then(|value| value.parse().ok())
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
 }
 
 fn parse_non_zero_u64(value: &str, name: &str) -> Result<u64, Box<dyn std::error::Error>> {

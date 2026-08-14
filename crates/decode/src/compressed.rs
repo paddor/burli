@@ -1285,6 +1285,57 @@ mod tests {
     }
 
     #[test]
+    fn backward_copy_handles_non_overlapping_range() {
+        let mut output = b"abcdefghijklmnop".to_vec();
+        let mut distances = DistanceRing::new();
+
+        copy_from_distance(
+            &mut output,
+            CopyRequest {
+                needed: 20,
+                window_size: 1 << 16,
+                output_base: 0,
+                distance: 16,
+                len: 4,
+                push_distance: true,
+            },
+            &mut distances,
+        )
+        .unwrap();
+
+        assert_eq!(output, b"abcdefghijklmnopabcd");
+        let mut reader = BitReader::new(&[]);
+        assert_eq!(read_distance(&mut reader, 0, 0, 0, &distances).unwrap(), 16);
+    }
+
+    #[test]
+    fn backward_copy_doubles_large_overlapping_range() {
+        let mut output = b"abcdefghijklmnop".to_vec();
+        let mut distances = DistanceRing::new();
+
+        copy_from_distance(
+            &mut output,
+            CopyRequest {
+                needed: 56,
+                window_size: 1 << 16,
+                output_base: 0,
+                distance: 16,
+                len: 40,
+                push_distance: true,
+            },
+            &mut distances,
+        )
+        .unwrap();
+
+        assert_eq!(
+            output,
+            b"abcdefghijklmnopabcdefghijklmnopabcdefghijklmnopabcdefgh"
+        );
+        let mut reader = BitReader::new(&[]);
+        assert_eq!(read_distance(&mut reader, 0, 0, 0, &distances).unwrap(), 16);
+    }
+
+    #[test]
     fn command_distance_context_comes_from_command_prefix() {
         assert_eq!(command_code_parts(0).unwrap().3, 0);
         assert_eq!(command_code_parts(2).unwrap().3, 2);

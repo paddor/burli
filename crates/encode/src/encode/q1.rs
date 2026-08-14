@@ -1635,15 +1635,6 @@ fn read_u32_le(input: &[u8], pos: usize) -> u32 {
     read_u32_le_trusted(input, pos)
 }
 
-#[cfg(not(feature = "paranoid"))]
-#[inline(always)]
-fn read_u32_le_trusted(input: &[u8], pos: usize) -> u32 {
-    // SAFETY: q1 hash probes check the input margin before calling this helper.
-    // The load may be unaligned, and `to_le` matches the safe fallback.
-    unsafe { core::ptr::read_unaligned(input.as_ptr().add(pos).cast::<u32>()).to_le() }
-}
-
-#[cfg(feature = "paranoid")]
 #[inline(always)]
 fn read_u32_le_trusted(input: &[u8], pos: usize) -> u32 {
     let bytes = input[pos..]
