@@ -395,6 +395,8 @@ impl EncoderPlan {
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
+                    } else if q0_sparse_incompressible_skip_is_likely_safe(input) {
+                        return crate::metablock::write_uncompressed_meta_block(writer, input);
                     } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input) {
                         q1::collect_fast_skip_without_last_distance_probe(
                             input,
@@ -913,6 +915,16 @@ fn q0_medium_css_64k_fast_skip_is_likely_safe(input: &[u8]) -> bool {
         && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
 }
 
+fn q0_sparse_incompressible_skip_is_likely_safe(input: &[u8]) -> bool {
+    if input.len() < 64 * 1024 {
+        return false;
+    }
+    let sample = q0_sparse_sample(input);
+    sample.duplicate_6_count <= 45
+        && sample.zero_count * 50 <= sample.len
+        && sample.printable_count * 5 <= sample.len * 4
+}
+
 fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
     let css = input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
         && input.len() <= 32 * 1024
@@ -954,6 +966,66 @@ fn q0_medium_minified_js_medium_skip_is_likely_safe(input: &[u8]) -> bool {
     input.len() >= 8 * 1024
         && input.len() <= 16 * 1024
         && (input.starts_with(b"var ") || input.starts_with(b"/**"))
+}
+
+fn q0_sparse_sample(input: &[u8]) -> Q0SparseSample {
+    const SAMPLE_BYTES: usize = 64 * 1024;
+    const SAMPLE_STEP: usize = 64;
+    const TABLE_BITS: usize = 12;
+    const TABLE_SIZE: usize = 1 << TABLE_BITS;
+    const TABLE_MASK: usize = TABLE_SIZE - 1;
+    const EMPTY: u16 = u16::MAX;
+
+    debug_assert!(input.len() >= SAMPLE_BYTES);
+    let sample_len = input.len().min(SAMPLE_BYTES);
+    let mut table = [EMPTY; TABLE_SIZE];
+    let mut matches = 0_usize;
+    let mut zeros = 0_usize;
+    let mut printable = 0_usize;
+    let mut samples = 0_usize;
+    let mut pos = 0_usize;
+
+    while pos + 8 <= sample_len {
+        let byte = input[pos];
+        let word = read_u64_le(input, pos);
+        zeros += usize::from(byte == 0);
+        printable +=
+            usize::from(byte.is_ascii_graphic() || matches!(byte, b'\t' | b'\n' | b'\r' | b' '));
+        samples += 1;
+        let key = q0_sample_hash6::<TABLE_BITS>(word) & TABLE_MASK;
+        let previous = table[key];
+        if previous != EMPTY && q0_is_match6(input, usize::from(previous), pos) {
+            matches += 1;
+        }
+        table[key] = pos as u16;
+        pos += SAMPLE_STEP;
+    }
+
+    Q0SparseSample {
+        duplicate_6_count: matches,
+        zero_count: zeros,
+        printable_count: printable,
+        len: samples,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Q0SparseSample {
+    duplicate_6_count: usize,
+    zero_count: usize,
+    printable_count: usize,
+    len: usize,
+}
+
+#[inline(always)]
+fn q0_sample_hash6<const TABLE_BITS: usize>(word: u64) -> usize {
+    ((word << 16).wrapping_mul(0x1e35_a7bd) >> (64 - TABLE_BITS)) as usize
+}
+
+#[inline(always)]
+fn q0_is_match6(input: &[u8], previous: usize, pos: usize) -> bool {
+    let diff = read_u64_le(input, previous) ^ read_u64_le(input, pos);
+    diff.trailing_zeros() >= 48
 }
 
 fn q1_medium_64k_table_is_likely_safe(input: &[u8]) -> bool {
@@ -3305,6 +3377,26 @@ mod tests {
         assert!(!q0_medium_css_64k_fast_skip_is_likely_safe(
             &css_2k.repeat(65)[..130 * 1024]
         ));
+        let sparse_binary = sparse_binary_fixture(64 * 1024);
+        let zero_heavy_sparse = {
+            let mut input = sparse_binary_fixture(64 * 1024);
+            for byte in input.iter_mut().step_by(8) {
+                *byte = 0;
+            }
+            input
+        };
+        let repeated_binary = vec![42_u8; 64 * 1024];
+        let printable_sparse = printable_sparse_fixture(64 * 1024);
+        assert!(q0_sparse_incompressible_skip_is_likely_safe(&sparse_binary));
+        assert!(!q0_sparse_incompressible_skip_is_likely_safe(
+            &zero_heavy_sparse
+        ));
+        assert!(!q0_sparse_incompressible_skip_is_likely_safe(
+            &repeated_binary
+        ));
+        assert!(!q0_sparse_incompressible_skip_is_likely_safe(
+            &printable_sparse
+        ));
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
@@ -3488,6 +3580,39 @@ mod tests {
         let batch = q1::collect(&input, (1 << 22) - 16, &mut workspace).unwrap();
 
         assert!(batch.has_copy());
+    }
+
+    #[test]
+    fn q0_sparse_binary_round_trips() {
+        let input = sparse_binary_fixture(128 * 1024 + 17);
+        let encoded =
+            compress_with_options(&input, &Options::default().quality(0).unwrap()).unwrap();
+
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    fn sparse_binary_fixture(len: usize) -> Vec<u8> {
+        let mut state = 0x1234_5678_9abc_def0_u64;
+        let mut out = Vec::with_capacity(len);
+        while out.len() < len {
+            state ^= state << 7;
+            state ^= state >> 9;
+            state ^= state << 8;
+            out.push((state as u8).wrapping_add(1));
+        }
+        out
+    }
+
+    fn printable_sparse_fixture(len: usize) -> Vec<u8> {
+        let mut state = 0x0fed_cba9_8765_4321_u64;
+        let mut out = Vec::with_capacity(len);
+        while out.len() < len {
+            state ^= state << 7;
+            state ^= state >> 9;
+            state ^= state << 8;
+            out.push(32 + (state as u8 % 95));
+        }
+        out
     }
 }
 
