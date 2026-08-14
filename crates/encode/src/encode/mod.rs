@@ -847,25 +847,25 @@ fn write_static_entropy_token_batch(
 
     write_meta_block_len(writer, block_len)?;
     write_block_and_context_header(writer)?;
-    let literal_codes = if block_len <= 1024 {
-        write_fast_prefix_code_from_frequencies(
+    let literal_code_map = if block_len <= 1024 {
+        let mut prefix = PrefixCodeScratch::default();
+        prefix.reserve_for(LITERAL_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE);
+        write_fast_dense_prefix_code_array_from_frequencies_with_scratch(
             writer,
-            LITERAL_ALPHABET_SIZE,
             &batch.literal_frequencies,
-            8,
+            &mut prefix,
         )?
     } else {
-        write_prefix_code_from_frequencies(
+        let literal_codes = write_prefix_code_from_frequencies(
             writer,
             LITERAL_ALPHABET_SIZE,
             &batch.literal_frequencies,
-        )?
+        )?;
+        dense_symbol_code_map_from_symbol_codes::<LITERAL_ALPHABET_SIZE>(&literal_codes)?
     };
     writer.write_bits_trusted_fits(56, 0x0092_6244_1630_7003);
     writer.write_bits_trusted_fits(3, 0);
     writer.write_bits_trusted_fits(28, 0x0369_dc03);
-    let literal_code_map =
-        dense_symbol_code_map_from_symbol_codes::<LITERAL_ALPHABET_SIZE>(&literal_codes)?;
 
     let mut pending_bits = 0_u64;
     let mut pending_width = 0_u8;
@@ -1221,72 +1221,6 @@ fn write_prefix_code_from_frequencies_with_max_bits(
 
     write_complex_prefix_code_lengths(writer, &lengths)?;
     Ok(symbol_codes_from_lengths(&lengths))
-}
-
-fn write_fast_prefix_code_from_frequencies(
-    writer: &mut BitWriter,
-    alphabet_size: usize,
-    frequencies: &[usize],
-    simple_symbol_bits: u8,
-) -> Result<Vec<SymbolCode>, CompressError> {
-    if frequencies.len() != alphabet_size {
-        return Err(BurliError::Format("Brotli prefix alphabet size mismatch"));
-    }
-
-    let mut used = frequencies
-        .iter()
-        .enumerate()
-        .filter_map(|(symbol, &frequency)| (frequency != 0).then_some((symbol as u16, frequency)))
-        .collect::<Vec<_>>();
-    if used.is_empty() {
-        write_fast_simple_prefix_code_symbols(writer, simple_symbol_bits, &[0], &[0])?;
-        return Ok(simple_symbol_codes(&[0]));
-    }
-    if used.len() == 1 {
-        let symbol = used[0].0;
-        write_fast_simple_prefix_code_symbols(writer, simple_symbol_bits, &[symbol], &[0])?;
-        return Ok(simple_symbol_codes(&[symbol]));
-    }
-
-    let lengths = huffman_code_lengths(frequencies, FAST_CODE_BITS)
-        .unwrap_or_else(|| balanced_code_lengths(alphabet_size, &mut used, FAST_CODE_BITS));
-    let mut symbols = used.iter().map(|&(symbol, _)| symbol).collect::<Vec<_>>();
-
-    if symbols.len() <= MAX_SIMPLE_PREFIX_SYMBOLS {
-        symbols.sort_unstable_by(|&left, &right| {
-            lengths[usize::from(left)]
-                .cmp(&lengths[usize::from(right)])
-                .then_with(|| left.cmp(&right))
-        });
-        write_fast_simple_prefix_code_symbols(writer, simple_symbol_bits, &symbols, &lengths)?;
-    } else {
-        write_fast_complex_prefix_code_lengths(writer, &lengths)?;
-    }
-    Ok(symbol_codes_from_lengths(&lengths))
-}
-
-fn write_fast_simple_prefix_code_symbols(
-    writer: &mut BitWriter,
-    symbol_bits: u8,
-    symbols: &[u16],
-    lengths: &[u8],
-) -> Result<(), CompressError> {
-    if symbols.is_empty() || symbols.len() > MAX_SIMPLE_PREFIX_SYMBOLS {
-        return Err(BurliError::Format(
-            "invalid Brotli simple prefix symbol count",
-        ));
-    }
-
-    writer.write_bits(2, 1)?;
-    writer.write_bits(2, (symbols.len() - 1) as u64)?;
-    for &symbol in symbols {
-        writer.write_bits(symbol_bits, u64::from(symbol))?;
-    }
-    if symbols.len() == 4 {
-        let first_symbol = usize::from(symbols[0]);
-        writer.write_bits(1, u64::from(lengths[first_symbol] == 1))?;
-    }
-    Ok(())
 }
 
 fn write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits<const N: usize>(
@@ -1811,38 +1745,6 @@ fn write_complex_prefix_code_lengths(
             _ => {}
         }
         writer.write_bits_trusted_fits(width, bits);
-    }
-    Ok(())
-}
-
-fn write_fast_complex_prefix_code_lengths(
-    writer: &mut BitWriter,
-    lengths: &[u8],
-) -> Result<(), CompressError> {
-    let mut tree = Vec::new();
-    encode_fast_code_length_tree_into(lengths, &mut tree)?;
-    writer.write_bits_trusted_fits(40, 0x00ff_5555_5554);
-    for &entry in &tree {
-        let symbol = code_length_tree_symbol(entry);
-        let extra_bits = code_length_tree_extra_bits(entry);
-        match symbol {
-            0..=14 => {
-                let len = STATIC_CODE_LENGTH_DEPTH[usize::from(symbol)];
-                let bits = STATIC_CODE_LENGTH_BITS[usize::from(symbol)];
-                writer.write_bits_trusted_fits(len, u64::from(bits));
-            }
-            16 => {
-                let len = STATIC_CODE_LENGTH_DEPTH[16];
-                let bits = STATIC_CODE_LENGTH_BITS[16] | (u16::from(extra_bits) << len);
-                writer.write_bits_trusted_fits(len + 2, u64::from(bits));
-            }
-            17 => {
-                let len = STATIC_CODE_LENGTH_DEPTH[17];
-                let bits = STATIC_CODE_LENGTH_BITS[17] | (u16::from(extra_bits) << len);
-                writer.write_bits_trusted_fits(len + 3, u64::from(bits));
-            }
-            _ => return Err(BurliError::Format("invalid Brotli code length symbol")),
-        }
     }
     Ok(())
 }
