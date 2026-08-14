@@ -383,6 +383,14 @@ pub(super) fn collect_fast_skip<'a>(
     workspace.collect_fast_skip(input, max_backward_distance)
 }
 
+pub(super) fn collect_without_last_distance_probe<'a>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &'a mut Workspace,
+) -> Result<&'a Batch, CompressError> {
+    workspace.collect_without_last_distance_probe(input, max_backward_distance)
+}
+
 pub(super) fn write(
     writer: &mut BitWriter,
     input: &[u8],
@@ -583,6 +591,31 @@ impl Workspace {
         self.collect(input, max_backward_distance)
     }
 
+    fn collect_without_last_distance_probe(
+        &mut self,
+        input: &[u8],
+        max_backward_distance: usize,
+    ) -> Result<&Batch, CompressError> {
+        self.reset(input.len());
+
+        if input.len() < INPUT_MARGIN_BYTES {
+            self.push_literals(input, 0, input.len());
+            return Ok(&self.batch);
+        }
+
+        let table_size = table_size(input.len());
+        if table_size == 4096 {
+            collect_with_stack_u16_table::<12, 4096, DEFAULT_U16_SKIP_START, false>(
+                &mut self.batch,
+                input,
+                max_backward_distance,
+            );
+            return Ok(&self.batch);
+        }
+
+        self.collect(input, max_backward_distance)
+    }
+
     fn collect_stack_u16_for_size<const SKIP_START: usize>(
         &mut self,
         input: &[u8],
@@ -590,42 +623,42 @@ impl Workspace {
         table_size: usize,
     ) -> bool {
         match table_size {
-            256 => collect_with_stack_u16_table::<8, 256, SKIP_START>(
+            256 => collect_with_stack_u16_table::<8, 256, SKIP_START, true>(
                 &mut self.batch,
                 input,
                 max_backward_distance,
             ),
-            512 => collect_with_stack_u16_table::<9, 512, SKIP_START>(
+            512 => collect_with_stack_u16_table::<9, 512, SKIP_START, true>(
                 &mut self.batch,
                 input,
                 max_backward_distance,
             ),
-            1024 => collect_with_stack_u16_table::<10, 1024, SKIP_START>(
+            1024 => collect_with_stack_u16_table::<10, 1024, SKIP_START, true>(
                 &mut self.batch,
                 input,
                 max_backward_distance,
             ),
-            2048 => collect_with_stack_u16_table::<11, 2048, SKIP_START>(
+            2048 => collect_with_stack_u16_table::<11, 2048, SKIP_START, true>(
                 &mut self.batch,
                 input,
                 max_backward_distance,
             ),
-            4096 => collect_with_stack_u16_table::<12, 4096, SKIP_START>(
+            4096 => collect_with_stack_u16_table::<12, 4096, SKIP_START, true>(
                 &mut self.batch,
                 input,
                 max_backward_distance,
             ),
-            8192 => collect_with_stack_u16_table::<13, 8192, SKIP_START>(
+            8192 => collect_with_stack_u16_table::<13, 8192, SKIP_START, true>(
                 &mut self.batch,
                 input,
                 max_backward_distance,
             ),
-            16384 => collect_with_stack_u16_table::<14, 16384, SKIP_START>(
+            16384 => collect_with_stack_u16_table::<14, 16384, SKIP_START, true>(
                 &mut self.batch,
                 input,
                 max_backward_distance,
             ),
-            32768 => collect_with_stack_u16_table::<15, 32768, SKIP_START>(
+            32768 => collect_with_stack_u16_table::<15, 32768, SKIP_START, true>(
                 &mut self.batch,
                 input,
                 max_backward_distance,
@@ -755,7 +788,7 @@ fn collect_with_u16_table(
 ) -> Result<(), CompressError> {
     match table_bits {
         14 => {
-            collect_with_u16_table_m4::<14, DEFAULT_U16_SKIP_START>(
+            collect_with_u16_table_m4::<14, DEFAULT_U16_SKIP_START, true>(
                 batch,
                 input,
                 max_backward_distance,
@@ -764,7 +797,7 @@ fn collect_with_u16_table(
             Ok(())
         }
         15 => {
-            collect_with_u16_table_m4::<15, DEFAULT_U16_SKIP_START>(
+            collect_with_u16_table_m4::<15, DEFAULT_U16_SKIP_START, true>(
                 batch,
                 input,
                 max_backward_distance,
@@ -785,13 +818,14 @@ fn collect_with_stack_u16_table<
     const TABLE_BITS: usize,
     const TABLE_LEN: usize,
     const SKIP_START: usize,
+    const USE_LAST_DISTANCE: bool,
 >(
     batch: &mut Batch,
     input: &[u8],
     max_backward_distance: usize,
 ) {
     let mut table = [NO_POSITION_16; TABLE_LEN];
-    collect_with_u16_table_m4::<TABLE_BITS, SKIP_START>(
+    collect_with_u16_table_m4::<TABLE_BITS, SKIP_START, USE_LAST_DISTANCE>(
         batch,
         input,
         max_backward_distance,
@@ -878,7 +912,11 @@ fn collect_with_u32_table_m6<const TABLE_BITS: usize>(
     }
 }
 
-fn collect_with_u16_table_m4<const TABLE_BITS: usize, const SKIP_START: usize>(
+fn collect_with_u16_table_m4<
+    const TABLE_BITS: usize,
+    const SKIP_START: usize,
+    const USE_LAST_DISTANCE: bool,
+>(
     batch: &mut Batch,
     input: &[u8],
     _max_backward_distance: usize,
@@ -900,15 +938,17 @@ fn collect_with_u16_table_m4<const TABLE_BITS: usize, const SKIP_START: usize>(
     let mut next_hash = hash4_const::<TABLE_BITS>(next_word);
     let mut last_distance = NO_LAST_DISTANCE;
 
-    while let Some(mut candidate) = scan_to_match_in_u16_table_m4::<TABLE_BITS, SKIP_START>(
-        table,
-        input,
-        &mut pos,
-        &mut next_word,
-        &mut next_hash,
-        len_limit,
-        last_distance,
-    ) {
+    while let Some(mut candidate) =
+        scan_to_match_in_u16_table_m4::<TABLE_BITS, SKIP_START, USE_LAST_DISTANCE>(
+            table,
+            input,
+            &mut pos,
+            &mut next_word,
+            &mut next_hash,
+            len_limit,
+            last_distance,
+        )
+    {
         loop {
             let distance = pos - candidate;
             let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
@@ -1037,7 +1077,11 @@ fn push_literals_to_batch(batch: &mut Batch, input: &[u8], insert_start: usize, 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn scan_to_match_in_u16_table_m4<const TABLE_BITS: usize, const SKIP_START: usize>(
+fn scan_to_match_in_u16_table_m4<
+    const TABLE_BITS: usize,
+    const SKIP_START: usize,
+    const USE_LAST_DISTANCE: bool,
+>(
     table: &mut [u16],
     input: &[u8],
     pos: &mut usize,
@@ -1062,7 +1106,7 @@ fn scan_to_match_in_u16_table_m4<const TABLE_BITS: usize, const SKIP_START: usiz
         *next_word = read_u32_le(input, next_pos);
         *next_hash = hash4_const::<TABLE_BITS>(*next_word);
 
-        if last_distance != NO_LAST_DISTANCE && *pos >= last_distance {
+        if USE_LAST_DISTANCE && last_distance != NO_LAST_DISTANCE && *pos >= last_distance {
             let candidate = *pos - last_distance;
             if read_u32_le(input, candidate) == current_word {
                 table[key] = position_to_u16_entry(*pos);

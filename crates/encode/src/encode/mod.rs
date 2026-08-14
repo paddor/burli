@@ -309,6 +309,12 @@ impl EncoderPlan {
                 let has_copy = {
                     let batch = if q0_large_license_comment_64k_table_is_likely_safe(input) {
                         q1::collect_with_64k_table(input, max_backward_distance, &mut workspace.q1)
+                    } else if q0_no_last_distance_probe_is_likely_safe(input) {
+                        q1::collect_without_last_distance_probe(
+                            input,
+                            max_backward_distance,
+                            &mut workspace.q1,
+                        )?
                     } else if q0_fast_skip_is_likely_safe(input) {
                         q1::collect_fast_skip(input, max_backward_distance, &mut workspace.q1)?
                     } else {
@@ -709,6 +715,10 @@ fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
         && input.len() <= 2 * 1024
         && input.starts_with(b"/*!");
     css || tiny_license_js
+}
+
+fn q0_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
+    input.len() > 2 * 1024 && input.len() <= 4 * 1024 && input.starts_with(b"/*!")
 }
 
 fn q1_medium_64k_table_is_likely_safe(input: &[u8]) -> bool {
