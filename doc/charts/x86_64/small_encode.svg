@@ -178,7 +178,7 @@ q5
 <polyline fill="none" opacity="0.35" stroke="#F87171" stroke-width="1" points="119,176 200,153 281,156 362,167 443,166 524,160 605,156 686,155 767,153 "/>
 <polyline fill="none" opacity="0.35" stroke="#F87171" stroke-width="1" points="119,217 200,192 281,188 362,176 443,179 524,188 605,164 686,162 767,160 "/>
 <polyline fill="none" opacity="0.35" stroke="#F87171" stroke-width="1" points="119,236 200,201 281,199 362,199 443,191 524,187 605,179 686,175 767,174 "/>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,162 200,150 281,134 362,115 443,110 524,109 605,102 686,104 767,96 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,162 200,150 281,134 362,115 443,110 524,109 605,102 686,104 767,101 "/>
 <polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,239 124,238 "/>
 <polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="128,237 133,236 "/>
 <polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="136,235 141,234 "/>
@@ -264,8 +264,8 @@ q5
 <circle cx="524" cy="109" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="605" cy="102" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="686" cy="104" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="767" cy="96" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="773" y="96" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="6.451612903225807" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="767" cy="101" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="773" y="101" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="6.451612903225807" opacity="1" fill="#F87171" font-weight="bold">
 q0
 </text>
 <circle cx="119" cy="239" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
