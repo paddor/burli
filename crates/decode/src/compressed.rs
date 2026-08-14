@@ -276,6 +276,8 @@ fn copy_from_distance(
     if request.distance == 1 {
         let byte = output[produced - 1];
         output.resize(produced + request.len, byte);
+    } else if request.distance < CHUNKED_COPY_MIN_DISTANCE && request.len >= 8 {
+        copy_repeated_pattern(output, request.distance, request.len);
     } else if request.distance < CHUNKED_COPY_MIN_DISTANCE {
         for _ in 0..request.len {
             let src = output.len() - request.distance;
@@ -300,6 +302,21 @@ fn copy_from_distance(
         distances.push(request.distance);
     }
     Ok(())
+}
+
+fn copy_repeated_pattern(output: &mut Vec<u8>, distance: usize, len: usize) {
+    let src = output.len() - distance;
+    let mut pattern = [0_u8; CHUNKED_COPY_MIN_DISTANCE];
+    pattern[..distance].copy_from_slice(&output[src..src + distance]);
+
+    let mut remaining = len;
+    while remaining >= distance {
+        output.extend_from_slice(&pattern[..distance]);
+        remaining -= distance;
+    }
+    if remaining != 0 {
+        output.extend_from_slice(&pattern[..remaining]);
+    }
 }
 
 fn checked_backward_copy_end(
@@ -1241,6 +1258,30 @@ mod tests {
         assert_eq!(output, b"aaaaabbbbb");
         let mut reader = BitReader::new(&[]);
         assert_eq!(read_distance(&mut reader, 0, 0, 0, &distances).unwrap(), 1);
+    }
+
+    #[test]
+    fn small_distance_copy_repeats_source_pattern() {
+        let mut output = b"abcdef".to_vec();
+        let mut distances = DistanceRing::new();
+
+        copy_from_distance(
+            &mut output,
+            CopyRequest {
+                needed: 14,
+                window_size: 1 << 16,
+                output_base: 0,
+                distance: 3,
+                len: 8,
+                push_distance: true,
+            },
+            &mut distances,
+        )
+        .unwrap();
+
+        assert_eq!(output, b"abcdefdefdefde");
+        let mut reader = BitReader::new(&[]);
+        assert_eq!(read_distance(&mut reader, 0, 0, 0, &distances).unwrap(), 3);
     }
 
     #[test]
