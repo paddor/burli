@@ -1086,11 +1086,9 @@ fn write_q1_internal_balanced_command_static_distance_prefix_codes(
     }
 
     let mut internal_map = q1_internal_command_code_map_from_lengths(&internal_command_lengths);
-    write_complex_prefix_code_lengths_from_lengths_with_scratch(
-        writer,
-        &full_command_lengths,
-        scratch,
-    )?;
+    scratch.lengths.clear();
+    scratch.lengths.extend_from_slice(&full_command_lengths);
+    write_fast_complex_prefix_code_lengths_with_scratch(writer, scratch)?;
     write_static_distance_prefix_code(writer);
     for symbol in 0..64 {
         internal_map[64 + symbol] = static_distance_code(symbol as u16)?;
