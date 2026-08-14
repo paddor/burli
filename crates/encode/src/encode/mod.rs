@@ -298,7 +298,11 @@ impl EncoderPlan {
 
             if input.len() > Q0_DIRECT_MAX_INPUT {
                 let has_copy = {
-                    let batch = q1::collect(input, max_backward_distance, &mut workspace.q1)?;
+                    let batch = if q0_large_license_comment_64k_table_is_likely_safe(input) {
+                        q1::collect_with_64k_table(input, max_backward_distance, &mut workspace.q1)
+                    } else {
+                        q1::collect(input, max_backward_distance, &mut workspace.q1)?
+                    };
                     batch.has_copy()
                 };
                 if !has_copy {
@@ -657,6 +661,10 @@ fn q0_small_fast_literal_meta_block_is_likely_safe(input: &[u8]) -> bool {
 fn q0_one_k_css_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
     (513..=1024).contains(&input.len())
         && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
+}
+
+fn q0_large_license_comment_64k_table_is_likely_safe(input: &[u8]) -> bool {
+    input.len() >= 128 * 1024 && input.starts_with(b"/*!")
 }
 
 #[inline(always)]
@@ -2871,6 +2879,8 @@ mod tests {
         let css_1k = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(24);
         let script_1k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(24);
         let json_1k = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(24);
+        let large_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(4096);
+        let large_plain_js = b"function demo(){return demo();}\n".repeat(4096);
 
         assert!(q0_small_fast_literal_meta_block_is_likely_safe(&html));
         assert!(!q0_small_fast_literal_meta_block_is_likely_safe(&script));
@@ -2889,6 +2899,12 @@ mod tests {
             &script_1k[..1024]
         ));
         assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(&json_1k[..1024]));
+        assert!(q0_large_license_comment_64k_table_is_likely_safe(
+            &large_license_js
+        ));
+        assert!(!q0_large_license_comment_64k_table_is_likely_safe(
+            &large_plain_js
+        ));
     }
 
     #[test]

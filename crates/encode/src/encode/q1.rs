@@ -367,6 +367,14 @@ pub(super) fn collect<'a>(
     workspace.collect(input, max_backward_distance)
 }
 
+pub(super) fn collect_with_64k_table<'a>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &'a mut Workspace,
+) -> &'a Batch {
+    workspace.collect_with_64k_table(input, max_backward_distance)
+}
+
 pub(super) fn write(
     writer: &mut BitWriter,
     input: &[u8],
@@ -561,6 +569,28 @@ impl Workspace {
         }
 
         Ok(&self.batch)
+    }
+
+    fn collect_with_64k_table(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
+        self.reset(input.len());
+
+        if input.len() < INPUT_MARGIN_BYTES {
+            self.push_literals(input, 0, input.len());
+            return &self.batch;
+        }
+
+        if self.table.len() != (1 << 16) {
+            self.table.resize(1 << 16, 0);
+        } else {
+            self.table.fill(0);
+        }
+        collect_with_u32_table_m6::<16>(
+            &mut self.batch,
+            input,
+            max_backward_distance,
+            &mut self.table,
+        );
+        &self.batch
     }
 
     fn reset(&mut self, input_len: usize) {
