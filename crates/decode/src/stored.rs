@@ -23,7 +23,11 @@ pub fn decompress_with_limit(
 ) -> Result<Vec<u8>, DecompressError> {
     let mut reader = BitReader::new(input);
     let window_bits = read_window_bits(&mut reader)?;
-    let mut output = Vec::new();
+    let mut output = if max_output_size <= MAX_META_BLOCK_SIZE {
+        Vec::with_capacity(max_output_size)
+    } else {
+        Vec::new()
+    };
     let mut distances = DistanceRing::new();
 
     loop {
