@@ -87,30 +87,76 @@ fn collect_with_dictionary<const USE_DICTIONARY: bool>(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
-    if !USE_DICTIONARY && table_size_for_input(input.len()) == TABLE_SIZE {
-        return collect_with_stack_table::<USE_DICTIONARY>(input, max_backward_distance, workspace);
+    match table_bits_for_input(input.len()) {
+        10 => {
+            return collect_with_stack_table_10::<USE_DICTIONARY>(
+                input,
+                max_backward_distance,
+                workspace,
+            );
+        }
+        12 => {
+            return collect_with_stack_table_12::<USE_DICTIONARY>(
+                input,
+                max_backward_distance,
+                workspace,
+            );
+        }
+        16 if !USE_DICTIONARY => {
+            return collect_with_stack_table_16::<USE_DICTIONARY>(
+                input,
+                max_backward_distance,
+                workspace,
+            );
+        }
+        _ => {}
     }
 
-    let mut table = vec![NO_POSITION; table_size_for_input(input.len())];
-    collect_with_table::<USE_DICTIONARY>(input, max_backward_distance, workspace, &mut table)
+    let mut table = vec![NO_POSITION; TABLE_SIZE];
+    collect_with_table::<USE_DICTIONARY, TABLE_BITS>(
+        input,
+        max_backward_distance,
+        workspace,
+        &mut table,
+    )
 }
 
 #[allow(clippy::large_stack_arrays)]
-fn collect_with_stack_table<const USE_DICTIONARY: bool>(
+fn collect_with_stack_table_16<const USE_DICTIONARY: bool>(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
     let mut table = [NO_POSITION; TABLE_SIZE];
-    collect_with_table::<USE_DICTIONARY>(input, max_backward_distance, workspace, &mut table)
+    collect_with_table::<USE_DICTIONARY, 16>(input, max_backward_distance, workspace, &mut table)
 }
 
-fn collect_with_table<const USE_DICTIONARY: bool>(
+fn collect_with_stack_table_10<const USE_DICTIONARY: bool>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
+    let mut table = [NO_POSITION; 1 << 10];
+    collect_with_table::<USE_DICTIONARY, 10>(input, max_backward_distance, workspace, &mut table)
+}
+
+#[allow(clippy::large_stack_arrays)]
+fn collect_with_stack_table_12<const USE_DICTIONARY: bool>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
+    let mut table = [NO_POSITION; 1 << 12];
+    collect_with_table::<USE_DICTIONARY, 12>(input, max_backward_distance, workspace, &mut table)
+}
+
+fn collect_with_table<const USE_DICTIONARY: bool, const TABLE_BITS_FOR_INPUT: usize>(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
     table: &mut [u32],
 ) -> Vec<Token> {
+    debug_assert_eq!(table.len(), 1_usize << TABLE_BITS_FOR_INPUT);
     if input.len() < HASH_TYPE_LEN {
         return literal_only(input.len());
     }
@@ -125,7 +171,7 @@ fn collect_with_table<const USE_DICTIONARY: bool>(
 
     while pos + HASH_TYPE_LEN < pos_end {
         let max_len = pos_end - pos;
-        let Some(mut found) = find_match::<USE_DICTIONARY>(
+        let Some(mut found) = find_match::<USE_DICTIONARY, TABLE_BITS_FOR_INPUT>(
             input,
             table,
             pos,
@@ -139,7 +185,13 @@ fn collect_with_table<const USE_DICTIONARY: bool>(
         ) else {
             pos += 1;
             if pos > apply_sparse_search {
-                pos = skip_sparse(input, table, pos, pos_end, apply_sparse_search);
+                pos = skip_sparse::<TABLE_BITS_FOR_INPUT>(
+                    input,
+                    table,
+                    pos,
+                    pos_end,
+                    apply_sparse_search,
+                );
             }
             continue;
         };
@@ -149,7 +201,7 @@ fn collect_with_table<const USE_DICTIONARY: bool>(
             let lazy_pos = pos + 1;
             let lazy_max_len = pos_end - lazy_pos;
             let best_len_in = found.len.saturating_sub(1).min(lazy_max_len);
-            if let Some(next) = find_match::<USE_DICTIONARY>(
+            if let Some(next) = find_match::<USE_DICTIONARY, TABLE_BITS_FOR_INPUT>(
                 input,
                 table,
                 lazy_pos,
@@ -192,7 +244,12 @@ fn collect_with_table<const USE_DICTIONARY: bool>(
             dist_cache[1] = dist_cache[0];
             dist_cache[0] = found.distance;
         }
-        store_range(input, table, pos + 2, (pos + found.len).min(store_end));
+        store_range::<TABLE_BITS_FOR_INPUT>(
+            input,
+            table,
+            pos + 2,
+            (pos + found.len).min(store_end),
+        );
         pos += found.len;
         insert_start = pos;
     }
@@ -228,14 +285,14 @@ fn literal_only(input_len: usize) -> Vec<Token> {
     }]
 }
 
-fn find_match<const USE_DICTIONARY: bool>(
+fn find_match<const USE_DICTIONARY: bool, const TABLE_BITS_FOR_INPUT: usize>(
     input: &[u8],
     table: &mut [u32],
     pos: usize,
     max_len: usize,
     params: SearchParams,
 ) -> Option<Match> {
-    let key = table_key(input, pos, table);
+    let key = table_key::<TABLE_BITS_FOR_INPUT>(input, pos);
     let best_check = params.best_len_in.min(max_len.saturating_sub(1));
     let compare_char = input[pos + best_check];
     let best_score = params.min_score;
@@ -384,7 +441,7 @@ fn dictionary_match_len(input: &[u8], pos: usize, word: &[u8], max_len: usize) -
         .count()
 }
 
-fn skip_sparse(
+fn skip_sparse<const TABLE_BITS_FOR_INPUT: usize>(
     input: &[u8],
     table: &mut [u32],
     mut pos: usize,
@@ -395,14 +452,14 @@ fn skip_sparse(
     if pos > start + 4 * SPARSE_SEARCH_WINDOW {
         let pos_jump = (pos + 16).min(pos_end.saturating_sub(margin));
         while pos < pos_jump {
-            let key = table_key(input, pos, table);
+            let key = table_key::<TABLE_BITS_FOR_INPUT>(input, pos);
             table[key] = pos as u32;
             pos += 4;
         }
     } else {
         let pos_jump = (pos + 8).min(pos_end.saturating_sub(margin));
         while pos < pos_jump {
-            let key = table_key(input, pos, table);
+            let key = table_key::<TABLE_BITS_FOR_INPUT>(input, pos);
             table[key] = pos as u32;
             pos += 2;
         }
@@ -410,37 +467,42 @@ fn skip_sparse(
     pos
 }
 
-fn store_range(input: &[u8], table: &mut [u32], start: usize, end: usize) {
+fn store_range<const TABLE_BITS_FOR_INPUT: usize>(
+    input: &[u8],
+    table: &mut [u32],
+    start: usize,
+    end: usize,
+) {
     let step = if end.saturating_sub(start) >= LONG_MATCH_STORE_THRESHOLD {
         4
     } else {
         2
     };
     for pos in (start..end).step_by(step) {
-        let key = table_key(input, pos, table);
+        let key = table_key::<TABLE_BITS_FOR_INPUT>(input, pos);
         table[key] = pos as u32;
     }
 }
 
-fn table_key(input: &[u8], pos: usize, table: &[u32]) -> usize {
-    hash(input, pos) & (table.len() - 1)
+fn table_key<const TABLE_BITS_FOR_INPUT: usize>(input: &[u8], pos: usize) -> usize {
+    hash(input, pos, TABLE_BITS_FOR_INPUT)
 }
 
-fn table_size_for_input(input_len: usize) -> usize {
+fn table_bits_for_input(input_len: usize) -> usize {
     if input_len <= 1024 {
-        return 1 << 10;
+        return 10;
     }
     if input_len <= 8 * 1024 {
-        1 << 12
+        12
     } else {
-        TABLE_SIZE
+        TABLE_BITS
     }
 }
 
 #[inline(always)]
-fn hash(input: &[u8], pos: usize) -> usize {
+fn hash(input: &[u8], pos: usize, table_bits: usize) -> usize {
     let word = read_u64_le(input, pos) << (64 - 8 * HASH_LEN);
-    (word.wrapping_mul(HASH_MUL) >> (64 - TABLE_BITS)) as usize
+    (word.wrapping_mul(HASH_MUL) >> (64 - table_bits)) as usize
 }
 
 fn hash14(input: &[u8], pos: usize) -> u32 {
