@@ -715,6 +715,10 @@ fn q1_medium_64k_table_is_likely_safe(input: &[u8]) -> bool {
     input.len() >= 64 * 1024 && input.len() <= 320 * 1024
 }
 
+fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
+    (385..=512).contains(&input.len()) && (input.starts_with(b"/*!") || input.starts_with(b"@"))
+}
+
 #[inline(always)]
 fn is_match5(input: &[u8], previous: usize, pos: usize) -> bool {
     input[previous..previous + MIN_MATCH_BYTES] == input[pos..pos + MIN_MATCH_BYTES]
@@ -898,11 +902,19 @@ fn write_static_entropy_token_batch(
     let literal_code_map = if block_len <= 1024 {
         let mut prefix = PrefixCodeScratch::default();
         prefix.reserve_for(LITERAL_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE);
-        write_fast_dense_prefix_code_array_from_frequencies_with_scratch(
-            writer,
-            &batch.literal_frequencies,
-            &mut prefix,
-        )?
+        if block_len <= 512 && q2_tiny_balanced_literal_prefix_is_likely_safe(input) {
+            write_balanced_fast_dense_prefix_code_array_from_frequencies_with_scratch(
+                writer,
+                &batch.literal_frequencies,
+                &mut prefix,
+            )?
+        } else {
+            write_fast_dense_prefix_code_array_from_frequencies_with_scratch(
+                writer,
+                &batch.literal_frequencies,
+                &mut prefix,
+            )?
+        }
     } else {
         let literal_codes = write_prefix_code_from_frequencies(
             writer,
@@ -1332,6 +1344,41 @@ fn write_fast_dense_prefix_code_array_from_frequencies_with_scratch<const N: usi
     }
 
     code_lengths_from_current_used_with_scratch(N, FAST_CODE_BITS, scratch);
+
+    fill_dense_symbol_code_map_from_lengths(&scratch.lengths, &mut map);
+    write_fast_complex_prefix_code_lengths_with_scratch(writer, scratch)?;
+    Ok(map)
+}
+
+fn write_balanced_fast_dense_prefix_code_array_from_frequencies_with_scratch<const N: usize>(
+    writer: &mut BitWriter,
+    frequencies: &[usize; N],
+    scratch: &mut PrefixCodeScratch,
+) -> Result<[DenseSymbolCode; N], CompressError> {
+    scratch.used.clear();
+    for (symbol, &frequency) in frequencies.iter().enumerate() {
+        if frequency != 0 {
+            scratch.used.push((symbol as u16, frequency));
+        }
+    }
+
+    let mut map = [MISSING_DENSE_SYMBOL_CODE; N];
+    if scratch.used.is_empty() {
+        write_simple_dense_prefix_code(writer, &[0], &mut map)?;
+        return Ok(map);
+    }
+    if scratch.used.len() <= MAX_SIMPLE_PREFIX_SYMBOLS {
+        let mut symbols = [0_u16; MAX_SIMPLE_PREFIX_SYMBOLS];
+        for (index, &(symbol, _)) in scratch.used.iter().enumerate() {
+            symbols[index] = symbol;
+        }
+        write_simple_dense_prefix_code(writer, &symbols[..scratch.used.len()], &mut map)?;
+        return Ok(map);
+    }
+
+    scratch.lengths.clear();
+    scratch.lengths.resize(N, 0);
+    balanced_code_lengths_into(N, &mut scratch.used, FAST_CODE_BITS, &mut scratch.lengths);
 
     fill_dense_symbol_code_map_from_lengths(&scratch.lengths, &mut map);
     write_fast_complex_prefix_code_lengths_with_scratch(writer, scratch)?;
