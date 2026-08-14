@@ -905,7 +905,7 @@ impl Workspace {
         let min_match = if table_bits <= 15 { 4 } else { 6 };
         match table_bits {
             16 => {
-                collect_with_u32_table_m6::<16, DEFAULT_U32_SKIP_START, true>(
+                collect_with_u32_table_m6::<16, DEFAULT_U32_SKIP_START, true, true>(
                     &mut self.batch,
                     input,
                     max_backward_distance,
@@ -914,7 +914,7 @@ impl Workspace {
                 return Ok(&self.batch);
             }
             17 => {
-                collect_with_u32_table_m6::<17, DEFAULT_U32_SKIP_START, true>(
+                collect_with_u32_table_m6::<17, DEFAULT_U32_SKIP_START, true, true>(
                     &mut self.batch,
                     input,
                     max_backward_distance,
@@ -1192,7 +1192,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 16];
-        collect_with_u32_table_m6::<16, DEFAULT_U32_SKIP_START, true>(
+        collect_with_u32_table_m6::<16, DEFAULT_U32_SKIP_START, true, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1215,7 +1215,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 16];
-        collect_with_u32_table_m6::<16, MEDIUM_U32_SKIP_START, true>(
+        collect_with_u32_table_m6::<16, MEDIUM_U32_SKIP_START, true, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1234,7 +1234,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 15];
-        collect_with_u32_table_m6::<15, JSON_U32_SKIP_START, true>(
+        collect_with_u32_table_m6::<15, JSON_U32_SKIP_START, true, false>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1253,7 +1253,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 16];
-        collect_with_u32_table_m6::<16, FAST_U32_SKIP_START, false>(
+        collect_with_u32_table_m6::<16, FAST_U32_SKIP_START, false, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1272,7 +1272,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 15];
-        collect_with_u32_table_m6::<15, FAST_U32_SKIP_START, false>(
+        collect_with_u32_table_m6::<15, FAST_U32_SKIP_START, false, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1448,6 +1448,7 @@ fn collect_with_u32_table_m6<
     const TABLE_BITS: usize,
     const SKIP_START: usize,
     const USE_LAST_DISTANCE: bool,
+    const STORE_TAIL_HASHES: bool,
 >(
     batch: &mut Batch,
     input: &[u8],
@@ -1500,7 +1501,9 @@ fn collect_with_u32_table_m6<
             pos += copy_len;
             insert_start = pos;
             last_distance = distance;
-            store_tail_hashes_in_u32_table_m6::<TABLE_BITS>(table, input, pos);
+            if STORE_TAIL_HASHES {
+                store_tail_hashes_in_u32_table_m6::<TABLE_BITS>(table, input, pos);
+            }
 
             if pos > len_limit {
                 break;
