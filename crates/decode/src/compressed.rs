@@ -146,8 +146,20 @@ fn decode_meta_block_body(
     let single_command_block = header.commands.types() == 1;
     let single_distance_block = header.distances.types() == 1;
     let single_distance_tree = distance_codes.len() == 1;
-    let single_literal_code = if header.literals.types() == 1 && literal_codes.len() == 1 {
+    let single_literal_block = header.literals.types() == 1;
+    let single_literal_code = if single_literal_block && literal_codes.len() == 1 {
         Some(&literal_codes[0])
+    } else {
+        None
+    };
+    let single_literal_block_max_bits = if single_literal_block && single_literal_code.is_none() {
+        Some(
+            literal_codes
+                .iter()
+                .map(|code| usize::from(code.max_bits()))
+                .max()
+                .unwrap_or(0),
+        )
     } else {
         None
     };
@@ -180,6 +192,7 @@ fn decode_meta_block_body(
                     command.insert_len,
                     literal_codes,
                     header,
+                    single_literal_block_max_bits,
                 )?;
             }
         }
@@ -881,6 +894,7 @@ fn copy_literals(
     count: usize,
     literal_codes: &[PrefixCode],
     header: &mut CompressedHeader,
+    single_literal_block_max_bits: Option<usize>,
 ) -> Result<(), DecompressError> {
     let produced = output.len();
     if produced > needed || count > needed - produced {
@@ -900,6 +914,7 @@ fn copy_literals(
             literal_codes,
             &header.literal_context_map[..64],
             header.context_modes[0],
+            single_literal_block_max_bits.unwrap_or(0),
         );
     }
 
@@ -966,12 +981,8 @@ fn copy_literals_single_block(
     literal_codes: &[PrefixCode],
     context_map: &[usize],
     mode: u8,
+    max_bits: usize,
 ) -> Result<(), DecompressError> {
-    let max_bits = literal_codes
-        .iter()
-        .map(|code| usize::from(code.max_bits()))
-        .max()
-        .unwrap_or(0);
     if count
         .checked_mul(max_bits)
         .is_some_and(|bits| bits <= reader.remaining_bits())
