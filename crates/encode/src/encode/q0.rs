@@ -3,8 +3,8 @@ use alloc::{vec, vec::Vec};
 use burli_core::{BurliError, CompressError, bits::BitWriter};
 
 use super::{
-    COMMAND_ALPHABET_SIZE, INITIAL_LAST_DISTANCE, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE,
-    PrefixCodeScratch, Token, append_pending_bits, command_symbol_for_insert,
+    COMMAND_ALPHABET_SIZE, DenseSymbolCode, INITIAL_LAST_DISTANCE, LITERAL_ALPHABET_SIZE,
+    MAX_META_BLOCK_SIZE, PrefixCodeScratch, Token, append_pending_bits, command_symbol_for_insert,
     command_symbol_for_insert_copy, copy_length_code, distance_code, hash_word_q0,
     insert_length_code, is_match5, match_len, next_hash_word, read_u64_le,
     token_supports_last_distance, write_block_and_context_header,
@@ -198,17 +198,13 @@ impl Batch {
 
             let insert_start = record.insert_start as usize;
             let insert_end = insert_start + record.insert_len as usize;
-            for &literal in &input[insert_start..insert_end] {
-                let literal_code = literal_code_map[usize::from(literal)];
-                debug_assert!(literal_code.len != u8::MAX);
-                append_pending_bits(
-                    writer,
-                    &mut pending_bits,
-                    &mut pending_width,
-                    literal_code.len,
-                    u64::from(literal_code.bits),
-                );
-            }
+            append_literal_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                &input[insert_start..insert_end],
+                &literal_code_map,
+            );
 
             if meta.distance_symbol != NO_DISTANCE_SYMBOL {
                 let distance_code = distance_code_map[meta.distance_symbol as usize];
@@ -234,6 +230,38 @@ impl Batch {
         }
 
         Ok(())
+    }
+}
+
+#[inline(always)]
+fn append_literal_bits(
+    writer: &mut BitWriter,
+    pending_bits: &mut u64,
+    pending_width: &mut u8,
+    literals: &[u8],
+    literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
+) {
+    let mut pairs = literals.chunks_exact(2);
+    for pair in &mut pairs {
+        let first = literal_code_map[usize::from(pair[0])];
+        let second = literal_code_map[usize::from(pair[1])];
+        debug_assert!(first.len != u8::MAX);
+        debug_assert!(second.len != u8::MAX);
+        let width = first.len + second.len;
+        let bits = u64::from(first.bits) | (u64::from(second.bits) << first.len);
+        append_pending_bits(writer, pending_bits, pending_width, width, bits);
+    }
+
+    if let &[literal] = pairs.remainder() {
+        let literal_code = literal_code_map[usize::from(literal)];
+        debug_assert!(literal_code.len != u8::MAX);
+        append_pending_bits(
+            writer,
+            pending_bits,
+            pending_width,
+            literal_code.len,
+            u64::from(literal_code.bits),
+        );
     }
 }
 
