@@ -35,7 +35,7 @@ const Q2_MEDIUM_H3_MIN_INPUT: usize = 8 * 1024;
 const Q2_MEDIUM_H3_MAX_INPUT: usize = 128 * 1024;
 const Q2_FAST_H3_MAX_INPUT: usize = 16 * 1024;
 const Q2_SWEEP1_H3_MAX_INPUT: usize = 32 * 1024;
-const Q3_FAST_SWEEP_MAX_INPUT: usize = 8 * 1024;
+const Q3_FAST_SWEEP_MAX_INPUT: usize = 16 * 1024;
 const Q4_TINY_CONTEXT_MAX_INPUT: usize = 768;
 const STATIC_CODE_LENGTH_DEPTH: [u8; CODE_LENGTH_ALPHABET_SIZE] =
     [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 0, 4, 4];
