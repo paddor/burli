@@ -737,6 +737,7 @@ fn q0_fast_skip_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
     input.len() > 16 * 1024
         && input.len() <= 32 * 1024
         && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
+        && !input.starts_with(b"@media (prefers-color-scheme")
 }
 
 fn q0_medium_minified_js_medium_skip_is_likely_safe(input: &[u8]) -> bool {
