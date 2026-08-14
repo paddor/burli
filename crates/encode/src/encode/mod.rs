@@ -265,6 +265,23 @@ impl EncoderPlan {
                 return write_fast_compressed_literal_meta_block(writer, input);
             }
 
+            if q0_one_k_css_q1_meta_block_is_likely_safe(input) {
+                let has_copy = {
+                    let batch = q1::collect(input, max_backward_distance, &mut workspace.q1)?;
+                    batch.has_copy()
+                };
+                if !has_copy {
+                    return write_compressed_literal_meta_block(writer, input);
+                }
+                return q1::write(
+                    writer,
+                    input,
+                    input.len(),
+                    &mut workspace.q1,
+                    self.q1_fast_literal_prefix,
+                );
+            }
+
             if input.len() <= Q0_STATIC_ENTROPY_MAX_INPUT && input.len() > Q0_DIRECT_MAX_INPUT {
                 let tokens =
                     q2::collect_without_dictionary(input, max_backward_distance, &mut workspace.q2);
@@ -635,6 +652,11 @@ fn q0_small_fast_literal_meta_block_is_likely_safe(input: &[u8]) -> bool {
     let tiny_comment_or_css =
         (385..=512).contains(&input.len()) && (input.starts_with(b"/*") || input.starts_with(b"@"));
     small_html || tiny_comment_or_css
+}
+
+fn q0_one_k_css_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
+    (513..=1024).contains(&input.len())
+        && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
 }
 
 #[inline(always)]
@@ -2846,6 +2868,9 @@ mod tests {
         let json = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(14);
         let tiny_script = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(12);
         let tiny_css = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(12);
+        let css_1k = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(24);
+        let script_1k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(24);
+        let json_1k = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(24);
 
         assert!(q0_small_fast_literal_meta_block_is_likely_safe(&html));
         assert!(!q0_small_fast_literal_meta_block_is_likely_safe(&script));
@@ -2859,6 +2884,11 @@ mod tests {
         assert!(!q0_small_fast_literal_meta_block_is_likely_safe(
             &html[..256]
         ));
+        assert!(q0_one_k_css_q1_meta_block_is_likely_safe(&css_1k[..1024]));
+        assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(
+            &script_1k[..1024]
+        ));
+        assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(&json_1k[..1024]));
     }
 
     #[test]
