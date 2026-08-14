@@ -262,7 +262,7 @@ impl EncoderPlan {
 
         if self.path == EncoderPath::FastOnePass {
             if q0_small_html_literal_meta_block_is_likely_safe(input) {
-                return write_compressed_literal_meta_block(writer, input);
+                return write_fast_compressed_literal_meta_block(writer, input);
             }
 
             if input.len() <= Q0_STATIC_ENTROPY_MAX_INPUT && input.len() > Q0_DIRECT_MAX_INPUT {
@@ -695,6 +695,39 @@ fn write_compressed_literal_meta_block(
     }
     let literal_codes =
         write_prefix_code_from_frequencies(writer, LITERAL_ALPHABET_SIZE, &literal_frequencies)?;
+    let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
+    write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, command_symbol)?;
+    write_simple_prefix_code_single(writer, 64, 0)?;
+    writer.write_bits_trusted(insert.extra_bits, insert.extra);
+    for &literal in input {
+        write_literal(writer, &literal_code_map, literal)?;
+    }
+    Ok(())
+}
+
+fn write_fast_compressed_literal_meta_block(
+    writer: &mut BitWriter,
+    input: &[u8],
+) -> Result<(), CompressError> {
+    if input.is_empty() || input.len() > MAX_META_BLOCK_SIZE {
+        return Err(BurliError::Format("invalid compressed Brotli block size"));
+    }
+
+    let insert = insert_length_code(input.len())?;
+    let command_symbol = command_symbol_for_insert(insert.code)?;
+
+    write_meta_block_len(writer, input.len())?;
+    write_block_and_context_header(writer)?;
+    let mut literal_frequencies = vec![0_usize; LITERAL_ALPHABET_SIZE];
+    for &literal in input {
+        literal_frequencies[usize::from(literal)] += 1;
+    }
+    let literal_codes = write_fast_prefix_code_from_frequencies(
+        writer,
+        LITERAL_ALPHABET_SIZE,
+        &literal_frequencies,
+        8,
+    )?;
     let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
     write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, command_symbol)?;
     write_simple_prefix_code_single(writer, 64, 0)?;
