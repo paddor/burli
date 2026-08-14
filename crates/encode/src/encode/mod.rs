@@ -342,7 +342,11 @@ impl EncoderPlan {
                             &mut workspace.q1,
                         )
                     } else if q0_medium_json_32k_table_is_likely_safe(input) {
-                        q1::collect_with_32k_table(input, max_backward_distance, &mut workspace.q1)
+                        q1::collect_with_32k_medium_skip(
+                            input,
+                            max_backward_distance,
+                            &mut workspace.q1,
+                        )
                     } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input) {
                         q1::collect_fast_skip_without_last_distance_probe(
                             input,

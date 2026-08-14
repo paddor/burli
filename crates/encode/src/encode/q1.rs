@@ -443,12 +443,12 @@ pub(super) fn collect_with_64k_medium_skip<'a>(
     workspace.collect_with_64k_medium_skip(input, max_backward_distance)
 }
 
-pub(super) fn collect_with_32k_table<'a>(
+pub(super) fn collect_with_32k_medium_skip<'a>(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &'a mut Workspace,
 ) -> &'a Batch {
-    workspace.collect_with_32k_table(input, max_backward_distance)
+    workspace.collect_with_32k_medium_skip(input, max_backward_distance)
 }
 
 pub(super) fn collect_with_64k_fast_skip<'a>(
@@ -891,7 +891,11 @@ impl Workspace {
     }
 
     #[allow(clippy::large_stack_arrays)]
-    fn collect_with_32k_table(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
+    fn collect_with_32k_medium_skip(
+        &mut self,
+        input: &[u8],
+        max_backward_distance: usize,
+    ) -> &Batch {
         self.reset(input.len());
 
         if input.len() < INPUT_MARGIN_BYTES {
@@ -900,7 +904,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 15];
-        collect_with_u32_table_m6::<15, DEFAULT_U32_SKIP_START, true>(
+        collect_with_u32_table_m6::<15, MEDIUM_U32_SKIP_START, true>(
             &mut self.batch,
             input,
             max_backward_distance,
