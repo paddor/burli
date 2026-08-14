@@ -288,6 +288,22 @@ impl EncoderPlan {
                 );
             }
 
+            if q0_tiny_json_q1_meta_block_is_likely_safe(input) {
+                let has_copy = {
+                    let batch = q1::collect(input, max_backward_distance, &mut workspace.q1)?;
+                    batch.has_copy()
+                };
+                if !has_copy {
+                    return write_compressed_literal_meta_block(writer, input);
+                }
+                return q1::write_balanced_literal_command_prefixes(
+                    writer,
+                    input,
+                    input.len(),
+                    &mut workspace.q1,
+                );
+            }
+
             if input.len() <= Q0_STATIC_ENTROPY_MAX_INPUT && input.len() > Q0_DIRECT_MAX_INPUT {
                 let tokens = q2::collect_without_dictionary_no_lazy(
                     input,
@@ -731,6 +747,10 @@ fn q0_small_fast_literal_meta_block_is_likely_safe(input: &[u8]) -> bool {
 fn q0_one_k_css_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
     (513..=768).contains(&input.len())
         && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
+}
+
+fn q0_tiny_json_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
+    (512..=Q0_STATIC_ENTROPY_MAX_INPUT).contains(&input.len()) && input.starts_with(b"{")
 }
 
 fn q0_large_license_comment_64k_table_is_likely_safe(input: &[u8]) -> bool {
@@ -3025,6 +3045,10 @@ mod tests {
             &script_1k[..1024]
         ));
         assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(&json_1k[..1024]));
+        assert!(q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..1024]));
+        assert!(q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..512]));
+        assert!(!q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..384]));
+        assert!(!q0_tiny_json_q1_meta_block_is_likely_safe(&css_1k[..1024]));
         assert!(q0_medium_license_comment_64k_table_is_likely_safe(
             &medium_license_js
         ));
