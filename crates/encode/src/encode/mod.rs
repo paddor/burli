@@ -261,6 +261,10 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::FastOnePass {
+            if q0_small_html_literal_meta_block_is_likely_safe(input) {
+                return write_compressed_literal_meta_block(writer, input);
+            }
+
             if input.len() <= Q0_STATIC_ENTROPY_MAX_INPUT && input.len() > Q0_DIRECT_MAX_INPUT {
                 let tokens =
                     q2::collect_without_dictionary(input, max_backward_distance, &mut workspace.q2);
@@ -598,6 +602,14 @@ const fn min_match_len(quality: u8) -> usize {
         4 => 24,
         _ => 16,
     }
+}
+
+fn q0_small_html_literal_meta_block_is_likely_safe(input: &[u8]) -> bool {
+    const MIN_LEN: usize = 257;
+    const MAX_LEN: usize = 1024;
+
+    (MIN_LEN..=MAX_LEN).contains(&input.len())
+        && (input.starts_with(b"<!") || input.starts_with(b"<html"))
 }
 
 #[inline(always)]
@@ -2743,6 +2755,20 @@ mod tests {
 
         assert_eq!(encoded, uncompressed);
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q0_small_html_literal_guard_is_narrow() {
+        let html = b"<!DOCTYPE html>\n<html><body>small page</body></html>\n".repeat(14);
+        let script = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(18);
+        let json = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(14);
+
+        assert!(q0_small_html_literal_meta_block_is_likely_safe(&html));
+        assert!(!q0_small_html_literal_meta_block_is_likely_safe(&script));
+        assert!(!q0_small_html_literal_meta_block_is_likely_safe(&json));
+        assert!(!q0_small_html_literal_meta_block_is_likely_safe(
+            &html[..256]
+        ));
     }
 
     #[test]
