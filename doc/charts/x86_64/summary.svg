@@ -28,9 +28,9 @@ seconds / GB
 <text x="263" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
 google-brotli
 </text>
-<rect x="335" y="192" width="80" height="121" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="335" y="183" width="80" height="9" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="335" y="167" width="80" height="16" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="335" y="189" width="80" height="124" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="335" y="181" width="80" height="8" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="335" y="164" width="80" height="17" opacity="1" fill="#F87171" stroke="none"/>
 <text x="375" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
 burli
 </text>
