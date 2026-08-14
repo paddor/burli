@@ -44,7 +44,6 @@ const STATIC_CODE_LENGTH_DEPTH: [u8; CODE_LENGTH_ALPHABET_SIZE] =
     [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 0, 4, 4];
 const STATIC_CODE_LENGTH_BITS: [u16; CODE_LENGTH_ALPHABET_SIZE] =
     [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 15, 31, 0, 11, 7];
-const STATIC_DISTANCE_DEPTH: [u8; 64] = [6; 64];
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Workspace {
@@ -1052,11 +1051,11 @@ fn write_static_entropy_token_batch(
 
 fn write_static_command_and_distance_prefix_codes(writer: &mut BitWriter) {
     writer.write_bits_trusted_fits(56, 0x0092_6244_1630_7003);
+    writer.write_bits_trusted_fits(3, 0);
     write_static_distance_prefix_code(writer);
 }
 
 fn write_static_distance_prefix_code(writer: &mut BitWriter) {
-    writer.write_bits_trusted_fits(3, 0);
     writer.write_bits_trusted_fits(28, 0x0369_dc03);
 }
 
@@ -1086,23 +1085,12 @@ fn write_q1_internal_command_static_distance_prefix_codes(
         &full_command_lengths,
         scratch,
     )?;
-    write_static_distance_prefix_code_with_scratch(writer, scratch)?;
+    write_static_distance_prefix_code(writer);
     for symbol in 0..64 {
         internal_map[64 + symbol] = static_distance_code(symbol as u16)?;
     }
 
     Ok(internal_map)
-}
-
-fn write_static_distance_prefix_code_with_scratch(
-    writer: &mut BitWriter,
-    scratch: &mut PrefixCodeScratch,
-) -> Result<(), CompressError> {
-    write_complex_prefix_code_lengths_from_lengths_with_scratch(
-        writer,
-        &STATIC_DISTANCE_DEPTH,
-        scratch,
-    )
 }
 
 fn write_prepared_token_batch_with_len(
