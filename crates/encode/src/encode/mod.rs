@@ -2025,6 +2025,8 @@ fn write_fast_complex_prefix_code_lengths_with_scratch(
 ) -> Result<(), CompressError> {
     encode_fast_code_length_tree_into(&scratch.lengths, &mut scratch.tree)?;
     writer.write_bits_trusted_fits(40, 0x00ff_5555_5554);
+    let mut pending_bits = 0_u64;
+    let mut pending_width = 0_u8;
     for &entry in &scratch.tree {
         let symbol = code_length_tree_symbol(entry);
         let extra_bits = code_length_tree_extra_bits(entry);
@@ -2032,20 +2034,41 @@ fn write_fast_complex_prefix_code_lengths_with_scratch(
             0..=14 => {
                 let len = STATIC_CODE_LENGTH_DEPTH[usize::from(symbol)];
                 let bits = STATIC_CODE_LENGTH_BITS[usize::from(symbol)];
-                writer.write_bits_trusted_fits(len, u64::from(bits));
+                append_pending_bits(
+                    writer,
+                    &mut pending_bits,
+                    &mut pending_width,
+                    len,
+                    u64::from(bits),
+                );
             }
             16 => {
                 let len = STATIC_CODE_LENGTH_DEPTH[16];
                 let bits = STATIC_CODE_LENGTH_BITS[16] | (u16::from(extra_bits) << len);
-                writer.write_bits_trusted_fits(len + 2, u64::from(bits));
+                append_pending_bits(
+                    writer,
+                    &mut pending_bits,
+                    &mut pending_width,
+                    len + 2,
+                    u64::from(bits),
+                );
             }
             17 => {
                 let len = STATIC_CODE_LENGTH_DEPTH[17];
                 let bits = STATIC_CODE_LENGTH_BITS[17] | (u16::from(extra_bits) << len);
-                writer.write_bits_trusted_fits(len + 3, u64::from(bits));
+                append_pending_bits(
+                    writer,
+                    &mut pending_bits,
+                    &mut pending_width,
+                    len + 3,
+                    u64::from(bits),
+                );
             }
             _ => return Err(BurliError::Format("invalid Brotli code length symbol")),
         }
+    }
+    if pending_width != 0 {
+        writer.write_bits_trusted_fits(pending_width, pending_bits);
     }
     Ok(())
 }
