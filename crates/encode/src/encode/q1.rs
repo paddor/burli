@@ -6,7 +6,7 @@ use super::{
     COMMAND_ALPHABET_SIZE, DenseSymbolCode, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE,
     PrefixCodeScratch, append_pending_bits, match_len, read_u64_le, write_block_and_context_header,
     write_fast_dense_prefix_code_array_from_frequencies_with_scratch, write_meta_block_len,
-    write_q1_internal_command_prefix_codes,
+    write_q1_internal_command_prefix_codes, write_q1_internal_command_static_distance_prefix_codes,
 };
 
 const MAX_TABLE_SIZE: usize = 1 << 17;
@@ -263,24 +263,9 @@ impl Batch {
             return Err(BurliError::Format("invalid compressed Brotli block size"));
         }
 
-        prefix.reserve_for(LITERAL_ALPHABET_SIZE, COMMAND_ALPHABET_SIZE);
-
         write_meta_block_len(writer, block_len)?;
         write_block_and_context_header(writer)?;
-        let literal_code_map = if fast_literal_prefix {
-            write_fast_dense_prefix_code_array_from_frequencies_with_scratch(
-                writer,
-                &self.literal_frequencies,
-                prefix,
-            )?
-        } else {
-            super::write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
-                writer,
-                &self.literal_frequencies,
-                prefix,
-                15,
-            )?
-        };
+        let literal_code_map = self.write_literal_prefix(writer, prefix, fast_literal_prefix)?;
         let mut command_frequencies = self.command_frequencies;
         command_frequencies[1] += 1;
         command_frequencies[2] += 1;
@@ -290,6 +275,57 @@ impl Batch {
             write_q1_internal_command_prefix_codes(writer, &command_frequencies, prefix)?;
 
         write_batch_body(writer, input, self, &literal_code_map, &command_code_map)
+    }
+
+    pub(super) fn write_static_distance_prefix(
+        &self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        block_len: usize,
+        prefix: &mut PrefixCodeScratch,
+        fast_literal_prefix: bool,
+    ) -> Result<(), CompressError> {
+        if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
+            return Err(BurliError::Format("invalid compressed Brotli block size"));
+        }
+
+        write_meta_block_len(writer, block_len)?;
+        write_block_and_context_header(writer)?;
+        let literal_code_map = self.write_literal_prefix(writer, prefix, fast_literal_prefix)?;
+        let mut command_frequencies = self.command_frequencies;
+        command_frequencies[1] += 1;
+        command_frequencies[2] += 1;
+        command_frequencies[64] += 1;
+        command_frequencies[84] += 1;
+        let command_code_map = write_q1_internal_command_static_distance_prefix_codes(
+            writer,
+            &command_frequencies,
+            prefix,
+        )?;
+
+        write_batch_body(writer, input, self, &literal_code_map, &command_code_map)
+    }
+
+    fn write_literal_prefix(
+        &self,
+        writer: &mut BitWriter,
+        prefix: &mut PrefixCodeScratch,
+        fast_literal_prefix: bool,
+    ) -> Result<[DenseSymbolCode; LITERAL_ALPHABET_SIZE], CompressError> {
+        prefix.reserve_for(LITERAL_ALPHABET_SIZE, COMMAND_ALPHABET_SIZE);
+        if fast_literal_prefix {
+            return write_fast_dense_prefix_code_array_from_frequencies_with_scratch(
+                writer,
+                &self.literal_frequencies,
+                prefix,
+            );
+        }
+        super::write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+            writer,
+            &self.literal_frequencies,
+            prefix,
+            15,
+        )
     }
 }
 
@@ -436,6 +472,16 @@ pub(super) fn write(
     workspace.write(writer, input, block_len, fast_literal_prefix)
 }
 
+pub(super) fn write_static_distance_prefix(
+    writer: &mut BitWriter,
+    input: &[u8],
+    block_len: usize,
+    workspace: &mut Workspace,
+    fast_literal_prefix: bool,
+) -> Result<(), CompressError> {
+    workspace.write_static_distance_prefix(writer, input, block_len, fast_literal_prefix)
+}
+
 impl Workspace {
     fn write(
         &mut self,
@@ -445,6 +491,22 @@ impl Workspace {
         fast_literal_prefix: bool,
     ) -> Result<(), CompressError> {
         self.batch.write(
+            writer,
+            input,
+            block_len,
+            &mut self.prefix,
+            fast_literal_prefix,
+        )
+    }
+
+    fn write_static_distance_prefix(
+        &mut self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        block_len: usize,
+        fast_literal_prefix: bool,
+    ) -> Result<(), CompressError> {
+        self.batch.write_static_distance_prefix(
             writer,
             input,
             block_len,

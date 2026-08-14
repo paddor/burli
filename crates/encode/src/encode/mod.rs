@@ -44,6 +44,7 @@ const STATIC_CODE_LENGTH_DEPTH: [u8; CODE_LENGTH_ALPHABET_SIZE] =
     [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 0, 4, 4];
 const STATIC_CODE_LENGTH_BITS: [u16; CODE_LENGTH_ALPHABET_SIZE] =
     [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 15, 31, 0, 11, 7];
+const STATIC_DISTANCE_DEPTH: [u8; 64] = [6; 64];
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Workspace {
@@ -338,6 +339,15 @@ impl EncoderPlan {
                 };
                 if !has_copy {
                     return write_compressed_literal_meta_block(writer, input);
+                }
+                if q0_small_json_static_distance_prefix_is_likely_safe(input) {
+                    return q1::write_static_distance_prefix(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
                 }
                 return q1::write(
                     writer,
@@ -739,6 +749,10 @@ fn q0_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
     input.len() > 2 * 1024 && input.len() <= 4 * 1024 && input.starts_with(b"/*!")
 }
 
+fn q0_small_json_static_distance_prefix_is_likely_safe(input: &[u8]) -> bool {
+    input.len() > Q0_STATIC_ENTROPY_MAX_INPUT && input.len() <= 4 * 1024 && input.starts_with(b"{")
+}
+
 fn q0_fast_skip_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
     input.len() > 16 * 1024
         && input.len() <= 32 * 1024
@@ -966,9 +980,7 @@ fn write_static_entropy_token_batch(
         )?;
         dense_symbol_code_map_from_symbol_codes::<LITERAL_ALPHABET_SIZE>(&literal_codes)?
     };
-    writer.write_bits_trusted_fits(56, 0x0092_6244_1630_7003);
-    writer.write_bits_trusted_fits(3, 0);
-    writer.write_bits_trusted_fits(28, 0x0369_dc03);
+    write_static_command_and_distance_prefix_codes(writer);
 
     let mut pending_bits = 0_u64;
     let mut pending_width = 0_u8;
@@ -1036,6 +1048,61 @@ fn write_static_entropy_token_batch(
     }
 
     Ok(())
+}
+
+fn write_static_command_and_distance_prefix_codes(writer: &mut BitWriter) {
+    writer.write_bits_trusted_fits(56, 0x0092_6244_1630_7003);
+    write_static_distance_prefix_code(writer);
+}
+
+fn write_static_distance_prefix_code(writer: &mut BitWriter) {
+    writer.write_bits_trusted_fits(3, 0);
+    writer.write_bits_trusted_fits(28, 0x0369_dc03);
+}
+
+fn write_q1_internal_command_static_distance_prefix_codes(
+    writer: &mut BitWriter,
+    command_frequencies: &[usize; 128],
+    scratch: &mut PrefixCodeScratch,
+) -> Result<[DenseSymbolCode; 128], CompressError> {
+    let mut internal_command_frequencies = [0_usize; 64];
+    internal_command_frequencies.copy_from_slice(&command_frequencies[..64]);
+    code_lengths_from_dense_frequencies_with_scratch(
+        &internal_command_frequencies,
+        MAX_CODE_BITS,
+        scratch,
+    );
+    let mut internal_command_lengths = [0_u8; 64];
+    internal_command_lengths.copy_from_slice(&scratch.lengths[..64]);
+
+    let mut full_command_lengths = [0_u8; COMMAND_ALPHABET_SIZE];
+    for (code, &len) in internal_command_lengths.iter().enumerate() {
+        full_command_lengths[q1_internal_command_symbol(code)] = len;
+    }
+
+    let mut internal_map = q1_internal_command_code_map_from_lengths(&internal_command_lengths);
+    write_complex_prefix_code_lengths_from_lengths_with_scratch(
+        writer,
+        &full_command_lengths,
+        scratch,
+    )?;
+    write_static_distance_prefix_code_with_scratch(writer, scratch)?;
+    for symbol in 0..64 {
+        internal_map[64 + symbol] = static_distance_code(symbol as u16)?;
+    }
+
+    Ok(internal_map)
+}
+
+fn write_static_distance_prefix_code_with_scratch(
+    writer: &mut BitWriter,
+    scratch: &mut PrefixCodeScratch,
+) -> Result<(), CompressError> {
+    write_complex_prefix_code_lengths_from_lengths_with_scratch(
+        writer,
+        &STATIC_DISTANCE_DEPTH,
+        scratch,
+    )
 }
 
 fn write_prepared_token_batch_with_len(
@@ -2923,6 +2990,7 @@ mod tests {
         let script_2k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(48);
         let script_4k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(96);
         let json_1k = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(24);
+        let json_5k = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(100);
         let module_12k = b"var n,l,u,t,i,o,r,f,e,c={},s=[];function demo(){return c;}".repeat(192);
         let license_module_12k =
             b"/** @license React */\n!function(){function demo(){return 1}}\n".repeat(192);
@@ -2971,6 +3039,24 @@ mod tests {
         ));
         assert!(!q0_medium_minified_js_medium_skip_is_likely_safe(
             &script_4k
+        ));
+        assert!(!q0_small_json_static_distance_prefix_is_likely_safe(
+            &json_1k[..1024]
+        ));
+        assert!(q0_small_json_static_distance_prefix_is_likely_safe(
+            &json_5k[..2048]
+        ));
+        assert!(q0_small_json_static_distance_prefix_is_likely_safe(
+            &json_5k[..3073]
+        ));
+        assert!(q0_small_json_static_distance_prefix_is_likely_safe(
+            &json_5k[..4096]
+        ));
+        assert!(!q0_small_json_static_distance_prefix_is_likely_safe(
+            &json_5k[..4097]
+        ));
+        assert!(!q0_small_json_static_distance_prefix_is_likely_safe(
+            &css_2k[..2048]
         ));
     }
 
