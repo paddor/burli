@@ -81,9 +81,11 @@ cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
   --files bootstrap-js,bootstrap-css,json-citm --small-only
 cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
   --impl burli --qualities 0,1,2,3,4,5 --chart-small-only --quick
+cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
+  --corpus silesia --impl all --qualities 0,1,2,3,4,5
 ```
 
-The harness lazily downloads pinned web corpus files into `bench/corpus/`.
+The harness lazily downloads pinned corpus files into `bench/corpus/`.
 JSONL results append under `~/.cache/burli/`. Treat cache files as append-only.
 Default timing is 30 ms per round, 3 rounds, 1 warmup. `--quick` uses one
 30 ms round and no warmup for smoke checks. Use `--target-ms`, `--target-ns`,
@@ -106,6 +108,8 @@ No CLI baseline.
 
 ```bash
 cargo run --manifest-path bench/Cargo.toml --bin burli_charts --release -- all
+cargo run --manifest-path bench/Cargo.toml --bin burli_charts --release -- \
+  scatter-silesia
 ```
 
 With no output dir, charts go under `doc/charts/<arch>/`.
@@ -128,6 +132,7 @@ Generated chart set:
 - `summary.svg`
 - `pipeline.svg`
 - `matrix.svg`
+- `scatter_silesia.svg`
 - `small_encode.svg`
 - `small_decode.svg`
 
@@ -147,6 +152,7 @@ Benchmark corpus:
 - CSS
 - JSON
 - HTML-like text
+- Silesia text/code, medium-compressibility data, and low-compressibility data
 - tiny slices from 512 B through 1 MiB
 - later: HTTP-body captures and malformed/adversarial decode corpus
 

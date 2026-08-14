@@ -78,6 +78,38 @@ const GROUPS: &[(&str, &[&str])] = &[
     ("Data/docs", DATA_DOC_CORPUS),
 ];
 
+const SILESIA_CORPUS: &[&str] = &[
+    "silesia-dickens",
+    "silesia-mr",
+    "silesia-mozilla",
+    "silesia-nci",
+    "silesia-ooffice",
+    "silesia-osdb",
+    "silesia-reymont",
+    "silesia-samba",
+    "silesia-sao",
+    "silesia-webster",
+    "silesia-x-ray",
+    "silesia-xml",
+];
+const SILESIA_HIGH_COMPRESSIBILITY: &[&str] = &["silesia-nci", "silesia-xml", "silesia-samba"];
+const SILESIA_MEDIUM_COMPRESSIBILITY: &[&str] = &[
+    "silesia-dickens",
+    "silesia-mozilla",
+    "silesia-mr",
+    "silesia-ooffice",
+    "silesia-osdb",
+    "silesia-reymont",
+    "silesia-webster",
+];
+const SILESIA_LOW_COMPRESSIBILITY: &[&str] = &["silesia-sao", "silesia-x-ray"];
+const SILESIA_GROUPS: &[(&str, &[&str])] = &[
+    ("High compressibility", SILESIA_HIGH_COMPRESSIBILITY),
+    ("Medium compressibility", SILESIA_MEDIUM_COMPRESSIBILITY),
+    ("Low compressibility", SILESIA_LOW_COMPRESSIBILITY),
+];
+const SILESIA_BASELINE_CODECS: &[&str] = &["google-brotli", "rust-brotli"];
+
 const SMALL_PREFIXES: &[&str] = &["bootstrap-js", "bootstrap-css", "json-citm"];
 const SMALL_SUFFIXES: &[&str] = &[
     "_512", "_1k", "_2k", "_4k", "_8k", "_16k", "_32k", "_64k", "_128k",
@@ -151,6 +183,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         match chart {
             ChartKind::All => unreachable!(),
             ChartKind::Scatter => draw_scatter(&cfg, &out_dir)?,
+            ChartKind::ScatterSilesia => draw_scatter_silesia(&cfg, &out_dir)?,
             ChartKind::Summary => draw_summary(&cfg, &out_dir)?,
             ChartKind::Pipeline => draw_pipeline(&cfg, &out_dir)?,
             ChartKind::Matrix => draw_matrix(&cfg, &out_dir)?,
@@ -166,6 +199,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 enum ChartKind {
     All,
     Scatter,
+    ScatterSilesia,
     Summary,
     Pipeline,
     Matrix,
@@ -202,7 +236,7 @@ impl Args {
 
 fn print_help() {
     println!(
-        "Usage: burli_charts [all|scatter|summary|pipeline|matrix|small-encode|small-decode] [OUT_DIR]"
+        "Usage: burli_charts [all|scatter|scatter-silesia|summary|pipeline|matrix|small-encode|small-decode] [OUT_DIR]"
     );
 }
 
@@ -210,6 +244,7 @@ fn parse_chart_kind(s: &str) -> Option<ChartKind> {
     match s {
         "all" => Some(ChartKind::All),
         "scatter" => Some(ChartKind::Scatter),
+        "scatter-silesia" | "scatter_silesia" => Some(ChartKind::ScatterSilesia),
         "summary" => Some(ChartKind::Summary),
         "pipeline" => Some(ChartKind::Pipeline),
         "matrix" => Some(ChartKind::Matrix),
@@ -1196,7 +1231,7 @@ fn draw_scatter(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
         SCATTER_QUALITIES,
         "scatter",
     )?;
-    let points = compute_scatter_points(&data, &cfg.scatter_codecs);
+    let points = compute_scatter_points(&data, &cfg.scatter_codecs, GROUPS);
     if points.is_empty() {
         return Ok(());
     }
@@ -1255,9 +1290,89 @@ fn draw_scatter(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn draw_scatter_silesia(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
+    let data = load_all_data(cfg, &cfg.scatter_codecs, Some(SILESIA_CORPUS));
+    let inputs = input_names(SILESIA_CORPUS);
+    require_named_quality_rows(
+        &data,
+        SILESIA_BASELINE_CODECS,
+        &inputs,
+        SCATTER_QUALITIES,
+        "scatter_silesia",
+    )?;
+    if !data.contains_key("burli") {
+        return Err("scatter_silesia: missing burli cache rows".into());
+    }
+    let points = compute_scatter_points(&data, &cfg.scatter_codecs, SILESIA_GROUPS);
+    if points.is_empty() {
+        return Ok(());
+    }
+
+    let width = 850;
+    let top = if cfg.hw_label.is_some() { 66.0 } else { 48.0 };
+    let panel_h = 250.0;
+    let gap = 85.0;
+    let bottom = 120.0;
+    let height = (top + panel_h * 3.0 + gap * 2.0 + bottom) as u32;
+    let path = output_path(out_dir, "scatter_silesia.svg");
+    let area = root(&path, width, height)?;
+    chart_header(
+        &area,
+        width,
+        "12-file Silesia: Encode Speed vs Compression Ratio, q0..q5",
+        cfg.hw_label.as_deref(),
+        18,
+    )?;
+
+    let x_left = 70.0;
+    let x_right = 830.0;
+    for (i, (group, _)) in SILESIA_GROUPS.iter().enumerate() {
+        let p_top = top + i as f64 * (panel_h + gap);
+        let p_bot = p_top + panel_h;
+        let (auto_lo, auto_hi) = scatter_y_range(&points, group);
+        let (base_lo, base_hi) = match *group {
+            "High compressibility" => (2.5, 8.0),
+            "Medium compressibility" => (1.4, 3.2),
+            _ => (0.95, 1.55),
+        };
+        let y_lo = auto_lo.min(base_lo);
+        let y_hi = auto_hi.max(base_hi);
+        draw_scatter_panel(
+            &area, cfg, &points, group, x_left, x_right, p_top, p_bot, y_lo, y_hi,
+        )?;
+    }
+    vtext(
+        &area,
+        "compression ratio",
+        16,
+        px((top + top + 2.0 * (panel_h + gap) + panel_h) / 2.0),
+        11,
+        TEXT,
+    )?;
+    draw_marker_legend(
+        &area,
+        cfg,
+        &cfg.scatter_codecs
+            .iter()
+            .copied()
+            .filter(|c| data.contains_key(*c))
+            .collect::<Vec<_>>(),
+        width as f64 / 2.0,
+        top + panel_h * 3.0 + gap * 2.0 + 55.0,
+        width as f64 - 60.0,
+        3,
+    )?;
+    area.present()?;
+    drop(area);
+    finish_svg(&path, width, height)?;
+    println!("wrote {}", path.display());
+    Ok(())
+}
+
 fn compute_scatter_points(
     data: &BTreeMap<String, Vec<BenchRow>>,
     codecs: &[&str],
+    groups: &[(&str, &[&str])],
 ) -> BTreeMap<(String, u8, String), (f64, f64)> {
     let mut points = BTreeMap::new();
     for codec in codecs {
@@ -1265,7 +1380,7 @@ fn compute_scatter_points(
             continue;
         };
         for quality in SCATTER_QUALITIES {
-            for (group, files) in GROUPS {
+            for (group, files) in groups {
                 let mut enc_logs = Vec::new();
                 let mut ratio_logs = Vec::new();
                 for row in rows

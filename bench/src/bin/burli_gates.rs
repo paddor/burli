@@ -46,9 +46,28 @@ impl Scope {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CorpusFilter {
+    Web,
+    Silesia,
+    All,
+}
+
+impl CorpusFilter {
+    fn includes(self, input: &str) -> bool {
+        let is_silesia = input.starts_with("silesia-");
+        match self {
+            CorpusFilter::Web => !is_silesia,
+            CorpusFilter::Silesia => is_silesia,
+            CorpusFilter::All => true,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Args {
     scope: Scope,
+    corpus: CorpusFilter,
     top: usize,
     cache: Option<PathBuf>,
 }
@@ -81,7 +100,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut missing_decode_c = 0usize;
 
     for (key, g) in &google {
-        if !args.scope.includes(key.is_small) || !QUALITIES.contains(&key.quality) {
+        if !args.scope.includes(key.is_small)
+            || !args.corpus.includes(&key.input)
+            || !QUALITIES.contains(&key.quality)
+        {
             continue;
         }
         if let Some(b) = burli.get(key) {
@@ -114,6 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn parse_args() -> Result<Args, Box<dyn Error>> {
     let mut args = Args {
         scope: Scope::All,
+        corpus: CorpusFilter::Web,
         top: 12,
         cache: None,
     };
@@ -123,6 +146,9 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
             "--full" => args.scope = Scope::Full,
             "--small" => args.scope = Scope::Small,
             "--all" => args.scope = Scope::All,
+            "--corpus" => {
+                args.corpus = parse_corpus_filter(&iter.next().ok_or("--corpus needs value")?)?;
+            }
             "--top" => args.top = parse_non_zero_usize(&iter.next().ok_or("--top needs value")?)?,
             "--cache" => args.cache = Some(PathBuf::from(iter.next().ok_or("--cache needs value")?)),
             "-h" | "--help" => {
@@ -136,7 +162,18 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
 }
 
 fn print_help() {
-    println!("Usage: burli_gates [--all|--full|--small] [--top N] [--cache PATH]");
+    println!(
+        "Usage: burli_gates [--all|--full|--small] [--corpus web|silesia|all] [--top N] [--cache PATH]"
+    );
+}
+
+fn parse_corpus_filter(value: &str) -> Result<CorpusFilter, Box<dyn Error>> {
+    match value {
+        "web" => Ok(CorpusFilter::Web),
+        "silesia" => Ok(CorpusFilter::Silesia),
+        "all" => Ok(CorpusFilter::All),
+        _ => Err(format!("unknown corpus: {value}").into()),
+    }
 }
 
 fn parse_non_zero_usize(value: &str) -> Result<usize, Box<dyn Error>> {
