@@ -375,6 +375,14 @@ pub(super) fn collect_with_64k_table<'a>(
     workspace.collect_with_64k_table(input, max_backward_distance)
 }
 
+pub(super) fn collect_with_64k_fast_skip<'a>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &'a mut Workspace,
+) -> &'a Batch {
+    workspace.collect_with_64k_fast_skip(input, max_backward_distance)
+}
+
 pub(super) fn collect_fast_skip<'a>(
     input: &[u8],
     max_backward_distance: usize,
@@ -473,7 +481,7 @@ impl Workspace {
         let min_match = if table_bits <= 15 { 4 } else { 6 };
         match table_bits {
             16 => {
-                collect_with_u32_table_m6::<16>(
+                collect_with_u32_table_m6::<16, DEFAULT_U32_SKIP_START, true>(
                     &mut self.batch,
                     input,
                     max_backward_distance,
@@ -482,7 +490,7 @@ impl Workspace {
                 return Ok(&self.batch);
             }
             17 => {
-                collect_with_u32_table_m6::<17>(
+                collect_with_u32_table_m6::<17, DEFAULT_U32_SKIP_START, true>(
                     &mut self.batch,
                     input,
                     max_backward_distance,
@@ -711,7 +719,31 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 16];
-        collect_with_u32_table_m6::<16>(&mut self.batch, input, max_backward_distance, &mut table);
+        collect_with_u32_table_m6::<16, DEFAULT_U32_SKIP_START, true>(
+            &mut self.batch,
+            input,
+            max_backward_distance,
+            &mut table,
+        );
+        &self.batch
+    }
+
+    #[allow(clippy::large_stack_arrays)]
+    fn collect_with_64k_fast_skip(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
+        self.reset(input.len());
+
+        if input.len() < INPUT_MARGIN_BYTES {
+            self.push_literals(input, 0, input.len());
+            return &self.batch;
+        }
+
+        let mut table = [0_u32; 1 << 16];
+        collect_with_u32_table_m6::<16, FAST_U32_SKIP_START, false>(
+            &mut self.batch,
+            input,
+            max_backward_distance,
+            &mut table,
+        );
         &self.batch
     }
 
@@ -845,6 +877,8 @@ fn collect_with_u16_table(
 const DEFAULT_U16_SKIP_START: usize = 61;
 const FAST_U16_SKIP_START: usize = 96;
 const FASTER_U16_SKIP_START: usize = 128;
+const DEFAULT_U32_SKIP_START: usize = 32;
+const FAST_U32_SKIP_START: usize = 96;
 
 #[allow(clippy::large_stack_arrays)]
 #[inline(never)]
@@ -867,7 +901,11 @@ fn collect_with_stack_u16_table<
     );
 }
 
-fn collect_with_u32_table_m6<const TABLE_BITS: usize>(
+fn collect_with_u32_table_m6<
+    const TABLE_BITS: usize,
+    const SKIP_START: usize,
+    const USE_LAST_DISTANCE: bool,
+>(
     batch: &mut Batch,
     input: &[u8],
     max_backward_distance: usize,
@@ -889,15 +927,17 @@ fn collect_with_u32_table_m6<const TABLE_BITS: usize>(
     let mut next_hash = hash6_at_const::<TABLE_BITS>(input, pos);
     let mut last_distance = NO_LAST_DISTANCE;
 
-    while let Some(mut candidate) = scan_to_match_in_u32_table_m6::<TABLE_BITS>(
-        table,
-        input,
-        &mut pos,
-        &mut next_hash,
-        len_limit,
-        max_distance,
-        last_distance,
-    ) {
+    while let Some(mut candidate) =
+        scan_to_match_in_u32_table_m6::<TABLE_BITS, SKIP_START, USE_LAST_DISTANCE>(
+            table,
+            input,
+            &mut pos,
+            &mut next_hash,
+            len_limit,
+            max_distance,
+            last_distance,
+        )
+    {
         loop {
             let distance = pos - candidate;
             let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
@@ -1034,7 +1074,11 @@ fn collect_with_u16_table_m4<
 }
 
 #[allow(clippy::too_many_arguments)]
-fn scan_to_match_in_u32_table_m6<const TABLE_BITS: usize>(
+fn scan_to_match_in_u32_table_m6<
+    const TABLE_BITS: usize,
+    const SKIP_START: usize,
+    const USE_LAST_DISTANCE: bool,
+>(
     table: &mut [u32],
     input: &[u8],
     pos: &mut usize,
@@ -1043,7 +1087,7 @@ fn scan_to_match_in_u32_table_m6<const TABLE_BITS: usize>(
     max_distance: usize,
     last_distance: usize,
 ) -> Option<usize> {
-    let mut skip = 32_usize;
+    let mut skip = SKIP_START;
     let mut next_pos = *pos;
 
     loop {
@@ -1057,7 +1101,7 @@ fn scan_to_match_in_u32_table_m6<const TABLE_BITS: usize>(
         next_pos = *pos + step;
         *next_hash = hash6_at_const::<TABLE_BITS>(input, next_pos);
 
-        if last_distance != NO_LAST_DISTANCE && *pos >= last_distance {
+        if USE_LAST_DISTANCE && last_distance != NO_LAST_DISTANCE && *pos >= last_distance {
             let candidate = *pos - last_distance;
             if is_match6(input, candidate, *pos) {
                 table[key] = *pos as u32;
