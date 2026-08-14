@@ -291,11 +291,16 @@ fn find_match<const TABLE_BITS: usize, const BUCKET_SWEEP: usize>(
     params: SearchParams,
 ) -> Option<Match> {
     let table_mask = (1 << TABLE_BITS) - 1;
-    let key = hash::<TABLE_BITS>(input, pos);
+    let word = read_u64_le(input, pos);
+    let key = hash_word::<TABLE_BITS>(word);
     let sweep_mask = (BUCKET_SWEEP - 1) << 3;
     let key_out = (key + (pos & sweep_mask)) & table_mask;
     let best_check = params.best_len_in.min(max_len.saturating_sub(1));
-    let mut compare_char = input[pos + best_check];
+    let mut compare_char = if best_check < HASH_TYPE_LEN {
+        (word >> (8 * best_check)) as u8
+    } else {
+        input[pos + best_check]
+    };
     let mut best_score = params.min_score;
     let mut best_len = best_check;
     let mut out = None;
@@ -415,7 +420,12 @@ fn store<const TABLE_BITS: usize, const BUCKET_SWEEP: usize>(
 
 #[inline(always)]
 fn hash<const TABLE_BITS: usize>(input: &[u8], pos: usize) -> usize {
-    let word = read_u64_le(input, pos) << (64 - 8 * HASH_LEN);
+    hash_word::<TABLE_BITS>(read_u64_le(input, pos))
+}
+
+#[inline(always)]
+fn hash_word<const TABLE_BITS: usize>(word: u64) -> usize {
+    let word = word << (64 - 8 * HASH_LEN);
     (word.wrapping_mul(HASH_MUL) >> (64 - TABLE_BITS)) as usize
 }
 
