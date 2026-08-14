@@ -526,6 +526,31 @@ impl PreparedBatch {
     }
 }
 
+#[derive(Clone, Debug)]
+struct StaticEntropyBatch {
+    prepared: Vec<PreparedToken>,
+    literal_frequencies: [usize; LITERAL_ALPHABET_SIZE],
+}
+
+impl StaticEntropyBatch {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            prepared: Vec::with_capacity(capacity),
+            literal_frequencies: [0; LITERAL_ALPHABET_SIZE],
+        }
+    }
+
+    fn push(&mut self, input: &[u8], token: Token) -> Result<(), CompressError> {
+        let prepared_token = PreparedToken::new(token)?;
+        let token = prepared_token.token;
+        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
+            self.literal_frequencies[usize::from(literal)] += 1;
+        }
+        self.prepared.push(prepared_token);
+        Ok(())
+    }
+}
+
 fn token_supports_last_distance(token: Token) -> bool {
     let Ok(insert) = insert_length_code(token.insert_len) else {
         return false;
@@ -787,7 +812,7 @@ fn write_static_entropy_token_batch(
         return Err(BurliError::Format("invalid compressed Brotli block size"));
     }
 
-    let mut batch = PreparedBatch::with_capacity(tokens.len());
+    let mut batch = StaticEntropyBatch::with_capacity(tokens.len());
     for &token in tokens {
         batch.push(input, token)?;
     }
