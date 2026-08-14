@@ -340,12 +340,11 @@ impl EncoderPlan {
                     return write_compressed_literal_meta_block(writer, input);
                 }
                 if q0_small_json_static_distance_prefix_is_likely_safe(input) {
-                    return q1::write_static_distance_prefix(
+                    return q1::write_balanced_literal_command_prefixes(
                         writer,
                         input,
                         input.len(),
                         &mut workspace.q1,
-                        self.q1_fast_literal_prefix,
                     );
                 }
                 return q1::write(
