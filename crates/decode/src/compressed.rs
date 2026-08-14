@@ -950,6 +950,19 @@ fn copy_literals_single_block(
     context_map: &[usize],
     mode: u8,
 ) -> Result<(), DecompressError> {
+    let max_bits = literal_codes
+        .iter()
+        .map(|code| usize::from(code.max_bits()))
+        .max()
+        .unwrap_or(0);
+    if count
+        .checked_mul(max_bits)
+        .is_some_and(|bits| bits <= reader.remaining_bits())
+    {
+        copy_literals_single_block_trusted(reader, output, count, literal_codes, context_map, mode);
+        return Ok(());
+    }
+
     let mut previous = previous_literal_bytes(output);
     match mode {
         0 => {
@@ -993,9 +1006,68 @@ fn copy_literals_single_block(
     Ok(())
 }
 
+fn copy_literals_single_block_trusted(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    count: usize,
+    literal_codes: &[PrefixCode],
+    context_map: &[usize],
+    mode: u8,
+) {
+    let mut previous = previous_literal_bytes(output);
+    match mode {
+        0 => {
+            for _ in 0..count {
+                let tree_index = context_map[usize::from(previous.0 & 0x3f)];
+                let literal = read_literal_trusted(reader, &literal_codes[tree_index]);
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        1 => {
+            for _ in 0..count {
+                let tree_index = context_map[usize::from(previous.0 >> 2)];
+                let literal = read_literal_trusted(reader, &literal_codes[tree_index]);
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        2 => {
+            for _ in 0..count {
+                let context = crate::context_lookup::CONTEXT_PAIR_LOOKUP[0]
+                    [(usize::from(previous.0) << 8) | usize::from(previous.1)];
+                let tree_index = context_map[usize::from(context)];
+                let literal = read_literal_trusted(reader, &literal_codes[tree_index]);
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        3 => {
+            for _ in 0..count {
+                let context = crate::context_lookup::CONTEXT_PAIR_LOOKUP[1]
+                    [(usize::from(previous.0) << 8) | usize::from(previous.1)];
+                let tree_index = context_map[usize::from(context)];
+                let literal = read_literal_trusted(reader, &literal_codes[tree_index]);
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        _ => unreachable!("Brotli literal context mode is a 2-bit field"),
+    }
+}
+
 #[inline(always)]
 fn read_literal(reader: &mut BitReader<'_>, code: &PrefixCode) -> Result<u8, DecompressError> {
     Ok(code.decode(reader)? as u8)
+}
+
+#[inline(always)]
+fn read_literal_trusted(reader: &mut BitReader<'_>, code: &PrefixCode) -> u8 {
+    if let Some(symbol) = code.single_symbol() {
+        symbol as u8
+    } else {
+        code.decode_non_single_trusted_fast(reader) as u8
+    }
 }
 
 fn literal_context(previous: (u8, u8), header: &CompressedHeader, block_type: usize) -> usize {
