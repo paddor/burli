@@ -797,8 +797,20 @@ fn read_command(
         return Err(BurliError::Format("invalid Brotli command code"));
     }
     let prefix = COMMAND_PREFIXES[code];
-    let insert_len = prefix.insert_base() + reader.read_bits(prefix.insert_extra_bits())? as usize;
-    let copy_len = prefix.copy_base() + reader.read_bits(prefix.copy_extra_bits())? as usize;
+    let insert_extra_bits = prefix.insert_extra_bits();
+    let insert_extra = if insert_extra_bits == 0 {
+        0
+    } else {
+        reader.read_bits(insert_extra_bits)? as usize
+    };
+    let copy_extra_bits = prefix.copy_extra_bits();
+    let copy_extra = if copy_extra_bits == 0 {
+        0
+    } else {
+        reader.read_bits(copy_extra_bits)? as usize
+    };
+    let insert_len = prefix.insert_base() + insert_extra;
+    let copy_len = prefix.copy_base() + copy_extra;
 
     Ok(Command {
         insert_len,
