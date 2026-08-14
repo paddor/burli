@@ -174,11 +174,11 @@ q0
 <text x="773" y="189" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="6.451612903225807" opacity="1" fill="#2563EB" font-weight="bold">
 q5
 </text>
-<polyline fill="none" opacity="0.35" stroke="#F87171" stroke-width="1" points="119,176 200,149 281,140 362,122 443,115 524,113 605,103 686,106 767,105 "/>
+<polyline fill="none" opacity="0.35" stroke="#F87171" stroke-width="1" points="119,176 200,149 281,140 362,122 443,115 524,113 605,105 686,106 767,105 "/>
 <polyline fill="none" opacity="0.35" stroke="#F87171" stroke-width="1" points="119,189 200,164 281,162 362,169 443,173 524,166 605,165 686,163 767,162 "/>
 <polyline fill="none" opacity="0.35" stroke="#F87171" stroke-width="1" points="119,217 200,193 281,179 362,175 443,178 524,171 605,165 686,163 767,161 "/>
 <polyline fill="none" opacity="0.35" stroke="#F87171" stroke-width="1" points="119,235 200,199 281,197 362,198 443,190 524,186 605,179 686,175 767,173 "/>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,158 200,149 281,140 362,122 443,115 524,113 605,103 686,106 767,103 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,158 200,149 281,140 362,122 443,115 524,113 605,105 686,106 767,103 "/>
 <polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,236 124,235 "/>
 <polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="128,234 133,233 "/>
 <polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="136,232 141,231 "/>
@@ -263,7 +263,7 @@ q5
 <circle cx="362" cy="122" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="443" cy="115" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="524" cy="113" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="605" cy="103" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="605" cy="105" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="686" cy="106" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="767" cy="103" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <text x="773" y="103" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="6.451612903225807" opacity="1" fill="#F87171" font-weight="bold">
