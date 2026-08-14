@@ -371,7 +371,7 @@ impl EncoderPlan {
         if self.path == EncoderPath::StaticEntropy {
             if (Q2_MEDIUM_H3_MIN_INPUT..=Q2_MEDIUM_H3_MAX_INPUT).contains(&input.len()) {
                 let tokens = if input.len() <= Q2_FAST_H3_MAX_INPUT {
-                    q3::collect_fast_sweep(input, max_backward_distance, &mut workspace.q3)
+                    q3::collect_fast_sweep_no_lazy(input, max_backward_distance, &mut workspace.q3)
                 } else {
                     q3::collect(input, max_backward_distance, &mut workspace.q3)
                 };
