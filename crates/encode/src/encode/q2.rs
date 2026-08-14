@@ -87,11 +87,34 @@ fn collect_with_dictionary<const USE_DICTIONARY: bool>(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
+    if !USE_DICTIONARY && table_size_for_input(input.len()) == TABLE_SIZE {
+        return collect_with_stack_table::<USE_DICTIONARY>(input, max_backward_distance, workspace);
+    }
+
+    let mut table = vec![NO_POSITION; table_size_for_input(input.len())];
+    collect_with_table::<USE_DICTIONARY>(input, max_backward_distance, workspace, &mut table)
+}
+
+#[allow(clippy::large_stack_arrays)]
+fn collect_with_stack_table<const USE_DICTIONARY: bool>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
+    let mut table = [NO_POSITION; TABLE_SIZE];
+    collect_with_table::<USE_DICTIONARY>(input, max_backward_distance, workspace, &mut table)
+}
+
+fn collect_with_table<const USE_DICTIONARY: bool>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+    table: &mut [u32],
+) -> Vec<Token> {
     if input.len() < HASH_TYPE_LEN {
         return literal_only(input.len());
     }
 
-    let mut table = vec![NO_POSITION; table_size_for_input(input.len())];
     let mut tokens = Vec::new();
     let mut pos = 0_usize;
     let mut insert_start = 0_usize;
@@ -104,7 +127,7 @@ fn collect_with_dictionary<const USE_DICTIONARY: bool>(
         let max_len = pos_end - pos;
         let Some(mut found) = find_match::<USE_DICTIONARY>(
             input,
-            &mut table,
+            table,
             pos,
             max_len,
             SearchParams {
@@ -116,7 +139,7 @@ fn collect_with_dictionary<const USE_DICTIONARY: bool>(
         ) else {
             pos += 1;
             if pos > apply_sparse_search {
-                pos = skip_sparse(input, &mut table, pos, pos_end, apply_sparse_search);
+                pos = skip_sparse(input, table, pos, pos_end, apply_sparse_search);
             }
             continue;
         };
@@ -128,7 +151,7 @@ fn collect_with_dictionary<const USE_DICTIONARY: bool>(
             let best_len_in = found.len.saturating_sub(1).min(lazy_max_len);
             if let Some(next) = find_match::<USE_DICTIONARY>(
                 input,
-                &mut table,
+                table,
                 lazy_pos,
                 lazy_max_len,
                 SearchParams {
@@ -169,7 +192,7 @@ fn collect_with_dictionary<const USE_DICTIONARY: bool>(
             dist_cache[1] = dist_cache[0];
             dist_cache[0] = found.distance;
         }
-        store_range(input, &mut table, pos + 2, (pos + found.len).min(store_end));
+        store_range(input, table, pos + 2, (pos + found.len).min(store_end));
         pos += found.len;
         insert_start = pos;
     }
