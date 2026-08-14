@@ -972,7 +972,8 @@ fn q0_sparse_incompressible_skip_is_likely_safe(input: &[u8]) -> bool {
 fn q0_sparse_store_block(input_base: usize, allow_cross_collector_shortcuts: bool) -> bool {
     const STORE_BLOCK_MASK: usize = 15;
 
-    allow_cross_collector_shortcuts || ((input_base >> MIN_BLOCK_BITS) & STORE_BLOCK_MASK) != 0
+    let block_in_group = (input_base >> MIN_BLOCK_BITS) & STORE_BLOCK_MASK;
+    allow_cross_collector_shortcuts || !matches!(block_in_group, 0 | 5 | 10)
 }
 
 fn q0_sparse_incompressible_decision(input: &[u8]) -> Q0SparseDecision {
