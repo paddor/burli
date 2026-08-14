@@ -33,6 +33,7 @@ const Q0_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
 const Q1_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
 const Q2_MEDIUM_H3_MIN_INPUT: usize = 8 * 1024;
 const Q2_MEDIUM_H3_MAX_INPUT: usize = 128 * 1024;
+const Q3_FAST_SWEEP_MAX_INPUT: usize = 4 * 1024;
 const Q4_TINY_CONTEXT_MAX_INPUT: usize = 768;
 const STATIC_CODE_LENGTH_DEPTH: [u8; CODE_LENGTH_ALPHABET_SIZE] =
     [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 0, 4, 4];
@@ -385,7 +386,11 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::RegularNoSplit {
-            let tokens = q3::collect(input, max_backward_distance, &mut workspace.q3);
+            let tokens = if input.len() <= Q3_FAST_SWEEP_MAX_INPUT {
+                q3::collect_fast_sweep(input, max_backward_distance, &mut workspace.q3)
+            } else {
+                q3::collect(input, max_backward_distance, &mut workspace.q3)
+            };
             if !tokens.iter().any(|token| token.is_copy()) {
                 return write_compressed_literal_meta_block(writer, input);
             }

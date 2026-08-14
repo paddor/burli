@@ -70,6 +70,18 @@ pub(super) fn collect(
     }
 }
 
+pub(super) fn collect_fast_sweep(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
+    if input.len() <= TINY_INPUT_THRESHOLD {
+        collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace)
+    } else {
+        collect_with_stack_table_15::<1, 1>(input, max_backward_distance, workspace)
+    }
+}
+
 fn collect_with_params<
     const TABLE_BITS: usize,
     const MAX_LAZY_MATCHES: usize,
