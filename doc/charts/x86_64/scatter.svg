@@ -83,15 +83,15 @@ q3
 <text x="296" y="120" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#2563EB" font-weight="bold">
 q5
 </text>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="430,205 434,206 356,176 335,170 316,168 272,133 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="430,205 434,206 354,176 342,170 316,168 272,133 "/>
 <circle cx="430" cy="205" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <text x="436" y="205" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q0
 </text>
 <circle cx="434" cy="206" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="356" cy="176" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="335" cy="170" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="341" y="170" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="354" cy="176" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="342" cy="170" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="348" y="170" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q3
 </text>
 <circle cx="316" cy="168" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
@@ -199,15 +199,15 @@ q3
 <text x="334" y="449" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#2563EB" font-weight="bold">
 q5
 </text>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="473,560 472,554 385,530 377,517 354,504 315,460 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="473,560 472,554 385,530 378,517 354,504 315,460 "/>
 <circle cx="473" cy="560" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <text x="479" y="560" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q0
 </text>
 <circle cx="472" cy="554" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="385" cy="530" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="377" cy="517" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="383" y="517" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="378" cy="517" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="384" y="517" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q3
 </text>
 <circle cx="354" cy="504" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
@@ -319,15 +319,15 @@ q3
 <text x="311" y="775" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#2563EB" font-weight="bold">
 q5
 </text>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="482,901 441,886 391,851 364,843 336,803 301,782 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="1" points="482,901 441,886 391,851 366,843 336,803 301,782 "/>
 <circle cx="482" cy="901" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <text x="488" y="901" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q0
 </text>
 <circle cx="441" cy="886" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="391" cy="851" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="364" cy="843" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<text x="370" y="843" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
+<circle cx="366" cy="843" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<text x="372" y="843" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="7.258064516129032" opacity="1" fill="#F87171" font-weight="bold">
 q3
 </text>
 <circle cx="336" cy="803" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
