@@ -17,6 +17,7 @@ const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
 const LONG_MATCH_STORE_THRESHOLD: usize = 64;
 const TINY_INPUT_THRESHOLD: usize = 1024;
+const STACK_TABLE_INPUT_THRESHOLD: usize = 16 * 1024;
 const SMALL_MEDIUM_INPUT_THRESHOLD: usize = 320 * 1024;
 
 #[derive(Clone, Copy, Debug)]
@@ -59,7 +60,9 @@ pub(super) fn collect(
     workspace: &mut Workspace,
 ) -> Vec<Token> {
     if input.len() <= TINY_INPUT_THRESHOLD {
-        collect_with_params::<10, 4, 2>(input, max_backward_distance, workspace)
+        collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace)
+    } else if input.len() <= STACK_TABLE_INPUT_THRESHOLD {
+        collect_with_stack_table_15::<1, 2>(input, max_backward_distance, workspace)
     } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
         collect_with_params::<15, 1, 2>(input, max_backward_distance, workspace)
     } else {
@@ -76,11 +79,62 @@ fn collect_with_params<
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
+    let mut table = vec![0_u32; 1 << TABLE_BITS];
+    collect_with_table::<TABLE_BITS, MAX_LAZY_MATCHES, BUCKET_SWEEP>(
+        input,
+        max_backward_distance,
+        workspace,
+        &mut table,
+    )
+}
+
+#[inline(always)]
+fn collect_with_stack_table_10<const MAX_LAZY_MATCHES: usize, const BUCKET_SWEEP: usize>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
+    let mut table = [0_u32; 1 << 10];
+    collect_with_table::<10, MAX_LAZY_MATCHES, BUCKET_SWEEP>(
+        input,
+        max_backward_distance,
+        workspace,
+        &mut table,
+    )
+}
+
+#[allow(clippy::large_stack_arrays)]
+#[inline(always)]
+fn collect_with_stack_table_15<const MAX_LAZY_MATCHES: usize, const BUCKET_SWEEP: usize>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
+    let mut table = [0_u32; 1 << 15];
+    collect_with_table::<15, MAX_LAZY_MATCHES, BUCKET_SWEEP>(
+        input,
+        max_backward_distance,
+        workspace,
+        &mut table,
+    )
+}
+
+#[inline(always)]
+fn collect_with_table<
+    const TABLE_BITS: usize,
+    const MAX_LAZY_MATCHES: usize,
+    const BUCKET_SWEEP: usize,
+>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+    table: &mut [u32],
+) -> Vec<Token> {
+    debug_assert_eq!(table.len(), 1_usize << TABLE_BITS);
     if input.len() < HASH_TYPE_LEN {
         return literal_only(input.len());
     }
 
-    let mut table = vec![0_u32; 1 << TABLE_BITS];
     let mut tokens = Vec::with_capacity(input.len() / 8 + 8);
     let mut pos = 0_usize;
     let mut insert_start = 0_usize;
@@ -93,7 +147,7 @@ fn collect_with_params<
         let max_len = pos_end - pos;
         let Some(mut found) = find_match::<TABLE_BITS, BUCKET_SWEEP>(
             input,
-            &mut table,
+            table,
             pos,
             max_len,
             SearchParams {
@@ -107,7 +161,7 @@ fn collect_with_params<
             if pos > apply_sparse_search {
                 pos = skip_sparse::<TABLE_BITS, BUCKET_SWEEP>(
                     input,
-                    &mut table,
+                    table,
                     pos,
                     pos_end,
                     apply_sparse_search,
@@ -123,7 +177,7 @@ fn collect_with_params<
             let best_len_in = found.len.saturating_sub(1).min(lazy_max_len);
             if let Some(next) = find_match::<TABLE_BITS, BUCKET_SWEEP>(
                 input,
-                &mut table,
+                table,
                 lazy_pos,
                 lazy_max_len,
                 SearchParams {
@@ -166,7 +220,7 @@ fn collect_with_params<
         }
         store_range::<TABLE_BITS, BUCKET_SWEEP>(
             input,
-            &mut table,
+            table,
             pos + 2,
             (pos + found.len).min(store_end),
         );
