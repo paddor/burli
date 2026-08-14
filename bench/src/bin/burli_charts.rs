@@ -18,7 +18,6 @@ const MUTED: RGBColor = RGBColor(0x7d, 0x85, 0x90);
 const FONT_BUMP: u32 = 1;
 const HEADER_SUBTITLE_OFFSET: i32 = 18;
 const LEGEND_ROW_H: f64 = 20.0;
-const LEGEND_COL_W: f64 = 250.0;
 const GROUP_BAR_FILL: f64 = 0.78;
 const GROUP_BAR_GAP_FRACTION: f64 = 0.025;
 const GROUP_BAR_MIN_GAP: f64 = 2.0;
@@ -987,38 +986,6 @@ fn chart_header(
     Ok(())
 }
 
-fn draw_legend(
-    area: &Area<'_>,
-    cfg: &Config,
-    items: &[&str],
-    x: f64,
-    y: f64,
-    columns: usize,
-) -> Result<(), Box<dyn Error>> {
-    let rows = items.len().div_ceil(columns);
-    for (i, key) in items.iter().enumerate() {
-        let col = i / rows;
-        let row = i % rows;
-        let Some(style) = cfg.style(key) else {
-            continue;
-        };
-        let lx = x + col as f64 * LEGEND_COL_W;
-        let ly = y + row as f64 * LEGEND_ROW_H;
-        rect(area, lx, ly - 6.0, lx + 12.0, ly + 6.0, style.color)?;
-        text(
-            area,
-            style.label.as_str(),
-            px(lx + 18.0),
-            px(ly),
-            10,
-            TEXT,
-            HPos::Left,
-            false,
-        )?;
-    }
-    Ok(())
-}
-
 fn marker_item_width(style: &CodecStyle) -> f64 {
     style.label.chars().count() as f64 * 7.0 + 34.0
 }
@@ -1551,8 +1518,16 @@ fn draw_summary(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
     }
     let mid = width as f64 / 2.0;
     let leg_y = p_bot + 52.0;
-    draw_legend(&area, cfg, &codecs, mid - 235.0, leg_y, 2)?;
-    draw_segment_legend(&area, mid, leg_y + leg_rows as f64 * LEGEND_ROW_H + 18.0)?;
+    let legend_rows = draw_marker_legend(
+        &area,
+        cfg,
+        &codecs,
+        mid,
+        leg_y,
+        x_right - x_left,
+        codecs.len().max(1),
+    )?;
+    draw_segment_legend(&area, mid, leg_y + legend_rows as f64 * LEGEND_ROW_H + 18.0)?;
     area.present()?;
     drop(area);
     finish_svg(&path, width, height)?;
@@ -1674,12 +1649,19 @@ fn draw_pipeline(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>> {
     }
 
     let leg_y = panel_tops[1] + panel_h + 62.0;
-    draw_legend(&area, cfg, &codecs, width as f64 / 2.0 - 235.0, leg_y, 2)?;
-    let rows = codecs.len().div_ceil(2);
+    let legend_rows = draw_marker_legend(
+        &area,
+        cfg,
+        &codecs,
+        width as f64 / 2.0,
+        leg_y,
+        x_right - x_left,
+        codecs.len().max(1),
+    )?;
     draw_segment_legend(
         &area,
         width as f64 / 2.0,
-        leg_y + rows as f64 * LEGEND_ROW_H + 16.0,
+        leg_y + legend_rows as f64 * LEGEND_ROW_H + 16.0,
     )?;
     area.present()?;
     drop(area);

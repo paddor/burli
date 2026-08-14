@@ -245,22 +245,22 @@ whatwg
 <text x="775" y="644" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.064516129032258" opacity="1" fill="#7D8590">
 7.9 MB
 </text>
-<rect x="190" y="668" width="12" height="12" opacity="1" fill="#2563EB" stroke="none"/>
-<text x="208" y="674" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
+<rect x="202" y="668" width="12" height="12" opacity="1" fill="#2563EB" stroke="none"/>
+<text x="220" y="674" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 Google Brotli C 1.1.0
 </text>
-<rect x="190" y="688" width="12" height="12" opacity="1" fill="#F87171" stroke="none"/>
-<text x="208" y="694" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
+<rect x="405" y="668" width="12" height="12" opacity="1" fill="#F87171" stroke="none"/>
+<text x="423" y="674" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 burli
 </text>
-<rect x="440" y="668" width="12" height="12" opacity="1" fill="#4ADE80" stroke="none"/>
-<text x="458" y="674" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
+<rect x="496" y="668" width="12" height="12" opacity="1" fill="#4ADE80" stroke="none"/>
+<text x="514" y="674" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 rust-brotli 8.0.4
 </text>
-<text x="215" y="730" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.064516129032258" opacity="1" fill="#E6EDF3">
+<text x="215" y="710" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.064516129032258" opacity="1" fill="#E6EDF3">
 bright = compress + decompress
 </text>
-<text x="455" y="730" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.064516129032258" opacity="1" fill="#7D8590">
+<text x="455" y="710" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.064516129032258" opacity="1" fill="#7D8590">
 dim = transfer @100 MB/s
 </text>
 </svg>
