@@ -651,7 +651,8 @@ const COMMAND_DISTANCE_CONTEXTS: [[usize; 8]; 11] = [
     [3; 8],
     [3; 8],
 ];
-const COMMAND_PREFIXES: [CommandPrefix; COMMAND_ALPHABET_SIZE] = command_prefixes();
+const COMMAND_PREFIX_TABLE_SIZE: usize = 4096;
+static COMMAND_PREFIXES: [CommandPrefix; COMMAND_PREFIX_TABLE_SIZE] = command_prefixes();
 
 #[derive(Clone, Copy, Debug)]
 struct CommandPrefix(u64);
@@ -709,8 +710,9 @@ impl CommandPrefix {
     }
 }
 
-const fn command_prefixes() -> [CommandPrefix; COMMAND_ALPHABET_SIZE] {
-    let mut prefixes = [CommandPrefix(0); COMMAND_ALPHABET_SIZE];
+#[allow(clippy::large_stack_arrays)]
+const fn command_prefixes() -> [CommandPrefix; COMMAND_PREFIX_TABLE_SIZE] {
+    let mut prefixes = [CommandPrefix(0); COMMAND_PREFIX_TABLE_SIZE];
     let mut code = 0;
     while code < COMMAND_ALPHABET_SIZE {
         prefixes[code] = command_prefix(code);
@@ -792,10 +794,8 @@ fn read_command(
     reader: &mut BitReader<'_>,
     command_code: &PrefixCode,
 ) -> Result<Command, DecompressError> {
-    let code = command_code.decode(reader)? as usize;
-    if code >= COMMAND_ALPHABET_SIZE {
-        return Err(BurliError::Format("invalid Brotli command code"));
-    }
+    let code = usize::from(command_code.decode(reader)? & 0x0fff);
+    debug_assert!(code < COMMAND_ALPHABET_SIZE);
     let prefix = COMMAND_PREFIXES[code];
     let insert_extra_bits = prefix.insert_extra_bits();
     let insert_extra = if insert_extra_bits == 0 {
