@@ -440,6 +440,10 @@ impl Workspace {
                 collect_with_stack_u16_table_8192(&mut self.batch, input, max_backward_distance);
                 return Ok(&self.batch);
             }
+            16384 => {
+                collect_with_stack_u16_table_16384(&mut self.batch, input, max_backward_distance);
+                return Ok(&self.batch);
+            }
             _ => {}
         }
 
@@ -704,6 +708,7 @@ fn collect_with_u16_table(
 
 macro_rules! stack_u16_collector {
     ($name:ident, $bits:literal, $len:expr) => {
+        #[allow(clippy::large_stack_arrays)]
         #[inline(never)]
         fn $name(batch: &mut Batch, input: &[u8], max_backward_distance: usize) {
             let mut table = [NO_POSITION_16; $len];
@@ -718,6 +723,7 @@ stack_u16_collector!(collect_with_stack_u16_table_1024, 10, 1024);
 stack_u16_collector!(collect_with_stack_u16_table_2048, 11, 2048);
 stack_u16_collector!(collect_with_stack_u16_table_4096, 12, 4096);
 stack_u16_collector!(collect_with_stack_u16_table_8192, 13, 8192);
+stack_u16_collector!(collect_with_stack_u16_table_16384, 14, 16384);
 
 fn collect_with_u32_table_m6<const TABLE_BITS: usize>(
     batch: &mut Batch,
