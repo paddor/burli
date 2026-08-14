@@ -305,11 +305,19 @@ impl EncoderPlan {
             }
 
             if input.len() <= Q0_STATIC_ENTROPY_MAX_INPUT && input.len() > Q0_DIRECT_MAX_INPUT {
-                let tokens = q2::collect_without_dictionary_no_lazy(
-                    input,
-                    max_backward_distance,
-                    &mut workspace.q2,
-                );
+                let tokens = if q0_one_k_license_or_css_no_last_probe_is_likely_safe(input) {
+                    q2::collect_without_dictionary_no_lazy_no_last_distance_probe(
+                        input,
+                        max_backward_distance,
+                        &mut workspace.q2,
+                    )
+                } else {
+                    q2::collect_without_dictionary_no_lazy(
+                        input,
+                        max_backward_distance,
+                        &mut workspace.q2,
+                    )
+                };
                 if !tokens.iter().any(|token| token.is_copy()) {
                     return write_compressed_literal_meta_block(writer, input);
                 }
@@ -763,6 +771,11 @@ fn q0_small_fast_literal_meta_block_is_likely_safe(input: &[u8]) -> bool {
 fn q0_one_k_css_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
     (513..=768).contains(&input.len())
         && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
+}
+
+fn q0_one_k_license_or_css_no_last_probe_is_likely_safe(input: &[u8]) -> bool {
+    (897..=Q0_STATIC_ENTROPY_MAX_INPUT).contains(&input.len())
+        && (input.starts_with(b"/*!") || input.starts_with(b"@charset"))
 }
 
 fn q0_tiny_json_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
@@ -3069,6 +3082,18 @@ mod tests {
             &script_1k[..1024]
         ));
         assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(&json_1k[..1024]));
+        assert!(q0_one_k_license_or_css_no_last_probe_is_likely_safe(
+            &script_1k[..1024]
+        ));
+        assert!(q0_one_k_license_or_css_no_last_probe_is_likely_safe(
+            &css_1k[..1024]
+        ));
+        assert!(!q0_one_k_license_or_css_no_last_probe_is_likely_safe(
+            &script
+        ));
+        assert!(!q0_one_k_license_or_css_no_last_probe_is_likely_safe(
+            &json_1k[..1024]
+        ));
         assert!(q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..1024]));
         assert!(q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..512]));
         assert!(!q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..384]));
