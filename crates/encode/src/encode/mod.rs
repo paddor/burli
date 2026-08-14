@@ -738,7 +738,7 @@ fn q1_medium_64k_table_is_likely_safe(input: &[u8]) -> bool {
 }
 
 fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
-    let tiny_comment = (385..=512).contains(&input.len()) && input.starts_with(b"/*!");
+    let tiny_comment = (385..=1024).contains(&input.len()) && input.starts_with(b"/*!");
     let tiny_css = (385..=1024).contains(&input.len()) && input.starts_with(b"@");
     tiny_comment || tiny_css
 }
