@@ -414,6 +414,15 @@ impl EncoderPlan {
                         self.q1_fast_literal_prefix,
                     );
                 }
+                if q0_small_license_js_fast_command_prefix_is_likely_safe(input) {
+                    return q1::write_fast_command_prefixes(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
+                }
                 return q1::write(
                     writer,
                     input,
@@ -853,6 +862,12 @@ fn q0_small_css_static_distance_prefix_is_likely_safe(input: &[u8]) -> bool {
     input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
         && input.len() <= 2 * 1024
         && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
+}
+
+fn q0_small_license_js_fast_command_prefix_is_likely_safe(input: &[u8]) -> bool {
+    input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
+        && input.len() <= 2 * 1024
+        && input.starts_with(b"/*!")
 }
 
 fn q0_fast_skip_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
@@ -2245,6 +2260,45 @@ fn write_q1_internal_command_prefix_codes(
     Ok(internal_map)
 }
 
+fn write_q1_internal_fast_command_prefix_codes(
+    writer: &mut BitWriter,
+    command_frequencies: &[usize; 128],
+    scratch: &mut PrefixCodeScratch,
+) -> Result<[DenseSymbolCode; 128], CompressError> {
+    let mut internal_command_frequencies = [0_usize; 64];
+    internal_command_frequencies.copy_from_slice(&command_frequencies[..64]);
+    code_lengths_from_dense_frequencies_with_scratch(
+        &internal_command_frequencies,
+        MAX_CODE_BITS,
+        scratch,
+    );
+    let mut internal_command_lengths = [0_u8; 64];
+    internal_command_lengths.copy_from_slice(&scratch.lengths[..64]);
+
+    let mut full_command_lengths = [0_u8; COMMAND_ALPHABET_SIZE];
+    for (code, &len) in internal_command_lengths.iter().enumerate() {
+        full_command_lengths[q1_internal_command_symbol(code)] = len;
+    }
+
+    let mut internal_map = q1_internal_command_code_map_from_lengths(&internal_command_lengths);
+    scratch.lengths.clear();
+    scratch.lengths.extend_from_slice(&full_command_lengths);
+    write_fast_complex_prefix_code_lengths_with_scratch(writer, scratch)?;
+
+    let mut distance_frequencies = [0_usize; 64];
+    distance_frequencies.copy_from_slice(&command_frequencies[64..]);
+    let distance_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+        writer,
+        &distance_frequencies,
+        scratch,
+        14,
+    )?;
+
+    internal_map[64..].copy_from_slice(&distance_map);
+
+    Ok(internal_map)
+}
+
 fn q1_internal_command_code_map_from_lengths(
     internal_command_lengths: &[u8; 64],
 ) -> [DenseSymbolCode; 128] {
@@ -3217,6 +3271,21 @@ mod tests {
         ));
         assert!(!q0_small_css_static_distance_prefix_is_likely_safe(
             &script_2k[..2048]
+        ));
+        assert!(q0_small_license_js_fast_command_prefix_is_likely_safe(
+            &script_2k[..2048]
+        ));
+        assert!(!q0_small_license_js_fast_command_prefix_is_likely_safe(
+            &script_1k[..1024]
+        ));
+        assert!(q0_small_license_js_fast_command_prefix_is_likely_safe(
+            &script_2k[..1025]
+        ));
+        assert!(!q0_small_license_js_fast_command_prefix_is_likely_safe(
+            &script_4k[..2049]
+        ));
+        assert!(!q0_small_license_js_fast_command_prefix_is_likely_safe(
+            &css_2k[..2048]
         ));
     }
 
