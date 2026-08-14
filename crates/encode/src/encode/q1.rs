@@ -3,8 +3,8 @@ use alloc::vec::Vec;
 use burli_core::{BurliError, CompressError, bits::BitWriter};
 
 use super::{
-    COMMAND_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE, PrefixCodeScratch,
-    append_pending_bits, match_len, read_u64_le, write_block_and_context_header,
+    COMMAND_ALPHABET_SIZE, DenseSymbolCode, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE,
+    PrefixCodeScratch, append_pending_bits, match_len, read_u64_le, write_block_and_context_header,
     write_fast_dense_prefix_code_array_from_frequencies_with_scratch, write_meta_block_len,
     write_q1_internal_command_prefix_codes,
 };
@@ -289,62 +289,73 @@ impl Batch {
         let command_code_map =
             write_q1_internal_command_prefix_codes(writer, &command_frequencies, prefix)?;
 
-        let mut literal_span_index = 0_usize;
-        let mut pending_bits = 0_u64;
-        let mut pending_width = 0_u8;
-        for &command in &self.commands {
-            let code = (command & 0xff) as usize;
-            let extra = (command >> 8) as usize;
-            debug_assert!(code < INTERNAL_COMMAND_ALPHABET_SIZE);
-            let command_code = command_code_map[code];
-            let extra_bits = INTERNAL_NUM_EXTRA_BITS[code];
-            debug_assert!(command_code.len != u8::MAX);
-            debug_assert!(extra_bits == 0 || extra < (1_usize << extra_bits));
-            let command_width = command_code.len + extra_bits;
-            let command_bits = u64::from(command_code.bits) | ((extra as u64) << command_code.len);
-            append_pending_bits(
-                writer,
-                &mut pending_bits,
-                &mut pending_width,
-                command_width,
-                command_bits,
-            );
-
-            if code < INTERNAL_INSERT_OFFSET.len() {
-                let insert_len = INTERNAL_INSERT_OFFSET[code] + extra;
-                debug_assert!(literal_span_index < self.literal_spans.len());
-                let span = self.literal_spans[literal_span_index];
-                if span.len as usize != insert_len {
-                    return Err(BurliError::Format("Brotli q1 literal span mismatch"));
-                }
-                let start = span.start as usize;
-                let end = start + span.len as usize;
-                debug_assert!(end <= input.len());
-                let literals = &input[start..end];
-                for &literal in literals {
-                    let literal_code = literal_code_map[usize::from(literal)];
-                    debug_assert!(literal_code.len != u8::MAX);
-                    append_pending_bits(
-                        writer,
-                        &mut pending_bits,
-                        &mut pending_width,
-                        literal_code.len,
-                        u64::from(literal_code.bits),
-                    );
-                }
-                literal_span_index += 1;
-            }
-        }
-        if pending_width != 0 {
-            writer.write_bits_trusted_fits(pending_width, pending_bits);
-        }
-
-        if literal_span_index != self.literal_spans.len() {
-            return Err(BurliError::Format("Brotli q1 literal span mismatch"));
-        }
-
-        Ok(())
+        write_batch_body(writer, input, self, &literal_code_map, &command_code_map)
     }
+}
+
+#[inline(never)]
+fn write_batch_body(
+    writer: &mut BitWriter,
+    input: &[u8],
+    batch: &Batch,
+    literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
+    command_code_map: &[DenseSymbolCode; INTERNAL_COMMAND_ALPHABET_SIZE],
+) -> Result<(), CompressError> {
+    let mut literal_span_index = 0_usize;
+    let mut pending_bits = 0_u64;
+    let mut pending_width = 0_u8;
+    for &command in &batch.commands {
+        let code = (command & 0xff) as usize;
+        let extra = (command >> 8) as usize;
+        debug_assert!(code < INTERNAL_COMMAND_ALPHABET_SIZE);
+        let command_code = command_code_map[code];
+        let extra_bits = INTERNAL_NUM_EXTRA_BITS[code];
+        debug_assert!(command_code.len != u8::MAX);
+        debug_assert!(extra_bits == 0 || extra < (1_usize << extra_bits));
+        let command_width = command_code.len + extra_bits;
+        let command_bits = u64::from(command_code.bits) | ((extra as u64) << command_code.len);
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            command_width,
+            command_bits,
+        );
+
+        if code < INTERNAL_INSERT_OFFSET.len() {
+            let insert_len = INTERNAL_INSERT_OFFSET[code] + extra;
+            debug_assert!(literal_span_index < batch.literal_spans.len());
+            let span = batch.literal_spans[literal_span_index];
+            if span.len as usize != insert_len {
+                return Err(BurliError::Format("Brotli q1 literal span mismatch"));
+            }
+            let start = span.start as usize;
+            let end = start + span.len as usize;
+            debug_assert!(end <= input.len());
+            let literals = &input[start..end];
+            for &literal in literals {
+                let literal_code = literal_code_map[usize::from(literal)];
+                debug_assert!(literal_code.len != u8::MAX);
+                append_pending_bits(
+                    writer,
+                    &mut pending_bits,
+                    &mut pending_width,
+                    literal_code.len,
+                    u64::from(literal_code.bits),
+                );
+            }
+            literal_span_index += 1;
+        }
+    }
+    if pending_width != 0 {
+        writer.write_bits_trusted_fits(pending_width, pending_bits);
+    }
+
+    if literal_span_index != batch.literal_spans.len() {
+        return Err(BurliError::Format("Brotli q1 literal span mismatch"));
+    }
+
+    Ok(())
 }
 
 #[inline(always)]
