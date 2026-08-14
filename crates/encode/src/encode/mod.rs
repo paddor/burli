@@ -726,7 +726,9 @@ fn q1_medium_64k_table_is_likely_safe(input: &[u8]) -> bool {
 }
 
 fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
-    (385..=512).contains(&input.len()) && (input.starts_with(b"/*!") || input.starts_with(b"@"))
+    let tiny_comment = (385..=512).contains(&input.len()) && input.starts_with(b"/*!");
+    let tiny_css = (385..=1024).contains(&input.len()) && input.starts_with(b"@");
+    tiny_comment || tiny_css
 }
 
 #[inline(always)]
@@ -912,7 +914,7 @@ fn write_static_entropy_token_batch(
     let literal_code_map = if block_len <= 1024 {
         let mut prefix = PrefixCodeScratch::default();
         prefix.reserve_for(LITERAL_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE);
-        if block_len <= 512 && q2_tiny_balanced_literal_prefix_is_likely_safe(input) {
+        if q2_tiny_balanced_literal_prefix_is_likely_safe(input) {
             write_balanced_fast_dense_prefix_code_array_from_frequencies_with_scratch(
                 writer,
                 &batch.literal_frequencies,
