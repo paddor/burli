@@ -391,6 +391,14 @@ pub(super) fn collect_fast_skip<'a>(
     workspace.collect_fast_skip(input, max_backward_distance)
 }
 
+pub(super) fn collect_medium_skip<'a>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &'a mut Workspace,
+) -> Result<&'a Batch, CompressError> {
+    workspace.collect_medium_skip(input, max_backward_distance)
+}
+
 pub(super) fn collect_fast_skip_without_last_distance_probe<'a>(
     input: &[u8],
     max_backward_distance: usize,
@@ -597,6 +605,30 @@ impl Workspace {
 
         let table_size = table_size(input.len());
         if self.collect_stack_u16_for_size::<FAST_U16_SKIP_START>(
+            input,
+            max_backward_distance,
+            table_size,
+        ) {
+            return Ok(&self.batch);
+        }
+
+        self.collect(input, max_backward_distance)
+    }
+
+    fn collect_medium_skip(
+        &mut self,
+        input: &[u8],
+        max_backward_distance: usize,
+    ) -> Result<&Batch, CompressError> {
+        self.reset(input.len());
+
+        if input.len() < INPUT_MARGIN_BYTES {
+            self.push_literals(input, 0, input.len());
+            return Ok(&self.batch);
+        }
+
+        let table_size = table_size(input.len());
+        if self.collect_stack_u16_for_size::<MEDIUM_U16_SKIP_START>(
             input,
             max_backward_distance,
             table_size,
@@ -875,6 +907,7 @@ fn collect_with_u16_table(
 }
 
 const DEFAULT_U16_SKIP_START: usize = 61;
+const MEDIUM_U16_SKIP_START: usize = 72;
 const FAST_U16_SKIP_START: usize = 96;
 const FASTER_U16_SKIP_START: usize = 128;
 const DEFAULT_U32_SKIP_START: usize = 32;
