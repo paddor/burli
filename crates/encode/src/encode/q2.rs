@@ -500,11 +500,41 @@ fn dictionary_match_len(input: &[u8], pos: usize, word: &[u8], max_len: usize) -
     let Some(candidate) = input.get(pos..pos.saturating_add(max_len)) else {
         return 0;
     };
-    candidate
-        .iter()
-        .zip(word)
-        .take_while(|(left, right)| left == right)
-        .count()
+    let max_len = max_len.min(word.len());
+    if max_len == 0 || candidate[0] != word[0] {
+        return 0;
+    }
+    if max_len < 4 {
+        let mut len = 1_usize;
+        while len < max_len && candidate[len] == word[len] {
+            len += 1;
+        }
+        return len;
+    }
+
+    let diff = read_u32_le(candidate, 0) ^ read_u32_le(word, 0);
+    if diff != 0 {
+        return diff.trailing_zeros() as usize / 8;
+    }
+    let mut len = 4_usize;
+    if max_len >= 8 {
+        let diff = read_u32_le(candidate, 4) ^ read_u32_le(word, 4);
+        if diff != 0 {
+            return 4 + diff.trailing_zeros() as usize / 8;
+        }
+        len = 8;
+    }
+    while len + 8 <= max_len {
+        let diff = read_u64_le(candidate, len) ^ read_u64_le(word, len);
+        if diff != 0 {
+            return len + diff.trailing_zeros() as usize / 8;
+        }
+        len += 8;
+    }
+    while len < max_len && candidate[len] == word[len] {
+        len += 1;
+    }
+    len
 }
 
 fn skip_sparse<const TABLE_BITS_FOR_INPUT: usize>(
