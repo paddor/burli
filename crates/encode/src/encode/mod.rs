@@ -399,6 +399,15 @@ impl EncoderPlan {
                         &mut workspace.q1,
                     );
                 }
+                if q0_small_css_static_distance_prefix_is_likely_safe(input) {
+                    return q1::write_balanced_command_prefixes(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
+                }
                 return q1::write(
                     writer,
                     input,
@@ -826,6 +835,12 @@ fn q0_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
 
 fn q0_small_json_static_distance_prefix_is_likely_safe(input: &[u8]) -> bool {
     input.len() > Q0_STATIC_ENTROPY_MAX_INPUT && input.len() <= 4 * 1024 && input.starts_with(b"{")
+}
+
+fn q0_small_css_static_distance_prefix_is_likely_safe(input: &[u8]) -> bool {
+    input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
+        && input.len() <= 2 * 1024
+        && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
 }
 
 fn q0_fast_skip_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
@@ -3175,6 +3190,15 @@ mod tests {
         ));
         assert!(!q0_small_json_static_distance_prefix_is_likely_safe(
             &css_2k[..2048]
+        ));
+        assert!(q0_small_css_static_distance_prefix_is_likely_safe(
+            &css_2k[..2048]
+        ));
+        assert!(!q0_small_css_static_distance_prefix_is_likely_safe(
+            &css_2k.repeat(2)[..4096]
+        ));
+        assert!(!q0_small_css_static_distance_prefix_is_likely_safe(
+            &script_2k[..2048]
         ));
     }
 

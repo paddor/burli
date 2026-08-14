@@ -306,6 +306,35 @@ impl Batch {
         write_batch_body(writer, input, self, &literal_code_map, &command_code_map)
     }
 
+    pub(super) fn write_balanced_command_prefixes(
+        &self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        block_len: usize,
+        prefix: &mut PrefixCodeScratch,
+        fast_literal_prefix: bool,
+    ) -> Result<(), CompressError> {
+        if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
+            return Err(BurliError::Format("invalid compressed Brotli block size"));
+        }
+
+        write_meta_block_len(writer, block_len)?;
+        write_block_and_context_header(writer)?;
+        let literal_code_map = self.write_literal_prefix(writer, prefix, fast_literal_prefix)?;
+        let mut command_frequencies = self.command_frequencies;
+        command_frequencies[1] += 1;
+        command_frequencies[2] += 1;
+        command_frequencies[64] += 1;
+        command_frequencies[84] += 1;
+        let command_code_map = write_q1_internal_balanced_command_static_distance_prefix_codes(
+            writer,
+            &command_frequencies,
+            prefix,
+        )?;
+
+        write_batch_body(writer, input, self, &literal_code_map, &command_code_map)
+    }
+
     fn write_literal_prefix(
         &self,
         writer: &mut BitWriter,
@@ -563,6 +592,16 @@ pub(super) fn write_balanced_literal_command_prefixes(
     workspace.write_balanced_literal_command_prefixes(writer, input, block_len)
 }
 
+pub(super) fn write_balanced_command_prefixes(
+    writer: &mut BitWriter,
+    input: &[u8],
+    block_len: usize,
+    workspace: &mut Workspace,
+    fast_literal_prefix: bool,
+) -> Result<(), CompressError> {
+    workspace.write_balanced_command_prefixes(writer, input, block_len, fast_literal_prefix)
+}
+
 impl Workspace {
     fn write(
         &mut self,
@@ -591,6 +630,22 @@ impl Workspace {
             input,
             block_len,
             &mut self.prefix,
+        )
+    }
+
+    fn write_balanced_command_prefixes(
+        &mut self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        block_len: usize,
+        fast_literal_prefix: bool,
+    ) -> Result<(), CompressError> {
+        self.batch.write_balanced_command_prefixes(
+            writer,
+            input,
+            block_len,
+            &mut self.prefix,
+            fast_literal_prefix,
         )
     }
 
