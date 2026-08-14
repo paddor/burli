@@ -896,13 +896,15 @@ fn collect_with_u16_table_m4<const TABLE_BITS: usize, const SKIP_START: usize>(
 
     let mut pos = 1;
     let mut insert_start = 0;
-    let mut next_hash = hash4_at_const::<TABLE_BITS>(input, pos);
+    let mut next_word = read_u32_le(input, pos);
+    let mut next_hash = hash4_const::<TABLE_BITS>(next_word);
     let mut last_distance = NO_LAST_DISTANCE;
 
     while let Some(mut candidate) = scan_to_match_in_u16_table_m4::<TABLE_BITS, SKIP_START>(
         table,
         input,
         &mut pos,
+        &mut next_word,
         &mut next_hash,
         len_limit,
         last_distance,
@@ -932,12 +934,13 @@ fn collect_with_u16_table_m4<const TABLE_BITS: usize, const SKIP_START: usize>(
                 break;
             }
 
-            let key = current_key.unwrap_or_else(|| hash4_at_const::<TABLE_BITS>(input, pos));
+            let current_word = read_u32_le(input, pos);
+            let key = current_key.unwrap_or_else(|| hash4_const::<TABLE_BITS>(current_word));
             let entry = table[key];
             table[key] = position_to_u16_entry(pos);
             let next_candidate = usize::from(entry);
             debug_assert!(next_candidate < pos);
-            if !is_match4(input, next_candidate, pos) {
+            if read_u32_le(input, next_candidate) != current_word {
                 break;
             }
             candidate = next_candidate;
@@ -947,7 +950,8 @@ fn collect_with_u16_table_m4<const TABLE_BITS: usize, const SKIP_START: usize>(
         if pos > len_limit {
             break;
         }
-        next_hash = hash4_at_const::<TABLE_BITS>(input, pos);
+        next_word = read_u32_le(input, pos);
+        next_hash = hash4_const::<TABLE_BITS>(next_word);
     }
 
     if insert_start < input.len() {
@@ -1037,6 +1041,7 @@ fn scan_to_match_in_u16_table_m4<const TABLE_BITS: usize, const SKIP_START: usiz
     table: &mut [u16],
     input: &[u8],
     pos: &mut usize,
+    next_word: &mut u32,
     next_hash: &mut usize,
     len_limit: usize,
     last_distance: usize,
@@ -1053,11 +1058,13 @@ fn scan_to_match_in_u16_table_m4<const TABLE_BITS: usize, const SKIP_START: usiz
             return None;
         }
         next_pos = *pos + step;
-        *next_hash = hash4_at_const::<TABLE_BITS>(input, next_pos);
+        let current_word = *next_word;
+        *next_word = read_u32_le(input, next_pos);
+        *next_hash = hash4_const::<TABLE_BITS>(*next_word);
 
         if last_distance != NO_LAST_DISTANCE && *pos >= last_distance {
             let candidate = *pos - last_distance;
-            if is_match4(input, candidate, *pos) {
+            if read_u32_le(input, candidate) == current_word {
                 table[key] = position_to_u16_entry(*pos);
                 return Some(candidate);
             }
@@ -1067,7 +1074,7 @@ fn scan_to_match_in_u16_table_m4<const TABLE_BITS: usize, const SKIP_START: usiz
         table[key] = position_to_u16_entry(*pos);
         let candidate = usize::from(entry);
         debug_assert!(candidate < *pos);
-        if is_match4(input, candidate, *pos) {
+        if read_u32_le(input, candidate) == current_word {
             return Some(candidate);
         }
     }
@@ -1158,11 +1165,6 @@ fn hash6_at_const<const TABLE_BITS: usize>(input: &[u8], pos: usize) -> usize {
 #[inline(always)]
 fn hash6_word_at_offset_const<const TABLE_BITS: usize>(word: u64, offset: usize) -> usize {
     hash6_const::<TABLE_BITS>(word >> (8 * offset))
-}
-
-#[inline(always)]
-fn is_match4(input: &[u8], candidate: usize, pos: usize) -> bool {
-    read_u32_le(input, candidate) == read_u32_le(input, pos)
 }
 
 #[inline(always)]
