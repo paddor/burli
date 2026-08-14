@@ -391,18 +391,13 @@ fn write_batch_body(
             let start = span.start as usize;
             let end = start + span.len as usize;
             debug_assert!(end <= input.len());
-            let literals = &input[start..end];
-            for &literal in literals {
-                let literal_code = literal_code_map[usize::from(literal)];
-                debug_assert!(literal_code.len != u8::MAX);
-                append_pending_bits(
-                    writer,
-                    &mut pending_bits,
-                    &mut pending_width,
-                    literal_code.len,
-                    u64::from(literal_code.bits),
-                );
-            }
+            append_literal_span_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                &input[start..end],
+                literal_code_map,
+            );
             literal_span_index += 1;
         }
     }
@@ -415,6 +410,38 @@ fn write_batch_body(
     }
 
     Ok(())
+}
+
+#[inline(always)]
+fn append_literal_span_bits(
+    writer: &mut BitWriter,
+    pending_bits: &mut u64,
+    pending_width: &mut u8,
+    literals: &[u8],
+    literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
+) {
+    let mut pairs = literals.chunks_exact(2);
+    for pair in &mut pairs {
+        let first = literal_code_map[usize::from(pair[0])];
+        let second = literal_code_map[usize::from(pair[1])];
+        debug_assert!(first.len != u8::MAX);
+        debug_assert!(second.len != u8::MAX);
+        let width = first.len + second.len;
+        let bits = u64::from(first.bits) | (u64::from(second.bits) << first.len);
+        append_pending_bits(writer, pending_bits, pending_width, width, bits);
+    }
+
+    if let &[literal] = pairs.remainder() {
+        let code = literal_code_map[usize::from(literal)];
+        debug_assert!(code.len != u8::MAX);
+        append_pending_bits(
+            writer,
+            pending_bits,
+            pending_width,
+            code.len,
+            u64::from(code.bits),
+        );
+    }
 }
 
 #[inline(always)]
