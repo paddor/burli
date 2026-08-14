@@ -31,6 +31,7 @@ const Q5_DELAYED_SYMBOLS: usize = 3584;
 const Q0_DIRECT_MAX_INPUT: usize = 384;
 const Q0_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
 const Q1_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
+const Q2_STATIC_NO_DICTIONARY_MAX_INPUT: usize = 4 * 1024;
 const Q2_MEDIUM_H3_MIN_INPUT: usize = 8 * 1024;
 const Q2_MEDIUM_H3_MAX_INPUT: usize = 128 * 1024;
 const Q2_FAST_H3_MAX_INPUT: usize = 16 * 1024;
@@ -393,7 +394,11 @@ impl EncoderPlan {
                 );
             }
 
-            let tokens = q2::collect(input, max_backward_distance, &mut workspace.q2);
+            let tokens = if input.len() < Q2_STATIC_NO_DICTIONARY_MAX_INPUT {
+                q2::collect_without_dictionary(input, max_backward_distance, &mut workspace.q2)
+            } else {
+                q2::collect(input, max_backward_distance, &mut workspace.q2)
+            };
             if !tokens.iter().any(|token| token.is_copy()) {
                 return write_compressed_literal_meta_block(writer, input);
             }
