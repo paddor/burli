@@ -163,6 +163,54 @@ pub(crate) fn compress_into_with_options_workspace(
     }
 }
 
+pub(crate) fn q0_store_stats(
+    input: &[u8],
+    options: &Options,
+) -> Result<crate::diagnostics::Q0StoreStats, CompressError> {
+    let mut stats = crate::diagnostics::Q0StoreStats {
+        input_bytes: input.len(),
+        ..crate::diagnostics::Q0StoreStats::default()
+    };
+    let plan = EncoderPlan::from_options(input.len(), options)?;
+    if plan.path != EncoderPath::FastOnePass {
+        return Ok(stats);
+    }
+
+    let allow_cross = input.len() <= plan.block_size;
+    let mut input_base = 0_usize;
+    for chunk in input.chunks(plan.block_size) {
+        stats.blocks += 1;
+        let decision = q0_sparse_incompressible_decision(chunk);
+        let Some(sample) = decision.sample else {
+            input_base += chunk.len();
+            continue;
+        };
+
+        stats.sampled_blocks += 1;
+        stats.sampled_positions += sample.len;
+        stats.sampled_load_bytes += sample.len * 8;
+        stats.duplicate_6_count += sample.duplicate_6_count;
+        stats.sampled_match_bytes += sample.duplicate_6_count * 6;
+        stats.zero_count += sample.zero_count;
+        stats.printable_count += sample.printable_count;
+        stats.max_sample_miss_streak = stats.max_sample_miss_streak.max(sample.max_miss_streak);
+
+        if decision.store_uncompressed {
+            stats.store_candidate_blocks += 1;
+        }
+
+        if decision.store_uncompressed && q0_sparse_store_block(input_base, allow_cross) {
+            stats.stored_blocks += 1;
+            stats.stored_bytes += chunk.len();
+            let full_probe_positions = chunk.len().saturating_sub(7);
+            stats.skipped_probe_positions += full_probe_positions.saturating_sub(sample.len);
+        }
+        input_base += chunk.len();
+    }
+
+    Ok(stats)
+}
+
 #[cfg(feature = "std")]
 pub(crate) fn write_stream_header(
     writer: &mut BitWriter,
@@ -395,7 +443,9 @@ impl EncoderPlan {
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
-                    } else if q0_sparse_incompressible_skip_is_likely_safe(input) {
+                    } else if q0_sparse_incompressible_skip_is_likely_safe(input)
+                        && q0_sparse_store_block(input_base, allow_cross_collector_shortcuts)
+                    {
                         return crate::metablock::write_uncompressed_meta_block(writer, input);
                     } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input) {
                         q1::collect_fast_skip_without_last_distance_probe(
@@ -916,13 +966,30 @@ fn q0_medium_css_64k_fast_skip_is_likely_safe(input: &[u8]) -> bool {
 }
 
 fn q0_sparse_incompressible_skip_is_likely_safe(input: &[u8]) -> bool {
+    q0_sparse_incompressible_decision(input).store_uncompressed
+}
+
+fn q0_sparse_store_block(input_base: usize, allow_cross_collector_shortcuts: bool) -> bool {
+    const STORE_BLOCK_MASK: usize = 15;
+
+    allow_cross_collector_shortcuts || ((input_base >> MIN_BLOCK_BITS) & STORE_BLOCK_MASK) != 0
+}
+
+fn q0_sparse_incompressible_decision(input: &[u8]) -> Q0SparseDecision {
     if input.len() < 64 * 1024 {
-        return false;
+        return Q0SparseDecision {
+            sample: None,
+            store_uncompressed: false,
+        };
     }
     let sample = q0_sparse_sample(input);
-    sample.duplicate_6_count <= 45
+    let store_uncompressed = sample.duplicate_6_count <= 45
         && sample.zero_count * 50 <= sample.len
-        && sample.printable_count * 5 <= sample.len * 4
+        && sample.printable_count * 5 <= sample.len * 4;
+    Q0SparseDecision {
+        sample: Some(sample),
+        store_uncompressed,
+    }
 }
 
 fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
@@ -982,6 +1049,8 @@ fn q0_sparse_sample(input: &[u8]) -> Q0SparseSample {
     let mut matches = 0_usize;
     let mut zeros = 0_usize;
     let mut printable = 0_usize;
+    let mut miss_streak = 0_usize;
+    let mut max_miss_streak = 0_usize;
     let mut samples = 0_usize;
     let mut pos = 0_usize;
 
@@ -996,6 +1065,10 @@ fn q0_sparse_sample(input: &[u8]) -> Q0SparseSample {
         let previous = table[key];
         if previous != EMPTY && q0_is_match6(input, usize::from(previous), pos) {
             matches += 1;
+            miss_streak = 0;
+        } else {
+            miss_streak += 1;
+            max_miss_streak = max_miss_streak.max(miss_streak);
         }
         table[key] = pos as u16;
         pos += SAMPLE_STEP;
@@ -1005,8 +1078,15 @@ fn q0_sparse_sample(input: &[u8]) -> Q0SparseSample {
         duplicate_6_count: matches,
         zero_count: zeros,
         printable_count: printable,
+        max_miss_streak,
         len: samples,
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Q0SparseDecision {
+    sample: Option<Q0SparseSample>,
+    store_uncompressed: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1014,6 +1094,7 @@ struct Q0SparseSample {
     duplicate_6_count: usize,
     zero_count: usize,
     printable_count: usize,
+    max_miss_streak: usize,
     len: usize,
 }
 
@@ -3589,6 +3670,26 @@ mod tests {
             compress_with_options(&input, &Options::default().quality(0).unwrap()).unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q0_store_stats_report_sparse_skip_work() {
+        let options = Options::default().quality(0).unwrap();
+        let input = sparse_binary_fixture(128 * 1024 + 17);
+        let stats = q0_store_stats(&input, &options).unwrap();
+
+        assert_eq!(stats.blocks, 1);
+        assert_eq!(stats.sampled_blocks, 1);
+        assert_eq!(stats.stored_blocks, 1);
+        assert_eq!(stats.stored_bytes, input.len());
+        assert_eq!(stats.sampled_positions, 1024);
+        assert!(stats.skipped_probe_positions > input.len() * 9 / 10);
+
+        let printable = printable_sparse_fixture(128 * 1024 + 17);
+        let stats = q0_store_stats(&printable, &options).unwrap();
+
+        assert_eq!(stats.stored_blocks, 0);
+        assert_eq!(stats.stored_bytes, 0);
     }
 
     fn sparse_binary_fixture(len: usize) -> Vec<u8> {

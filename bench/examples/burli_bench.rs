@@ -413,6 +413,7 @@ struct Args {
     small_only: bool,
     profile_encode_only: bool,
     profile_decode_only: bool,
+    q0_store_stats: bool,
     bench: BenchConfig,
 }
 
@@ -426,6 +427,10 @@ struct BenchConfig {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args()?;
     let inputs = load_inputs(&args)?;
+    if args.q0_store_stats {
+        print_q0_store_stats(&inputs, &args.qualities)?;
+        return Ok(());
+    }
     let cache = if args.profile_encode_only {
         None
     } else {
@@ -477,6 +482,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         small_only: false,
         profile_encode_only: false,
         profile_decode_only: false,
+        q0_store_stats: false,
         bench: BenchConfig::from_env(),
     };
 
@@ -557,6 +563,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             }
             "--profile-encode-only" => args.profile_encode_only = true,
             "--profile-decode-only" => args.profile_decode_only = true,
+            "--q0-store-stats" => args.q0_store_stats = true,
             other => return Err(format!("unknown arg: {other}").into()),
         }
     }
@@ -569,7 +576,8 @@ fn print_help() {
         "Usage: burli_bench [--impl burli|rust-brotli|google-brotli|all] \
          [--qualities LIST] [--corpus web|silesia|all] [--files LIST] \
          [--small-only] [--chart-small-only] [--small-sizes LIST] [--quick] \
-         [--target-ms N] [--target-ns N] [--rounds N] [--warmup N]"
+         [--target-ms N] [--target-ns N] [--rounds N] [--warmup N] \
+         [--q0-store-stats]"
     );
 }
 
@@ -831,6 +839,43 @@ fn profile_encode_only(
         compressed.len(),
         mbs
     );
+    Ok(())
+}
+
+fn print_q0_store_stats(
+    inputs: &[BenchInput],
+    qualities: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for &quality in qualities {
+        if quality != 0 {
+            continue;
+        }
+        let options = burli::Options::default().quality(quality)?;
+        for input in inputs {
+            let stats = burli::encode::diagnostics::q0_store_stats(&input.data, &options)?;
+            println!(
+                "q0-store {}: blocks={} sampled={} candidates={} stored={}/{} \
+                 stored_bytes={} sampled_positions={} sampled_load_bytes={} \
+                 skipped_probe_positions={} duplicate6={} sampled_match_bytes={} \
+                 zero={} printable={} max_miss_streak={}",
+                input.name,
+                stats.blocks,
+                stats.sampled_blocks,
+                stats.store_candidate_blocks,
+                stats.stored_blocks,
+                stats.blocks,
+                stats.stored_bytes,
+                stats.sampled_positions,
+                stats.sampled_load_bytes,
+                stats.skipped_probe_positions,
+                stats.duplicate_6_count,
+                stats.sampled_match_bytes,
+                stats.zero_count,
+                stats.printable_count,
+                stats.max_sample_miss_streak
+            );
+        }
+    }
     Ok(())
 }
 
