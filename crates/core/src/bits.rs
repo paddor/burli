@@ -294,6 +294,7 @@ impl BitWriter {
         self.flush_full_bytes();
     }
 
+    #[cfg(feature = "paranoid")]
     #[inline(always)]
     fn flush_full_bytes(&mut self) {
         let byte_count = self.bit_count / 8;
@@ -305,6 +306,35 @@ impl BitWriter {
             .extend_from_slice(&bytes[..usize::from(byte_count)]);
         self.bit_buffer >>= byte_count * 8;
         self.bit_count -= byte_count * 8;
+    }
+
+    #[cfg(not(feature = "paranoid"))]
+    #[inline(always)]
+    fn flush_full_bytes(&mut self) {
+        let byte_count = self.bit_count / 8;
+        if byte_count == 0 {
+            return;
+        }
+        let byte_count = usize::from(byte_count);
+        let bytes = self.bit_buffer.to_le_bytes();
+        let len = self.output.len();
+        if self.output.capacity() - len >= byte_count {
+            // SAFETY: `bytes` has 8 bytes and `byte_count` is at most 7 here because
+            // callers cap single writes to 56 bits. Capacity check above guarantees
+            // the destination range is allocated and non-overlapping.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    self.output.as_mut_ptr().add(len),
+                    byte_count,
+                );
+                self.output.set_len(len + byte_count);
+            }
+        } else {
+            self.output.extend_from_slice(&bytes[..byte_count]);
+        }
+        self.bit_buffer >>= byte_count * 8;
+        self.bit_count -= byte_count as u8 * 8;
     }
 
     pub fn align_to_byte(&mut self) -> Result<()> {
