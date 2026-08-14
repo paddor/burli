@@ -321,6 +321,8 @@ impl EncoderPlan {
                         )
                     } else if q0_medium_license_comment_64k_table_is_likely_safe(input) {
                         q1::collect_with_64k_table(input, max_backward_distance, &mut workspace.q1)
+                    } else if q0_medium_json_32k_table_is_likely_safe(input) {
+                        q1::collect_with_32k_table(input, max_backward_distance, &mut workspace.q1)
                     } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input) {
                         q1::collect_fast_skip_without_last_distance_probe(
                             input,
@@ -741,6 +743,10 @@ fn q0_huge_license_comment_32k_table_is_likely_safe(input: &[u8]) -> bool {
 
 fn q0_medium_license_comment_64k_table_is_likely_safe(input: &[u8]) -> bool {
     (128 * 1024..=160 * 1024).contains(&input.len()) && input.starts_with(b"/*!")
+}
+
+fn q0_medium_json_32k_table_is_likely_safe(input: &[u8]) -> bool {
+    input.len() >= 32 * 1024 && input.len() <= 128 * 1024 && input.starts_with(b"{")
 }
 
 fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
@@ -3036,6 +3042,9 @@ mod tests {
         ));
         assert!(!q0_large_license_comment_64k_table_is_likely_safe(
             &large_plain_js
+        ));
+        assert!(q0_medium_json_32k_table_is_likely_safe(
+            &json_5k.repeat(16)[..64 * 1024]
         ));
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
