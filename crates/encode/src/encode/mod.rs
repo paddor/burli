@@ -285,8 +285,11 @@ impl EncoderPlan {
             }
 
             if input.len() <= Q0_STATIC_ENTROPY_MAX_INPUT && input.len() > Q0_DIRECT_MAX_INPUT {
-                let tokens =
-                    q2::collect_without_dictionary(input, max_backward_distance, &mut workspace.q2);
+                let tokens = q2::collect_without_dictionary_no_lazy(
+                    input,
+                    max_backward_distance,
+                    &mut workspace.q2,
+                );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     return write_compressed_literal_meta_block(writer, input);
                 }
@@ -331,8 +334,11 @@ impl EncoderPlan {
 
         if self.path == EncoderPath::FastTwoPass {
             if input.len() <= Q1_STATIC_ENTROPY_MAX_INPUT {
-                let tokens =
-                    q2::collect_without_dictionary(input, max_backward_distance, &mut workspace.q2);
+                let tokens = q2::collect_without_dictionary_no_lazy(
+                    input,
+                    max_backward_distance,
+                    &mut workspace.q2,
+                );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     return write_compressed_literal_meta_block(writer, input);
                 }

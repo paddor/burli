@@ -74,12 +74,12 @@ pub(super) fn collect(
     }
 }
 
-pub(super) fn collect_without_dictionary(
+pub(super) fn collect_without_dictionary_no_lazy(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
-    collect_with_dictionary::<false>(input, max_backward_distance, workspace)
+    collect_with_dictionary_lazy::<false, 0>(input, max_backward_distance, workspace)
 }
 
 fn collect_with_dictionary<const USE_DICTIONARY: bool>(
@@ -87,23 +87,31 @@ fn collect_with_dictionary<const USE_DICTIONARY: bool>(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
+    collect_with_dictionary_lazy::<USE_DICTIONARY, 4>(input, max_backward_distance, workspace)
+}
+
+fn collect_with_dictionary_lazy<const USE_DICTIONARY: bool, const MAX_LAZY_MATCHES: usize>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
     match table_bits_for_input(input.len()) {
         10 => {
-            return collect_with_stack_table_10::<USE_DICTIONARY>(
+            return collect_with_stack_table_10::<USE_DICTIONARY, MAX_LAZY_MATCHES>(
                 input,
                 max_backward_distance,
                 workspace,
             );
         }
         12 => {
-            return collect_with_stack_table_12::<USE_DICTIONARY>(
+            return collect_with_stack_table_12::<USE_DICTIONARY, MAX_LAZY_MATCHES>(
                 input,
                 max_backward_distance,
                 workspace,
             );
         }
         16 if !USE_DICTIONARY => {
-            return collect_with_stack_table_16::<USE_DICTIONARY>(
+            return collect_with_stack_table_16::<USE_DICTIONARY, MAX_LAZY_MATCHES>(
                 input,
                 max_backward_distance,
                 workspace,
@@ -113,7 +121,7 @@ fn collect_with_dictionary<const USE_DICTIONARY: bool>(
     }
 
     let mut table = vec![NO_POSITION; TABLE_SIZE];
-    collect_with_table::<USE_DICTIONARY, TABLE_BITS>(
+    collect_with_table::<USE_DICTIONARY, TABLE_BITS, MAX_LAZY_MATCHES>(
         input,
         max_backward_distance,
         workspace,
@@ -122,35 +130,54 @@ fn collect_with_dictionary<const USE_DICTIONARY: bool>(
 }
 
 #[allow(clippy::large_stack_arrays)]
-fn collect_with_stack_table_16<const USE_DICTIONARY: bool>(
+fn collect_with_stack_table_16<const USE_DICTIONARY: bool, const MAX_LAZY_MATCHES: usize>(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
     let mut table = [NO_POSITION; TABLE_SIZE];
-    collect_with_table::<USE_DICTIONARY, 16>(input, max_backward_distance, workspace, &mut table)
+    collect_with_table::<USE_DICTIONARY, 16, MAX_LAZY_MATCHES>(
+        input,
+        max_backward_distance,
+        workspace,
+        &mut table,
+    )
 }
 
-fn collect_with_stack_table_10<const USE_DICTIONARY: bool>(
+fn collect_with_stack_table_10<const USE_DICTIONARY: bool, const MAX_LAZY_MATCHES: usize>(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
     let mut table = [NO_POSITION; 1 << 10];
-    collect_with_table::<USE_DICTIONARY, 10>(input, max_backward_distance, workspace, &mut table)
+    collect_with_table::<USE_DICTIONARY, 10, MAX_LAZY_MATCHES>(
+        input,
+        max_backward_distance,
+        workspace,
+        &mut table,
+    )
 }
 
 #[allow(clippy::large_stack_arrays)]
-fn collect_with_stack_table_12<const USE_DICTIONARY: bool>(
+fn collect_with_stack_table_12<const USE_DICTIONARY: bool, const MAX_LAZY_MATCHES: usize>(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
     let mut table = [NO_POSITION; 1 << 12];
-    collect_with_table::<USE_DICTIONARY, 12>(input, max_backward_distance, workspace, &mut table)
+    collect_with_table::<USE_DICTIONARY, 12, MAX_LAZY_MATCHES>(
+        input,
+        max_backward_distance,
+        workspace,
+        &mut table,
+    )
 }
 
-fn collect_with_table<const USE_DICTIONARY: bool, const TABLE_BITS_FOR_INPUT: usize>(
+fn collect_with_table<
+    const USE_DICTIONARY: bool,
+    const TABLE_BITS_FOR_INPUT: usize,
+    const MAX_LAZY_MATCHES: usize,
+>(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
@@ -197,7 +224,7 @@ fn collect_with_table<const USE_DICTIONARY: bool, const TABLE_BITS_FOR_INPUT: us
         };
 
         let mut delayed = 0;
-        while delayed < 4 && pos + 1 + HASH_TYPE_LEN < pos_end {
+        while delayed < MAX_LAZY_MATCHES && pos + 1 + HASH_TYPE_LEN < pos_end {
             let lazy_pos = pos + 1;
             let lazy_max_len = pos_end - lazy_pos;
             let best_len_in = found.len.saturating_sub(1).min(lazy_max_len);
