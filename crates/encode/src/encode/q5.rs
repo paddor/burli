@@ -64,13 +64,13 @@ pub(super) fn collect(
     workspace: &mut Workspace,
 ) -> Vec<Token> {
     if input.len() <= 1024 {
-        collect_with_params::<8, 4, 4, 4>(input, max_backward_distance, workspace)
+        collect_with_params::<8, 4, 4, 4, false>(input, max_backward_distance, workspace)
     } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
-        collect_with_params::<13, 3, 4, 4>(input, max_backward_distance, workspace)
+        collect_with_params::<13, 3, 4, 4, false>(input, max_backward_distance, workspace)
     } else if input.len() >= LARGE_INPUT_THRESHOLD {
-        collect_with_params::<15, 4, 5, 8>(input, max_backward_distance, workspace)
+        collect_with_params::<15, 4, 5, 8, true>(input, max_backward_distance, workspace)
     } else {
-        collect_with_params::<14, 3, 4, 4>(input, max_backward_distance, workspace)
+        collect_with_params::<14, 3, 4, 4, false>(input, max_backward_distance, workspace)
     }
 }
 
@@ -79,6 +79,7 @@ fn collect_with_params<
     const BLOCK_BITS: usize,
     const HASH_LEN: usize,
     const HASH_READ_LEN: usize,
+    const SKIP_DICT_AFTER_MATCH: bool,
 >(
     input: &[u8],
     max_backward_distance: usize,
@@ -102,19 +103,21 @@ fn collect_with_params<
 
     while pos + HASH_READ_LEN <= pos_end {
         let max_len = pos_end - pos;
-        let Some(mut found) = find_match::<BUCKET_BITS, BLOCK_BITS, HASH_LEN, HASH_READ_LEN>(
-            input,
-            &mut counts,
-            &mut buckets,
-            pos,
-            max_len,
-            dist_cache,
-            SearchParams {
-                max_backward_distance,
-                best_len_in: 0,
-                min_score: MIN_SCORE,
-            },
-        ) else {
+        let Some(mut found) =
+            find_match::<BUCKET_BITS, BLOCK_BITS, HASH_LEN, HASH_READ_LEN, SKIP_DICT_AFTER_MATCH>(
+                input,
+                &mut counts,
+                &mut buckets,
+                pos,
+                max_len,
+                dist_cache,
+                SearchParams {
+                    max_backward_distance,
+                    best_len_in: 0,
+                    min_score: MIN_SCORE,
+                },
+            )
+        else {
             pos += 1;
             if pos > apply_sparse_search {
                 pos = skip_sparse::<BUCKET_BITS, BLOCK_BITS, HASH_LEN, HASH_READ_LEN>(
@@ -134,7 +137,13 @@ fn collect_with_params<
             let lazy_pos = pos + 1;
             let lazy_max_len = pos_end - lazy_pos;
             let best_len_in = found.len.saturating_sub(1).min(lazy_max_len);
-            if let Some(next) = find_match::<BUCKET_BITS, BLOCK_BITS, HASH_LEN, HASH_READ_LEN>(
+            if let Some(next) = find_match::<
+                BUCKET_BITS,
+                BLOCK_BITS,
+                HASH_LEN,
+                HASH_READ_LEN,
+                SKIP_DICT_AFTER_MATCH,
+            >(
                 input,
                 &mut counts,
                 &mut buckets,
@@ -225,6 +234,7 @@ fn find_match<
     const BLOCK_BITS: usize,
     const HASH_LEN: usize,
     const HASH_READ_LEN: usize,
+    const SKIP_DICT_AFTER_MATCH: bool,
 >(
     input: &[u8],
     counts: &mut [u32],
@@ -326,7 +336,11 @@ fn find_match<
     }
 
     store::<BUCKET_BITS, BLOCK_BITS, HASH_LEN, HASH_READ_LEN>(input, counts, buckets, pos);
-    find_static_dictionary_identity(input, pos, max_len, dictionary_base, best_score).or(out)
+    if SKIP_DICT_AFTER_MATCH && out.is_some() {
+        out
+    } else {
+        find_static_dictionary_identity(input, pos, max_len, dictionary_base, best_score).or(out)
+    }
 }
 
 fn find_static_dictionary_identity(
