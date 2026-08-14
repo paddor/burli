@@ -20,7 +20,7 @@ std = ["alloc", "burli-core/std", "burli-encode/std", "burli-decode/std"]
 alloc = ["burli-core/alloc", "burli-encode/alloc", "burli-decode/alloc"]
 simd = ["burli-encode/simd", "burli-decode/simd"]
 nightly = ["burli-core/nightly", "burli-encode/nightly", "burli-decode/nightly"]
-paranoid = ["burli-core/paranoid", "burli-encode/paranoid", "burli-decode/paranoid"]
+paranoid = ["simd", "burli-core/paranoid", "burli-encode/paranoid", "burli-decode/paranoid"]
 
 [dependencies]
 burli-core = { version = "0.0.0", path = "crates/core", default-features = false }

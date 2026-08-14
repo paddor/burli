@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{vec, vec::Vec};
 
 use super::{
     INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, match_len, read_u64_le,
