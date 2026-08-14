@@ -115,6 +115,34 @@ pub(crate) fn decode_meta_block_with_base(
         header.distance_alphabet_size,
     )?;
     let window_size = (1_usize << window_bits) - 16;
+    decode_meta_block_body(
+        reader,
+        output,
+        needed,
+        output_base,
+        window_size,
+        &mut header,
+        &literal_codes,
+        &command_codes,
+        &distance_codes,
+        distances,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn decode_meta_block_body(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    needed: usize,
+    output_base: usize,
+    window_size: usize,
+    header: &mut CompressedHeader,
+    literal_codes: &[PrefixCode],
+    command_codes: &[PrefixCode],
+    distance_codes: &[PrefixCode],
+    distances: &mut DistanceRing,
+) -> Result<(), DecompressError> {
     let single_command_block = header.commands.types() == 1;
     let single_distance_block = header.distances.types() == 1;
     let single_distance_tree = distance_codes.len() == 1;
@@ -150,8 +178,8 @@ pub(crate) fn decode_meta_block_with_base(
                     output,
                     needed,
                     command.insert_len,
-                    &literal_codes,
-                    &mut header,
+                    literal_codes,
+                    header,
                 )?;
             }
         }
