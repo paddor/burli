@@ -65,6 +65,10 @@ pub(super) fn collect(
 ) -> Vec<Token> {
     if input.len() <= 1024 {
         collect_with_params::<8, 4, 4, 4, false>(input, max_backward_distance, workspace)
+    } else if input.len() <= 96 * 1024 {
+        collect_with_params::<13, 3, 4, 4, true>(input, max_backward_distance, workspace)
+    } else if input.len() <= 160 * 1024 {
+        collect_with_params::<15, 3, 4, 4, true>(input, max_backward_distance, workspace)
     } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
         collect_with_params::<13, 3, 4, 4, true>(input, max_backward_distance, workspace)
     } else if input.len() >= LARGE_INPUT_THRESHOLD {
