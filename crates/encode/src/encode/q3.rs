@@ -17,7 +17,7 @@ const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
 const LONG_MATCH_STORE_THRESHOLD: usize = 64;
 const TINY_INPUT_THRESHOLD: usize = 1024;
-const STACK_TABLE_INPUT_THRESHOLD: usize = 16 * 1024;
+const STACK_TABLE_INPUT_THRESHOLD: usize = 32 * 1024;
 const SMALL_MEDIUM_INPUT_THRESHOLD: usize = 320 * 1024;
 
 #[derive(Clone, Copy, Debug)]
