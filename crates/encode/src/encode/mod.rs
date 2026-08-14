@@ -573,6 +573,45 @@ impl PreparedBatch {
 }
 
 #[derive(Clone, Debug)]
+struct PreparedFrequencies {
+    literal_frequencies: [usize; LITERAL_ALPHABET_SIZE],
+    command_frequencies: [usize; COMMAND_ALPHABET_SIZE],
+    distance_frequencies: [usize; 64],
+    has_distance: bool,
+}
+
+impl PreparedFrequencies {
+    fn new() -> Self {
+        Self {
+            literal_frequencies: [0; LITERAL_ALPHABET_SIZE],
+            command_frequencies: [0; COMMAND_ALPHABET_SIZE],
+            distance_frequencies: [0; 64],
+            has_distance: false,
+        }
+    }
+
+    fn push(&mut self, input: &[u8], token: Token) -> Result<(), CompressError> {
+        let prepared_token = PreparedToken::new(token)?;
+        let token = prepared_token.token;
+        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
+            self.literal_frequencies[usize::from(literal)] += 1;
+        }
+        self.command_frequencies[usize::from(prepared_token.command_symbol)] += 1;
+        if let Some(distance) = prepared_token.distance {
+            self.distance_frequencies[usize::from(distance.symbol)] += 1;
+            self.has_distance = true;
+        }
+        Ok(())
+    }
+
+    fn ensure_distance_frequencies(&mut self) {
+        if !self.has_distance {
+            self.distance_frequencies[0] = 1;
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct StaticEntropyBatch {
     prepared: Vec<PreparedToken>,
     literal_frequencies: [usize; LITERAL_ALPHABET_SIZE],
@@ -844,11 +883,11 @@ fn write_token_batch_q2(
     input: &[u8],
     tokens: &[Token],
 ) -> Result<(), CompressError> {
+    let block_len = tokens.iter().map(|token| token.block_len()).sum::<usize>();
     if tokens.len() <= 1024 {
-        let block_len = tokens.iter().map(|token| token.block_len()).sum::<usize>();
         return write_static_entropy_token_batch(writer, input, tokens, block_len);
     }
-    write_token_batch(writer, input, tokens)
+    write_token_batch_without_prepared_alloc_with_len(writer, input, tokens, block_len)
 }
 
 fn write_token_batch_with_len(
@@ -867,6 +906,24 @@ fn write_token_batch_with_len(
     }
     batch.ensure_distance_frequencies();
     write_prepared_token_batch_with_len(writer, input, &batch, block_len)
+}
+
+fn write_token_batch_without_prepared_alloc_with_len(
+    writer: &mut BitWriter,
+    input: &[u8],
+    tokens: &[Token],
+    block_len: usize,
+) -> Result<(), CompressError> {
+    if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
+        return Err(BurliError::Format("invalid compressed Brotli block size"));
+    }
+
+    let mut batch = PreparedFrequencies::new();
+    for &token in tokens {
+        batch.push(input, token)?;
+    }
+    batch.ensure_distance_frequencies();
+    write_token_batch_from_frequencies_with_len(writer, input, tokens, &batch, block_len)
 }
 
 fn write_static_entropy_token_batch(
@@ -1010,6 +1067,137 @@ fn write_prepared_token_batch_with_len(
     let mut pending_bits = 0_u64;
     let mut pending_width = 0_u8;
     for prepared_token in &batch.prepared {
+        let token = prepared_token.token;
+        let insert = prepared_token.insert;
+        let copy = prepared_token.copy;
+        let command_code = command_code_map[usize::from(prepared_token.command_symbol)];
+        debug_assert!(command_code.len != u8::MAX);
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            command_code.len,
+            u64::from(command_code.bits),
+        );
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            insert.extra_bits,
+            insert.extra,
+        );
+        if let Some(copy) = copy {
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                copy.extra_bits,
+                copy.extra,
+            );
+        }
+
+        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
+            let literal_code = literal_code_map[usize::from(literal)];
+            debug_assert!(literal_code.len != u8::MAX);
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                literal_code.len,
+                u64::from(literal_code.bits),
+            );
+        }
+
+        if let Some(distance) = prepared_token.distance {
+            let distance_code = distance_code_map[usize::from(distance.symbol)];
+            debug_assert!(distance_code.len != u8::MAX);
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                distance_code.len,
+                u64::from(distance_code.bits),
+            );
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                distance.extra_bits,
+                distance.extra,
+            );
+        }
+    }
+    if pending_width != 0 {
+        writer.write_bits_trusted_fits(pending_width, pending_bits);
+    }
+
+    Ok(())
+}
+
+fn write_token_batch_from_frequencies_with_len(
+    writer: &mut BitWriter,
+    input: &[u8],
+    tokens: &[Token],
+    batch: &PreparedFrequencies,
+    block_len: usize,
+) -> Result<(), CompressError> {
+    write_token_batch_body_with_len(
+        writer,
+        input,
+        &batch.literal_frequencies,
+        &batch.command_frequencies,
+        &batch.distance_frequencies,
+        tokens.len(),
+        block_len,
+        |index| PreparedToken::new(tokens[index]),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_token_batch_body_with_len<F>(
+    writer: &mut BitWriter,
+    input: &[u8],
+    literal_frequencies: &[usize; LITERAL_ALPHABET_SIZE],
+    command_frequencies: &[usize; COMMAND_ALPHABET_SIZE],
+    distance_frequencies: &[usize; 64],
+    token_count: usize,
+    block_len: usize,
+    mut prepared_at: F,
+) -> Result<(), CompressError>
+where
+    F: FnMut(usize) -> Result<PreparedToken, CompressError>,
+{
+    if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
+        return Err(BurliError::Format("invalid compressed Brotli block size"));
+    }
+
+    write_meta_block_len(writer, block_len)?;
+    write_block_and_context_header(writer)?;
+    let mut prefix = PrefixCodeScratch::default();
+    prefix.reserve_for(COMMAND_ALPHABET_SIZE, COMMAND_ALPHABET_SIZE);
+    let literal_code_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+        writer,
+        literal_frequencies,
+        &mut prefix,
+        MAX_CODE_BITS,
+    )?;
+    let command_code_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+        writer,
+        command_frequencies,
+        &mut prefix,
+        MAX_CODE_BITS,
+    )?;
+    let distance_code_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+        writer,
+        distance_frequencies,
+        &mut prefix,
+        MAX_CODE_BITS,
+    )?;
+
+    let mut pending_bits = 0_u64;
+    let mut pending_width = 0_u8;
+    for index in 0..token_count {
+        let prepared_token = prepared_at(index)?;
         let token = prepared_token.token;
         let insert = prepared_token.insert;
         let copy = prepared_token.copy;
