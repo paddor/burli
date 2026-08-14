@@ -307,7 +307,13 @@ impl EncoderPlan {
 
             if input.len() > Q0_DIRECT_MAX_INPUT {
                 let has_copy = {
-                    let batch = if q0_large_license_comment_64k_table_is_likely_safe(input) {
+                    let batch = if q0_huge_license_comment_32k_table_is_likely_safe(input) {
+                        q1::collect_with_32k_fast_skip(
+                            input,
+                            max_backward_distance,
+                            &mut workspace.q1,
+                        )
+                    } else if q0_large_license_comment_64k_table_is_likely_safe(input) {
                         q1::collect_with_64k_fast_skip(
                             input,
                             max_backward_distance,
@@ -727,6 +733,10 @@ fn q0_one_k_css_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
 
 fn q0_large_license_comment_64k_table_is_likely_safe(input: &[u8]) -> bool {
     input.len() > 160 * 1024 && input.starts_with(b"/*!")
+}
+
+fn q0_huge_license_comment_32k_table_is_likely_safe(input: &[u8]) -> bool {
+    input.len() > 256 * 1024 && input.starts_with(b"/*!")
 }
 
 fn q0_medium_license_comment_64k_table_is_likely_safe(input: &[u8]) -> bool {
@@ -2988,6 +2998,7 @@ mod tests {
             b"/** @license React */\n!function(){function demo(){return 1}}\n".repeat(192);
         let medium_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(3072);
         let large_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(4096);
+        let huge_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(6144);
         let large_plain_js = b"function demo(){return demo();}\n".repeat(4096);
 
         assert!(q0_small_fast_literal_meta_block_is_likely_safe(&html));
@@ -3016,6 +3027,12 @@ mod tests {
         ));
         assert!(q0_large_license_comment_64k_table_is_likely_safe(
             &large_license_js
+        ));
+        assert!(!q0_huge_license_comment_32k_table_is_likely_safe(
+            &large_license_js
+        ));
+        assert!(q0_huge_license_comment_32k_table_is_likely_safe(
+            &huge_license_js
         ));
         assert!(!q0_large_license_comment_64k_table_is_likely_safe(
             &large_plain_js
