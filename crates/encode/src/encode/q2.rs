@@ -84,6 +84,14 @@ pub(super) fn collect_without_dictionary_no_lazy(
     collect_with_dictionary_lazy::<false, 0, true, 4>(input, 0, max_backward_distance, workspace)
 }
 
+pub(super) fn collect_without_dictionary_no_lazy_sparse_tail(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
+    collect_with_dictionary_lazy::<false, 0, true, 8>(input, 0, max_backward_distance, workspace)
+}
+
 pub(super) fn collect_without_dictionary_one_lazy(
     input: &[u8],
     max_backward_distance: usize,

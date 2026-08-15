@@ -623,7 +623,7 @@ impl EncoderPlan {
                         &mut workspace.q2,
                     )
                 } else {
-                    q2::collect_without_dictionary_no_lazy(
+                    q2::collect_without_dictionary_no_lazy_sparse_tail(
                         input,
                         local_max_backward_distance,
                         &mut workspace.q2,
