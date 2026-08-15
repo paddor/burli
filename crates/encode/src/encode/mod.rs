@@ -400,6 +400,21 @@ impl EncoderPlan {
             }
 
             if input.len() > Q0_DIRECT_MAX_INPUT {
+                if q0_sparse_incompressible_skip_is_likely_safe(input) {
+                    if q0_sparse_store_block(input_base, allow_cross_collector_shortcuts) {
+                        return crate::metablock::write_uncompressed_meta_block(writer, input);
+                    }
+                    let has_copy = {
+                        let batch =
+                            q0::collect(input, local_max_backward_distance, &mut workspace.q0)?;
+                        batch.has_copy()
+                    };
+                    if !has_copy {
+                        return write_compressed_literal_meta_block(writer, input);
+                    }
+                    return q0::write(writer, input, input.len(), &mut workspace.q0);
+                }
+
                 let has_copy = {
                     let batch = if q0_huge_license_comment_32k_table_is_likely_safe(input) {
                         q1::collect_with_32k_fast_skip(
@@ -443,10 +458,6 @@ impl EncoderPlan {
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
-                    } else if q0_sparse_incompressible_skip_is_likely_safe(input)
-                        && q0_sparse_store_block(input_base, allow_cross_collector_shortcuts)
-                    {
-                        return crate::metablock::write_uncompressed_meta_block(writer, input);
                     } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input) {
                         q1::collect_fast_skip_without_last_distance_probe(
                             input,
@@ -974,7 +985,7 @@ fn q0_sparse_store_block(input_base: usize, allow_cross_collector_shortcuts: boo
     const STORE_BLOCK_MASK: usize = 15;
 
     let block_in_group = (input_base >> MIN_BLOCK_BITS) & STORE_BLOCK_MASK;
-    allow_cross_collector_shortcuts || !matches!(block_in_group, 0 | 5 | 10)
+    allow_cross_collector_shortcuts || !matches!(block_in_group, 0 | 8)
 }
 
 fn q0_sparse_incompressible_decision(input: &[u8]) -> Q0SparseDecision {
@@ -3508,6 +3519,10 @@ mod tests {
         assert_eq!(q1_sparse_skip(&sparse_binary), Q1SparseSkip::None);
         assert_eq!(q1_sparse_skip(&sao_like), Q1SparseSkip::Moderate);
         assert_eq!(q1_sparse_skip(&printable_sparse), Q1SparseSkip::None);
+        assert!(!q0_sparse_store_block(0, false));
+        assert!(q0_sparse_store_block(1 << MIN_BLOCK_BITS, false));
+        assert!(!q0_sparse_store_block(8 << MIN_BLOCK_BITS, false));
+        assert!(q0_sparse_store_block(8 << MIN_BLOCK_BITS, true));
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));

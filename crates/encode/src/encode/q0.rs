@@ -418,6 +418,7 @@ impl Workspace {
         let mut insert_start = 0;
         let mut last_distance = None;
         let mut word = read_u64_le(input, 0);
+        let mut skip = 32_usize;
 
         while pos + 8 <= input.len() {
             let key = hash_word_q0(word, HASH_SHIFT) & TABLE_MASK;
@@ -455,6 +456,7 @@ impl Workspace {
                     pos += copy_len;
                     insert_start = pos;
                     last_distance = Some(distance);
+                    skip = 32;
                     if pos + 8 <= input.len() {
                         word = read_u64_le(input, pos);
                     }
@@ -462,9 +464,15 @@ impl Workspace {
                 }
             }
 
-            pos += 1;
+            let step = skip >> 5;
+            skip += 1;
+            pos += step;
             if pos + 8 <= input.len() {
-                word = next_hash_word(word, input[pos + 7]);
+                word = if step == 1 {
+                    next_hash_word(word, input[pos + 7])
+                } else {
+                    read_u64_le(input, pos)
+                };
             }
         }
 
