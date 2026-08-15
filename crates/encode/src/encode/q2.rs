@@ -366,6 +366,7 @@ fn literal_only(input_len: usize) -> Vec<Token> {
     }]
 }
 
+#[inline(always)]
 fn find_match<
     const USE_DICTIONARY: bool,
     const TABLE_BITS_FOR_INPUT: usize,
@@ -381,10 +382,6 @@ fn find_match<
     let best_check = params.best_len_in.min(max_len.saturating_sub(1));
     let compare_char = input[pos + best_check];
     let best_score = params.min_score;
-    let dictionary_base = params
-        .input_base
-        .saturating_add(pos)
-        .min(params.max_backward_distance);
 
     if PROBE_LAST_DISTANCE && pos >= params.last_distance {
         let previous = pos - params.last_distance;
@@ -411,33 +408,15 @@ fn find_match<
         || previous >= pos
         || pos - previous > params.max_backward_distance
     {
-        return find_dictionary_match::<USE_DICTIONARY>(
-            input,
-            pos,
-            max_len,
-            dictionary_base,
-            best_score,
-        );
+        return find_dictionary_match::<USE_DICTIONARY>(input, pos, max_len, params, best_score);
     }
     if input[previous + best_check] != compare_char {
-        return find_dictionary_match::<USE_DICTIONARY>(
-            input,
-            pos,
-            max_len,
-            dictionary_base,
-            best_score,
-        );
+        return find_dictionary_match::<USE_DICTIONARY>(input, pos, max_len, params, best_score);
     }
 
     let len = match_len(input, previous, pos, max_len);
     if len < MIN_MATCH_BYTES {
-        return find_dictionary_match::<USE_DICTIONARY>(
-            input,
-            pos,
-            max_len,
-            dictionary_base,
-            best_score,
-        );
+        return find_dictionary_match::<USE_DICTIONARY>(input, pos, max_len, params, best_score);
     }
     let distance = pos - previous;
     let score = score_distance(len, distance);
@@ -449,17 +428,21 @@ fn find_match<
             score,
         });
     }
-    find_dictionary_match::<USE_DICTIONARY>(input, pos, max_len, dictionary_base, best_score)
+    find_dictionary_match::<USE_DICTIONARY>(input, pos, max_len, params, best_score)
 }
 
 fn find_dictionary_match<const USE_DICTIONARY: bool>(
     input: &[u8],
     pos: usize,
     max_len: usize,
-    dictionary_base: usize,
+    params: SearchParams,
     min_score: usize,
 ) -> Option<Match> {
     if USE_DICTIONARY {
+        let dictionary_base = params
+            .input_base
+            .saturating_add(pos)
+            .min(params.max_backward_distance);
         find_static_dictionary_identity(input, pos, max_len, dictionary_base, min_score)
     } else {
         None
