@@ -178,7 +178,7 @@ fn decode_meta_block_body(
         let command_block_type = if single_command_block {
             0
         } else {
-            header.commands.current_type(reader)?
+            header.commands.current_type_multi(reader)?
         };
         let command = read_command(
             reader,
@@ -186,7 +186,7 @@ fn decode_meta_block_body(
             command_codes_all_non_single,
         )?;
         if !single_command_block {
-            header.commands.consume_one();
+            header.commands.consume_one_multi();
         }
         if command.insert_len != 0 {
             if let Some(literal_code) = single_literal_code {
@@ -432,10 +432,8 @@ impl BlockCategory {
     }
 
     #[inline(always)]
-    fn current_type(&mut self, reader: &mut BitReader<'_>) -> Result<usize, DecompressError> {
-        if self.block_types == 1 {
-            return Ok(0);
-        }
+    fn current_type_multi(&mut self, reader: &mut BitReader<'_>) -> Result<usize, DecompressError> {
+        debug_assert!(self.block_types != 1);
         if self.remaining == 0 {
             self.switch(reader)?;
         }
@@ -443,9 +441,23 @@ impl BlockCategory {
     }
 
     #[inline(always)]
+    fn current_type(&mut self, reader: &mut BitReader<'_>) -> Result<usize, DecompressError> {
+        if self.block_types == 1 {
+            return Ok(0);
+        }
+        self.current_type_multi(reader)
+    }
+
+    #[inline(always)]
+    fn consume_one_multi(&mut self) {
+        debug_assert!(self.block_types != 1);
+        self.remaining -= 1;
+    }
+
+    #[inline(always)]
     fn consume_one(&mut self) {
         if self.block_types != 1 {
-            self.remaining -= 1;
+            self.consume_one_multi();
         }
     }
 
