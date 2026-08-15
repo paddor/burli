@@ -149,6 +149,12 @@ fn decode_meta_block_body(
     let single_command_block = header.commands.types() == 1;
     let single_distance_block = header.distances.types() == 1;
     let single_distance_tree = distance_codes.len() == 1;
+    let command_codes_all_non_single = command_codes
+        .iter()
+        .all(|code| code.single_symbol().is_none());
+    let distance_codes_all_non_single = distance_codes
+        .iter()
+        .all(|code| code.single_symbol().is_none());
     let single_literal_block = header.literals.types() == 1;
     let single_literal_code = if single_literal_block && literal_codes.len() == 1 {
         Some(&literal_codes[0])
@@ -174,7 +180,11 @@ fn decode_meta_block_body(
         } else {
             header.commands.current_type(reader)?
         };
-        let command = read_command(reader, &command_codes[command_block_type])?;
+        let command = read_command(
+            reader,
+            &command_codes[command_block_type],
+            command_codes_all_non_single,
+        )?;
         if !single_command_block {
             header.commands.consume_one();
         }
@@ -222,7 +232,11 @@ fn decode_meta_block_body(
             if !single_distance_block {
                 header.distances.consume_one();
             }
-            distance_codes[tree_index].decode(reader)? as usize
+            decode_prefix_symbol(
+                reader,
+                &distance_codes[tree_index],
+                distance_codes_all_non_single,
+            )? as usize
         };
         let distance = if no_postfix_distances {
             read_distance_no_postfix_with_ring(reader, distance_symbol, distances)?
@@ -841,8 +855,9 @@ const COPY_LENGTH_PREFIXES: [(usize, u8); 24] = [
 fn read_command(
     reader: &mut BitReader<'_>,
     command_code: &PrefixCode,
+    known_non_single: bool,
 ) -> Result<Command, DecompressError> {
-    let code = usize::from(command_code.decode(reader)? & 0x0fff);
+    let code = usize::from(decode_prefix_symbol(reader, command_code, known_non_single)? & 0x0fff);
     debug_assert!(code < COMMAND_ALPHABET_SIZE);
     let prefix = COMMAND_PREFIXES[code];
     let insert_extra_bits = prefix.insert_extra_bits();
@@ -866,6 +881,19 @@ fn read_command(
         reuse_last_distance: prefix.reuse_last_distance(),
         distance_context: prefix.distance_context(),
     })
+}
+
+#[inline(always)]
+fn decode_prefix_symbol(
+    reader: &mut BitReader<'_>,
+    code: &PrefixCode,
+    known_non_single: bool,
+) -> Result<u16, DecompressError> {
+    if known_non_single {
+        code.decode_non_single(reader)
+    } else {
+        code.decode(reader)
+    }
 }
 
 #[cfg(test)]
