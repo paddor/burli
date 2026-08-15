@@ -52,6 +52,7 @@ pub(super) const Q5_LOW_COMPRESS_SPARSE_STRIDE: usize = 1;
 
 pub(super) const Q1_DEFAULT_U16_SKIP_START: usize = 61;
 pub(super) const Q1_MEDIUM_U16_SKIP_START: usize = 72;
+pub(super) const Q1_FAST_U16_SKIP_START: usize = 96;
 pub(super) const Q1_FASTER_U16_SKIP_START: usize = 128;
 pub(super) const Q1_DEFAULT_U32_SKIP_START: usize = 32;
 pub(super) const Q1_MEDIUM_U32_SKIP_START: usize = 64;

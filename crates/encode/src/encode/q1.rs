@@ -794,6 +794,14 @@ pub(super) fn collect_with_32k_u16_skip<'a>(
     workspace.collect_with_32k_u16_skip(input, max_backward_distance)
 }
 
+pub(super) fn collect_with_64k_u16_skip<'a>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &'a mut Workspace,
+) -> &'a Batch {
+    workspace.collect_with_64k_u16_skip(input, max_backward_distance)
+}
+
 pub(super) fn collect_with_32k_faster_skip<'a>(
     input: &[u8],
     max_backward_distance: usize,
@@ -1309,6 +1317,23 @@ impl Workspace {
         }
 
         collect_with_stack_u16_table::<15, 32768, { tune::Q1_FASTER_U16_SKIP_START }, true>(
+            &mut self.batch,
+            input,
+            max_backward_distance,
+        );
+        &self.batch
+    }
+
+    #[allow(clippy::large_stack_arrays)]
+    fn collect_with_64k_u16_skip(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
+        self.reset(input.len());
+
+        if input.len() < INPUT_MARGIN_BYTES {
+            self.push_literals(input, 0, input.len());
+            return &self.batch;
+        }
+
+        collect_with_stack_u16_table::<16, 65536, { tune::Q1_FAST_U16_SKIP_START }, true>(
             &mut self.batch,
             input,
             max_backward_distance,

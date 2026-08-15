@@ -35,8 +35,8 @@ JavaScript
 <rect x="110" y="266" width="22" height="18" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="110" y="252" width="22" height="14" opacity="1" fill="#C45050" stroke="none"/>
 <rect x="110" y="234" width="22" height="18" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="135" y="267" width="22" height="17" opacity="1" fill="#F472B6" stroke="none"/>
-<rect x="135" y="252" width="22" height="15" opacity="1" fill="#C05A92" stroke="none"/>
+<rect x="135" y="266" width="22" height="18" opacity="1" fill="#F472B6" stroke="none"/>
+<rect x="135" y="252" width="22" height="14" opacity="1" fill="#C05A92" stroke="none"/>
 <rect x="135" y="234" width="22" height="18" opacity="1" fill="#F472B6" stroke="none"/>
 <rect x="160" y="226" width="22" height="58" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="160" y="209" width="22" height="17" opacity="1" fill="#3AAF60" stroke="none"/>
@@ -143,7 +143,7 @@ CSS
 <rect x="110" y="514" width="22" height="17" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="135" y="543" width="22" height="18" opacity="1" fill="#F472B6" stroke="none"/>
 <rect x="135" y="531" width="22" height="12" opacity="1" fill="#C05A92" stroke="none"/>
-<rect x="135" y="514" width="22" height="17" opacity="1" fill="#F472B6" stroke="none"/>
+<rect x="135" y="513" width="22" height="18" opacity="1" fill="#F472B6" stroke="none"/>
 <rect x="160" y="495" width="22" height="66" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="160" y="480" width="22" height="15" opacity="1" fill="#3AAF60" stroke="none"/>
 <rect x="160" y="433" width="22" height="47" opacity="1" fill="#4ADE80" stroke="none"/>
@@ -245,8 +245,8 @@ Data/docs
 <rect x="85" y="815" width="22" height="10" opacity="1" fill="#1D4ED8" stroke="none"/>
 <rect x="85" y="804" width="22" height="11" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="110" y="823" width="22" height="15" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="110" y="812" width="22" height="11" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="110" y="797" width="22" height="15" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="110" y="811" width="22" height="12" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="110" y="797" width="22" height="14" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="135" y="823" width="22" height="15" opacity="1" fill="#F472B6" stroke="none"/>
 <rect x="135" y="812" width="22" height="11" opacity="1" fill="#C05A92" stroke="none"/>
 <rect x="135" y="797" width="22" height="15" opacity="1" fill="#F472B6" stroke="none"/>

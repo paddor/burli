@@ -1052,6 +1052,7 @@ enum Q0CollectRoute {
     MediumSkip,
     K64FastSkip,
     K64MediumSkip,
+    K64U16Skip,
     K32U16Skip,
     K32DenseSkip,
     K32FasterSkip,
@@ -1082,6 +1083,7 @@ fn q0_collect_route(input_len: usize, sample: Option<sparse::Sample>) -> Q0Colle
         _ if input_len <= tune::Q0_COLLECT_SAMPLED_MAX_INPUT && q0_low_dup_sample(sample) => {
             Q0CollectRoute::K64MediumSkip
         }
+        _ if input_len <= 64 * 1024 => Q0CollectRoute::K64U16Skip,
         _ if input_len <= tune::Q0_COLLECT_SAMPLED_MAX_INPUT => Q0CollectRoute::K64FastSkip,
         tune::Q0_COLLECT_HUGE_MIN_INPUT.. => Q0CollectRoute::K64MediumSkip,
         _ => Q0CollectRoute::K32FasterSkip,
@@ -1147,6 +1149,9 @@ fn q0_collect_by_size<'a>(
         }
         Q0CollectRoute::K64MediumSkip => {
             q1::collect_with_64k_medium_skip(input, max_backward_distance, &mut workspace.q1)
+        }
+        Q0CollectRoute::K64U16Skip => {
+            q1::collect_with_64k_u16_skip(input, max_backward_distance, &mut workspace.q1)
         }
         Q0CollectRoute::K32U16Skip => {
             q1::collect_with_32k_u16_skip(input, max_backward_distance, &mut workspace.q1)
