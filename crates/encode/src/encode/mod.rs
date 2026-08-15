@@ -393,7 +393,7 @@ impl EncoderPlan {
                         local_max_backward_distance,
                         sparse_decision.sample,
                         workspace,
-                    )?;
+                    );
                     batch.has_copy()
                 };
                 if !has_copy {
@@ -401,7 +401,7 @@ impl EncoderPlan {
                 }
                 match q0_write_route(input.len(), sparse_decision.sample) {
                     Q0WriteRoute::Standard => {
-                        return q1::write(
+                        return q1::write_q0(
                             writer,
                             input,
                             input.len(),
@@ -410,7 +410,7 @@ impl EncoderPlan {
                         );
                     }
                     Q0WriteRoute::BalancedCommand => {
-                        return q1::write_balanced_command_prefixes(
+                        return q1::write_q0_balanced_command_prefixes(
                             writer,
                             input,
                             input.len(),
@@ -419,7 +419,7 @@ impl EncoderPlan {
                         );
                     }
                     Q0WriteRoute::FastCommand => {
-                        return q1::write_fast_command_prefixes(
+                        return q1::write_q0_fast_command_prefixes(
                             writer,
                             input,
                             input.len(),
@@ -428,7 +428,7 @@ impl EncoderPlan {
                         );
                     }
                     Q0WriteRoute::BalancedLiteralCommand => {
-                        return q1::write_balanced_literal_command_prefixes(
+                        return q1::write_q0_balanced_literal_command_prefixes(
                             writer,
                             input,
                             input.len(),
@@ -436,7 +436,7 @@ impl EncoderPlan {
                         );
                     }
                     Q0WriteRoute::PackedLiteralBody => {
-                        return q1::write_packed_literal_body(
+                        return q1::write_q0_packed_literal_body(
                             writer,
                             input,
                             input.len(),
@@ -1148,6 +1148,7 @@ fn q0_collect_route(input_len: usize, sample: Option<sparse::Sample>) -> Q0Colle
 fn q0_write_route(input_len: usize, sample: Option<sparse::Sample>) -> Q0WriteRoute {
     match input_len {
         1025..=2048 => Q0WriteRoute::BalancedLiteralCommand,
+        2049..=8192 => Q0WriteRoute::PackedLiteralBody,
         8193..=16_384 => Q0WriteRoute::FastCommand,
         32_769..=131_072 if q0_dense_sample(sample) => Q0WriteRoute::PackedLiteralBody,
         131_073.. if !q0_dense_sample(sample) => Q0WriteRoute::BalancedCommand,
@@ -1168,54 +1169,38 @@ fn q0_collect_by_size<'a>(
     max_backward_distance: usize,
     sample: Option<sparse::Sample>,
     workspace: &'a mut Workspace,
-) -> Result<&'a q1::Batch, CompressError> {
+) -> &'a q1::Batch {
     match q0_collect_route(input.len(), sample) {
-        Q0CollectRoute::FastNoLastDistance => q1::collect_fast_skip_without_last_distance_probe(
-            input,
-            max_backward_distance,
-            &mut workspace.q1,
-        ),
+        Q0CollectRoute::FastNoLastDistance => {
+            q1::collect_q0_2k_fast_no_last(input, max_backward_distance, &mut workspace.q1)
+        }
         Q0CollectRoute::NoLastDistance => {
-            q1::collect_without_last_distance_probe(input, max_backward_distance, &mut workspace.q1)
+            q1::collect_q0_4k_no_last(input, max_backward_distance, &mut workspace.q1)
         }
         Q0CollectRoute::DefaultSkip => {
-            q1::collect_q0_default_skip(input, max_backward_distance, &mut workspace.q1)
+            q1::collect_q0_8k_default(input, max_backward_distance, &mut workspace.q1)
         }
         Q0CollectRoute::MediumNoLastDistance => {
-            q1::collect_medium_skip_without_last_distance_probe(
-                input,
-                max_backward_distance,
-                &mut workspace.q1,
-            )
+            q1::collect_q0_16k_medium_no_last(input, max_backward_distance, &mut workspace.q1)
         }
         Q0CollectRoute::MediumSkip => {
-            q1::collect_medium_skip(input, max_backward_distance, &mut workspace.q1)
+            q1::collect_q0_32k_medium(input, max_backward_distance, &mut workspace.q1)
         }
-        Q0CollectRoute::K64FastSkip => Ok(q1::collect_with_64k_fast_skip(
-            input,
-            max_backward_distance,
-            &mut workspace.q1,
-        )),
-        Q0CollectRoute::K64MediumSkip => Ok(q1::collect_with_64k_medium_skip(
-            input,
-            max_backward_distance,
-            &mut workspace.q1,
-        )),
-        Q0CollectRoute::K32U16Skip => Ok(q1::collect_with_32k_u16_skip(
-            input,
-            max_backward_distance,
-            &mut workspace.q1,
-        )),
-        Q0CollectRoute::K32DenseSkip => Ok(q1::collect_with_32k_dense_skip(
-            input,
-            max_backward_distance,
-            &mut workspace.q1,
-        )),
-        Q0CollectRoute::K32FasterSkip => Ok(q1::collect_with_32k_faster_skip(
-            input,
-            max_backward_distance,
-            &mut workspace.q1,
-        )),
+        Q0CollectRoute::K64FastSkip => {
+            q1::collect_with_64k_fast_skip(input, max_backward_distance, &mut workspace.q1)
+        }
+        Q0CollectRoute::K64MediumSkip => {
+            q1::collect_with_64k_medium_skip(input, max_backward_distance, &mut workspace.q1)
+        }
+        Q0CollectRoute::K32U16Skip => {
+            q1::collect_with_32k_u16_skip(input, max_backward_distance, &mut workspace.q1)
+        }
+        Q0CollectRoute::K32DenseSkip => {
+            q1::collect_with_32k_dense_skip(input, max_backward_distance, &mut workspace.q1)
+        }
+        Q0CollectRoute::K32FasterSkip => {
+            q1::collect_with_32k_faster_skip(input, max_backward_distance, &mut workspace.q1)
+        }
     }
 }
 
@@ -3759,7 +3744,7 @@ mod tests {
             q0_write_route(2048, None),
             Q0WriteRoute::BalancedLiteralCommand
         );
-        assert_eq!(q0_write_route(4096, None), Q0WriteRoute::Standard);
+        assert_eq!(q0_write_route(4096, None), Q0WriteRoute::PackedLiteralBody);
         assert_eq!(q0_write_route(16 * 1024, None), Q0WriteRoute::FastCommand);
         assert_eq!(
             q0_write_route(128 * 1024, Some(sparse_sample(583))),
