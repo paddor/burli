@@ -499,7 +499,11 @@ impl EncoderPlan {
                             &mut workspace.q1,
                         )?
                     } else {
-                        q1::collect(input, local_max_backward_distance, &mut workspace.q1)?
+                        q1::collect_q0_default_skip(
+                            input,
+                            local_max_backward_distance,
+                            &mut workspace.q1,
+                        )?
                     };
                     batch.has_copy()
                 };

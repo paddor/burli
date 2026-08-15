@@ -658,6 +658,14 @@ pub(super) fn collect_with_64k_medium_skip<'a>(
     workspace.collect_with_64k_medium_skip(input, max_backward_distance)
 }
 
+pub(super) fn collect_q0_default_skip<'a>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &'a mut Workspace,
+) -> Result<&'a Batch, CompressError> {
+    workspace.collect_q0_default_skip(input, max_backward_distance)
+}
+
 pub(super) fn collect_with_64k_sparse_skip<'a>(
     input: &[u8],
     max_backward_distance: usize,
@@ -1063,6 +1071,51 @@ impl Workspace {
         self.collect(input, max_backward_distance)
     }
 
+    fn collect_q0_default_skip(
+        &mut self,
+        input: &[u8],
+        max_backward_distance: usize,
+    ) -> Result<&Batch, CompressError> {
+        self.reset(input.len());
+
+        if input.len() < INPUT_MARGIN_BYTES {
+            self.push_literals(input, 0, input.len());
+            return Ok(&self.batch);
+        }
+
+        let table_size = table_size(input.len());
+        if self.collect_stack_u16_for_size::<DEFAULT_U16_SKIP_START>(
+            input,
+            max_backward_distance,
+            table_size,
+        ) {
+            return Ok(&self.batch);
+        }
+
+        if self.table.len() != table_size {
+            self.table.resize(table_size, 0);
+        } else {
+            self.table.fill(0);
+        }
+
+        match table_size.trailing_zeros() as usize {
+            16 => collect_with_u32_table_m6::<16, Q0_U32_SKIP_START, true, true>(
+                &mut self.batch,
+                input,
+                max_backward_distance,
+                &mut self.table,
+            ),
+            17 => collect_with_u32_table_m6::<17, Q0_U32_SKIP_START, true, true>(
+                &mut self.batch,
+                input,
+                max_backward_distance,
+                &mut self.table,
+            ),
+            _ => return self.collect(input, max_backward_distance),
+        }
+        Ok(&self.batch)
+    }
+
     fn collect_fast_skip_without_last_distance_probe(
         &mut self,
         input: &[u8],
@@ -1452,6 +1505,7 @@ const MEDIUM_U16_SKIP_START: usize = 72;
 const FAST_U16_SKIP_START: usize = 96;
 const FASTER_U16_SKIP_START: usize = 128;
 const DEFAULT_U32_SKIP_START: usize = 32;
+const Q0_U32_SKIP_START: usize = 40;
 const SPARSE_U32_SKIP_START: usize = 40;
 const MEDIUM_U32_SKIP_START: usize = 64;
 const JSON_U32_SKIP_START: usize = 80;
