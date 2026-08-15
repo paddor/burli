@@ -262,21 +262,15 @@ impl Config {
             codecs: vec![
                 codec("google-brotli", google_brotli_label(), 0x2563eb, 0x1d4ed8),
                 codec("burli", "burli", 0xf87171, 0xc45050),
-                // codec("burli paranoid", "burli paranoid", 0xf472b6, 0xc05a92),
+                codec("burli paranoid", "burli paranoid", 0xf472b6, 0xc05a92),
                 codec("rust-brotli", "rust-brotli 8.0.4", 0x4ade80, 0x3aaf60),
             ],
-            scatter_codecs: vec!["google-brotli", "burli", "rust-brotli"],
-            // scatter_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
-            summary_codecs: vec!["google-brotli", "burli", "rust-brotli"],
-            // summary_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
-            pipeline_codecs: vec!["google-brotli", "burli", "rust-brotli"],
-            // pipeline_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
-            matrix_codecs: vec!["google-brotli", "burli", "rust-brotli"],
-            // matrix_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            scatter_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            summary_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            pipeline_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            matrix_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
             small_codecs: vec!["google-brotli", "burli", "rust-brotli"],
-            // small_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
-            small_decode_codecs: vec!["google-brotli", "burli", "rust-brotli"],
-            // small_decode_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            small_decode_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
         }
     }
 
@@ -1054,19 +1048,15 @@ fn draw_marker_legend(
         return Ok(1);
     }
 
-    let last_width = *widths.last().unwrap_or(&0.0);
-    let max_step = (max_width - last_width) / (styles.len() - 1) as f64;
-    let min_step = widths
-        .iter()
-        .take(styles.len() - 1)
-        .copied()
-        .fold(0.0, f64::max)
-        + LEGEND_ITEM_GAP;
-    if min_step <= max_step {
-        let total_width = (styles.len() - 1) as f64 * min_step + last_width;
+    let min_total = widths.iter().sum::<f64>() + (styles.len() - 1) as f64 * LEGEND_ITEM_GAP;
+    if min_total <= max_width {
+        let gap = (max_width - widths.iter().sum::<f64>()) / (styles.len() - 1) as f64;
+        let total_width = widths.iter().sum::<f64>() + gap * (styles.len() - 1) as f64;
         let start = mid_x - total_width / 2.0;
-        for (i, style) in styles.iter().enumerate() {
-            draw_marker_legend_item(area, style, start + i as f64 * min_step, y)?;
+        let mut x = start;
+        for (style, width) in styles.iter().zip(widths) {
+            draw_marker_legend_item(area, style, x, y)?;
+            x += width + gap;
         }
         return Ok(1);
     }

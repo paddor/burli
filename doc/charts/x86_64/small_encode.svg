@@ -1174,16 +1174,16 @@ q5
 <text x="20" y="446" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="9.67741935483871" opacity="1" fill="#E6EDF3" font-weight="bold" transform="rotate(270, 20, 446)">
 encode MB/s (log scale)
 </text>
-<rect x="186" y="875" width="12" height="12" opacity="1" fill="#2563EB" stroke="none"/>
-<text x="204" y="881" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
+<rect x="25" y="875" width="12" height="12" opacity="1" fill="#2563EB" stroke="none"/>
+<text x="43" y="881" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 Google Brotli C 1.1.0
 </text>
-<rect x="351" y="875" width="12" height="12" opacity="1" fill="#F87171" stroke="none"/>
-<text x="369" y="881" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
+<rect x="395" y="875" width="12" height="12" opacity="1" fill="#F87171" stroke="none"/>
+<text x="413" y="881" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 burli
 </text>
-<rect x="517" y="875" width="12" height="12" opacity="1" fill="#4ADE80" stroke="none"/>
-<text x="535" y="881" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
+<rect x="678" y="875" width="12" height="12" opacity="1" fill="#4ADE80" stroke="none"/>
+<text x="696" y="881" dy="0.5ex" text-anchor="start" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3">
 rust-brotli 8.0.4
 </text>
 <polyline fill="none" opacity="1" stroke="#7D8590" stroke-width="2" points="235,919 255,919 "/>
