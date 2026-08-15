@@ -221,6 +221,7 @@ fn literal_only(input_len: usize) -> Vec<Token> {
     }]
 }
 
+#[inline(always)]
 fn find_match<const TABLE_BITS: usize, const HASH_LEN: usize, const SKIP_DICT_AFTER_MATCH: bool>(
     input: &[u8],
     table: &mut [u32],
@@ -236,10 +237,6 @@ fn find_match<const TABLE_BITS: usize, const HASH_LEN: usize, const SKIP_DICT_AF
     let mut best_score = params.min_score;
     let mut best_len = best_check;
     let mut out = None;
-    let dictionary_base = params
-        .input_base
-        .saturating_add(pos)
-        .min(params.max_backward_distance);
 
     if pos >= params.last_distance {
         let previous = pos - params.last_distance;
@@ -305,6 +302,10 @@ fn find_match<const TABLE_BITS: usize, const HASH_LEN: usize, const SKIP_DICT_AF
     if SKIP_DICT_AFTER_MATCH && out.is_some() {
         out
     } else {
+        let dictionary_base = params
+            .input_base
+            .saturating_add(pos)
+            .min(params.max_backward_distance);
         find_static_dictionary_identity(input, pos, max_len, dictionary_base, best_score).or(out)
     }
 }
