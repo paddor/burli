@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: cargo test (${{ matrix.os }}, ${{ matrix.toolchain }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        toolchain: [stable, "1.89"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+      - name: install C Brotli libs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbrotli-dev
+      - name: install C Brotli libs (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install brotli
+          prefix="$(brew --prefix brotli)"
+          echo "CPATH=$prefix/include:${CPATH:-}" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=$prefix/lib:${LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$prefix/lib:${DYLD_FALLBACK_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+      - run: cargo test --workspace --all-targets
+      - run: cargo test -p burli --no-default-features --features alloc
+
+  paranoid:
+    name: paranoid (pure safe Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: install C Brotli libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbrotli-dev
+      - run: cargo test --workspace --all-targets --features paranoid
+      - run: cargo clippy --workspace --all-targets --features paranoid -- -D warnings
+
+  lint:
+    name: fmt + clippy + docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: install C Brotli libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libbrotli-dev
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+
+  ci-success:
+    name: CI success
+    needs: [test, paranoid, lint]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: check all jobs passed
+        run: |
+          if [[ '${{ toJSON(needs.*.result) }}' =~ (failure|cancelled) ]]; then
+            exit 1
+          fi
