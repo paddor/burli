@@ -622,6 +622,18 @@ impl EncoderPlan {
                         local_max_backward_distance,
                         &mut workspace.q2,
                     )
+                } else if q1_no_cross_fast_writer_is_likely_safe(input) {
+                    let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
+                    if !batch.has_copy() {
+                        return write_compressed_literal_meta_block(writer, input);
+                    }
+                    return q1::write(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
                 } else {
                     q2::collect_without_dictionary_no_lazy_sparse_tail(
                         input,
@@ -1276,6 +1288,47 @@ fn q1_large_markup_lazy_is_likely_safe(input: &[u8]) -> bool {
         gt_count += usize::from(byte == b'>');
     }
     lt_count >= 8 && gt_count >= 8
+}
+
+fn q1_no_cross_fast_writer_is_likely_safe(input: &[u8]) -> bool {
+    let sample = &input[..input.len().min(64 * 1024)];
+    if sample.is_empty() {
+        return false;
+    }
+
+    let mut whitespace = 0_usize;
+    let mut ascii_printable = 0_usize;
+    let mut high = 0_usize;
+    let mut zero = 0_usize;
+    let mut alpha = 0_usize;
+    let mut angle = 0_usize;
+    for &byte in sample {
+        whitespace += usize::from(matches!(byte, b' ' | b'\n' | b'\r' | b'\t'));
+        ascii_printable +=
+            usize::from((32..=126).contains(&byte) || matches!(byte, b'\n' | b'\r' | b'\t'));
+        high += usize::from(byte >= 128);
+        zero += usize::from(byte == 0);
+        alpha += usize::from(byte.is_ascii_alphabetic());
+        angle += usize::from(matches!(byte, b'<' | b'>'));
+    }
+
+    let len = sample.len();
+    if zero * 100 >= len * 25 && high * 100 < len * 2 {
+        return false;
+    }
+    if ascii_printable * 100 >= len * 98 && whitespace * 100 >= len * 18 {
+        return false;
+    }
+    if ascii_printable * 100 >= len * 85
+        && high * 100 < len
+        && alpha * 100 >= len * 50
+        && whitespace * 100 >= len * 10
+        && angle * 100 < len * 5
+    {
+        return false;
+    }
+
+    true
 }
 
 fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
@@ -3681,6 +3734,14 @@ mod tests {
             b"<a><b><c><d><e><f><g><h></h></g></f></e></d></c></b></a>"
         ));
         assert!(!q1_large_markup_lazy_is_likely_safe(&script_4k));
+        let prose_like =
+            b"Many words in a sentence with enough spaces to look like prose. ".repeat(1200);
+        let numeric_table_like = b"1 2 3 4 5 6 7 8 9 0                         \n".repeat(1600);
+        let dictionary_like = b"word<entry>definition</entry> ".repeat(2600);
+        assert!(!q1_no_cross_fast_writer_is_likely_safe(&prose_like));
+        assert!(!q1_no_cross_fast_writer_is_likely_safe(&numeric_table_like));
+        assert!(q1_no_cross_fast_writer_is_likely_safe(&sparse_binary));
+        assert!(q1_no_cross_fast_writer_is_likely_safe(&dictionary_like));
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
