@@ -948,8 +948,10 @@ fn write_token_batches_with_symbol_limit(
 ) -> Result<(), CompressError> {
     let mut start = 0;
     while start < tokens.len() {
-        let end = q2_token_batch_end_with_symbol_limit(&tokens[start..], symbol_limit) + start;
-        write_token_batch_q2(writer, input, &tokens[start..end])?;
+        let (local_end, block_len) =
+            q2_token_batch_span_with_symbol_limit(&tokens[start..], symbol_limit);
+        let end = local_end + start;
+        write_token_batch_q2_with_len(writer, input, &tokens[start..end], block_len)?;
         start = end;
     }
     Ok(())
@@ -979,16 +981,22 @@ fn write_regular_token_batches_with_symbol_limit(
 }
 
 fn q2_token_batch_end_with_symbol_limit(tokens: &[Token], symbol_limit: usize) -> usize {
+    q2_token_batch_span_with_symbol_limit(tokens, symbol_limit).0
+}
+
+fn q2_token_batch_span_with_symbol_limit(tokens: &[Token], symbol_limit: usize) -> (usize, usize) {
     let mut symbols = 0_usize;
+    let mut block_len = 0_usize;
 
     for (index, &token) in tokens.iter().enumerate() {
         if index != 0 && symbols >= symbol_limit {
-            return index;
+            return (index, block_len);
         }
         symbols = symbols.saturating_add(token.insert_len).saturating_add(1);
+        block_len = block_len.saturating_add(token.block_len());
     }
 
-    tokens.len()
+    (tokens.len(), block_len)
 }
 
 fn push_unique(symbols: &mut Vec<u16>, symbol: u16) {
@@ -1409,12 +1417,12 @@ fn write_token_batch(
     write_token_batch_with_len(writer, input, tokens, block_len)
 }
 
-fn write_token_batch_q2(
+fn write_token_batch_q2_with_len(
     writer: &mut BitWriter,
     input: &[u8],
     tokens: &[Token],
+    block_len: usize,
 ) -> Result<(), CompressError> {
-    let block_len = tokens.iter().map(|token| token.block_len()).sum::<usize>();
     if tokens.len() <= 1024 {
         return write_static_entropy_token_batch(writer, input, tokens, block_len);
     }
@@ -1740,6 +1748,7 @@ struct PreparedToken {
 }
 
 impl PreparedToken {
+    #[inline(always)]
     fn new(token: Token) -> Result<Self, CompressError> {
         let insert = insert_length_code(token.insert_len)?;
         let copy = if token.is_copy() {
