@@ -172,6 +172,10 @@ fn decode_meta_block_body(
     } else {
         None
     };
+    let literal_shape = LiteralDecodeShape {
+        single_block_max_bits: single_literal_block_max_bits,
+        uniform_context_mode: uniform_literal_context_mode(header),
+    };
     let no_postfix_distances = header.npostfix == 0 && header.ndirect == 0;
 
     while output.len() < needed {
@@ -205,7 +209,7 @@ fn decode_meta_block_body(
                     command.insert_len,
                     literal_codes,
                     header,
-                    single_literal_block_max_bits,
+                    literal_shape,
                 )?;
             }
         }
@@ -274,6 +278,12 @@ struct CopyRequest {
     distance: usize,
     len: usize,
     push_distance: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LiteralDecodeShape {
+    single_block_max_bits: Option<usize>,
+    uniform_context_mode: Option<u8>,
 }
 
 fn copy_from_distance(
@@ -498,6 +508,11 @@ impl CompressedHeader {
     fn distance_tree_count(&self) -> usize {
         self.distance_context_map.iter().copied().max().unwrap_or(0) + 1
     }
+}
+
+fn uniform_literal_context_mode(header: &CompressedHeader) -> Option<u8> {
+    let (&first, rest) = header.context_modes.split_first()?;
+    rest.iter().all(|&mode| mode == first).then_some(first)
 }
 
 fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, DecompressError> {
@@ -952,7 +967,7 @@ fn copy_literals(
     count: usize,
     literal_codes: &[PrefixCode],
     header: &mut CompressedHeader,
-    single_literal_block_max_bits: Option<usize>,
+    shape: LiteralDecodeShape,
 ) -> Result<(), DecompressError> {
     let produced = output.len();
     if produced > needed || count > needed - produced {
@@ -972,7 +987,18 @@ fn copy_literals(
             literal_codes,
             &header.literal_context_map[..64],
             header.context_modes[0],
-            single_literal_block_max_bits.unwrap_or(0),
+            shape.single_block_max_bits.unwrap_or(0),
+        );
+    }
+
+    if let Some(mode) = shape.uniform_context_mode {
+        return copy_literals_multi_block_uniform_mode(
+            reader,
+            output,
+            count,
+            literal_codes,
+            header,
+            mode,
         );
     }
 
@@ -985,6 +1011,69 @@ fn copy_literals(
         header.literals.consume_one_multi();
         output.push(literal);
         previous = (literal, previous.0);
+    }
+    Ok(())
+}
+
+fn copy_literals_multi_block_uniform_mode(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    count: usize,
+    literal_codes: &[PrefixCode],
+    header: &mut CompressedHeader,
+    mode: u8,
+) -> Result<(), DecompressError> {
+    let mut previous = previous_literal_bytes(output);
+    match mode {
+        0 => {
+            for _ in 0..count {
+                let literal_block_type = header.literals.current_type_multi(reader)?;
+                let context = usize::from(previous.0 & 0x3f);
+                let tree_index = header.literal_context_map[literal_block_type * 64 + context];
+                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                header.literals.consume_one_multi();
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        1 => {
+            for _ in 0..count {
+                let literal_block_type = header.literals.current_type_multi(reader)?;
+                let context = usize::from(previous.0 >> 2);
+                let tree_index = header.literal_context_map[literal_block_type * 64 + context];
+                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                header.literals.consume_one_multi();
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        2 => {
+            for _ in 0..count {
+                let literal_block_type = header.literals.current_type_multi(reader)?;
+                let context = crate::context_lookup::CONTEXT_PAIR_LOOKUP[0]
+                    [(usize::from(previous.0) << 8) | usize::from(previous.1)];
+                let tree_index =
+                    header.literal_context_map[literal_block_type * 64 + usize::from(context)];
+                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                header.literals.consume_one_multi();
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        3 => {
+            for _ in 0..count {
+                let literal_block_type = header.literals.current_type_multi(reader)?;
+                let context = crate::context_lookup::CONTEXT_PAIR_LOOKUP[1]
+                    [(usize::from(previous.0) << 8) | usize::from(previous.1)];
+                let tree_index =
+                    header.literal_context_map[literal_block_type * 64 + usize::from(context)];
+                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                header.literals.consume_one_multi();
+                output.push(literal);
+                previous = (literal, previous.0);
+            }
+        }
+        _ => unreachable!("Brotli literal context mode is a 2-bit field"),
     }
     Ok(())
 }

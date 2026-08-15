@@ -42,7 +42,7 @@ jquery
 <rect x="179" y="283" width="26" height="2" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="208" y="285" width="26" height="17" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="208" y="284" width="26" height="1" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="208" y="282" width="26" height="2" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="208" y="281" width="26" height="3" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="237" y="282" width="26" height="20" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="237" y="280" width="26" height="2" opacity="1" fill="#3AAF60" stroke="none"/>
 <rect x="237" y="278" width="26" height="2" opacity="1" fill="#4ADE80" stroke="none"/>
@@ -174,8 +174,8 @@ vue
 <rect x="288" y="609" width="27" height="0" opacity="1" fill="#1D4ED8" stroke="none"/>
 <rect x="288" y="609" width="27" height="0" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="318" y="610" width="27" height="2" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="318" y="609" width="27" height="1" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="318" y="609" width="27" height="0" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="318" y="610" width="27" height="0" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="318" y="610" width="27" height="0" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="348" y="608" width="27" height="4" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="348" y="608" width="27" height="0" opacity="1" fill="#3AAF60" stroke="none"/>
 <rect x="348" y="608" width="27" height="0" opacity="1" fill="#4ADE80" stroke="none"/>
@@ -218,9 +218,9 @@ mdn-debug
 <rect x="622" y="580" width="26" height="32" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="622" y="577" width="26" height="3" opacity="1" fill="#1D4ED8" stroke="none"/>
 <rect x="622" y="574" width="26" height="3" opacity="1" fill="#2563EB" stroke="none"/>
-<rect x="651" y="578" width="26" height="34" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="651" y="575" width="26" height="3" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="651" y="571" width="26" height="4" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="651" y="579" width="26" height="33" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="651" y="576" width="26" height="3" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="651" y="571" width="26" height="5" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="680" y="566" width="26" height="46" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="680" y="563" width="26" height="3" opacity="1" fill="#3AAF60" stroke="none"/>
 <rect x="680" y="555" width="26" height="8" opacity="1" fill="#4ADE80" stroke="none"/>
@@ -233,9 +233,9 @@ mdn-doc
 <rect x="731" y="593" width="27" height="19" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="731" y="592" width="27" height="1" opacity="1" fill="#1D4ED8" stroke="none"/>
 <rect x="731" y="591" width="27" height="1" opacity="1" fill="#2563EB" stroke="none"/>
-<rect x="761" y="597" width="27" height="15" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="761" y="595" width="27" height="2" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="761" y="593" width="27" height="2" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="761" y="596" width="27" height="16" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="761" y="594" width="27" height="2" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="761" y="592" width="27" height="2" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="791" y="584" width="27" height="28" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="791" y="583" width="27" height="1" opacity="1" fill="#3AAF60" stroke="none"/>
 <rect x="791" y="581" width="27" height="2" opacity="1" fill="#4ADE80" stroke="none"/>
