@@ -592,6 +592,27 @@ impl EncoderPlan {
             }
 
             if !allow_cross_collector_shortcuts {
+                if matches!(
+                    q1_sparse_skip(input),
+                    Q1SparseSkip::Store | Q1SparseSkip::Moderate
+                ) {
+                    let batch = q1::collect_with_64k_sparse_skip(
+                        input,
+                        local_max_backward_distance,
+                        &mut workspace.q1,
+                    );
+                    if !batch.has_copy() {
+                        return write_compressed_literal_meta_block(writer, input);
+                    }
+                    return q1::write(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
+                }
+
                 let tokens = if q1_large_markup_lazy_is_likely_safe(input) {
                     q2::collect_without_dictionary_one_lazy(
                         input,
