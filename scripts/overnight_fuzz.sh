@@ -48,6 +48,7 @@ run_target() {
   start_epoch="$(date +%s)"
   status "START $target seconds=$seconds workers=$FUZZ_JOBS log=$log"
 
+  set +e
   (
     cd "$target_log_dir"
     cargo +nightly fuzz run \
@@ -65,6 +66,7 @@ run_target() {
       -artifact_prefix="$artifact_dir"
   ) >"$log" 2>&1
   rc=$?
+  set -e
 
   end_iso="$(stamp)"
   end_epoch="$(date +%s)"
@@ -99,7 +101,9 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     if [ "$remaining" -lt "$seconds" ]; then
       seconds="$remaining"
     fi
-    run_target "$target" "$seconds"
+    if ! run_target "$target" "$seconds"; then
+      exit 1
+    fi
   done
 done
 
