@@ -558,13 +558,6 @@ impl EncoderPlan {
                         local_max_backward_distance,
                         &mut workspace.q1,
                     ),
-                    Q1SparseSkip::None if q1_medium_64k_table_is_likely_safe(input) => {
-                        q1::collect_with_64k_table(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )
-                    }
                     Q1SparseSkip::None => {
                         q1::collect(input, local_max_backward_distance, &mut workspace.q1)?
                     }
@@ -1116,10 +1109,6 @@ fn q0_sample_hash6<const TABLE_BITS: usize>(word: u64) -> usize {
 fn q0_is_match6(input: &[u8], previous: usize, pos: usize) -> bool {
     let diff = read_u64_le(input, previous) ^ read_u64_le(input, pos);
     diff.trailing_zeros() >= 48
-}
-
-fn q1_medium_64k_table_is_likely_safe(input: &[u8]) -> bool {
-    input.len() >= 64 * 1024 && input.len() <= 320 * 1024
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3573,17 +3562,6 @@ mod tests {
         assert!(!q0_small_license_js_fast_command_prefix_is_likely_safe(
             &css_2k[..2048]
         ));
-    }
-
-    #[test]
-    fn q1_medium_64k_table_guard_is_narrow() {
-        assert!(!q1_medium_64k_table_is_likely_safe(&vec![0; 64 * 1024 - 1]));
-        assert!(q1_medium_64k_table_is_likely_safe(&vec![0; 64 * 1024]));
-        assert!(q1_medium_64k_table_is_likely_safe(&vec![0; 320 * 1024]));
-        assert!(!q1_medium_64k_table_is_likely_safe(&vec![
-            0;
-            320 * 1024 + 1
-        ]));
     }
 
     #[test]
