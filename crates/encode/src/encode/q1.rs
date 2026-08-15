@@ -674,6 +674,14 @@ pub(super) fn collect_with_64k_sparse_skip<'a>(
     workspace.collect_with_64k_sparse_skip(input, max_backward_distance)
 }
 
+pub(super) fn collect_with_128k_default_skip<'a>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &'a mut Workspace,
+) -> &'a Batch {
+    workspace.collect_with_128k_default_skip(input, max_backward_distance)
+}
+
 pub(super) fn collect_with_32k_json_skip<'a>(
     input: &[u8],
     max_backward_distance: usize,
@@ -1285,6 +1293,33 @@ impl Workspace {
             input,
             max_backward_distance,
             &mut table,
+        );
+        &self.batch
+    }
+
+    fn collect_with_128k_default_skip(
+        &mut self,
+        input: &[u8],
+        max_backward_distance: usize,
+    ) -> &Batch {
+        self.reset(input.len());
+
+        if input.len() < INPUT_MARGIN_BYTES {
+            self.push_literals(input, 0, input.len());
+            return &self.batch;
+        }
+
+        const TABLE_SIZE: usize = 1 << 17;
+        if self.table.len() != TABLE_SIZE {
+            self.table.resize(TABLE_SIZE, 0);
+        } else {
+            self.table.fill(0);
+        }
+        collect_with_u32_table_m6::<17, DEFAULT_U32_SKIP_START, true, true>(
+            &mut self.batch,
+            input,
+            max_backward_distance,
+            &mut self.table,
         );
         &self.batch
     }

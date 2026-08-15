@@ -596,7 +596,7 @@ impl EncoderPlan {
                     q1_sparse_skip(input),
                     Q1SparseSkip::Store | Q1SparseSkip::Moderate
                 ) {
-                    let batch = q1::collect_with_64k_sparse_skip(
+                    let batch = q1::collect_with_128k_default_skip(
                         input,
                         local_max_backward_distance,
                         &mut workspace.q1,
@@ -643,7 +643,7 @@ impl EncoderPlan {
                         if q1_sparse_store_block(input_base, allow_cross_collector_shortcuts) {
                             return crate::metablock::write_uncompressed_meta_block(writer, input);
                         }
-                        q1::collect_with_64k_sparse_skip(
+                        q1::collect_with_128k_default_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
