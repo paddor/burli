@@ -283,6 +283,7 @@ fn literal_only(input_len: usize) -> Vec<Token> {
     }]
 }
 
+#[inline(always)]
 fn find_match<const TABLE_BITS: usize, const BUCKET_SWEEP: usize>(
     input: &[u8],
     table: &mut [u32],
