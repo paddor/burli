@@ -458,6 +458,12 @@ impl EncoderPlan {
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
+                    } else if q0_small_license_js_u16_fast_skip_is_likely_safe(input) {
+                        q1::collect_fast_skip(
+                            input,
+                            local_max_backward_distance,
+                            &mut workspace.q1,
+                        )?
                     } else if q0_small_license_js_u16_medium_skip_is_likely_safe(input) {
                         q1::collect_medium_skip(
                             input,
@@ -1148,6 +1154,10 @@ fn q0_small_license_js_u16_medium_skip_is_likely_safe(input: &[u8]) -> bool {
     input.len() >= 16 * 1024 && input.len() <= 32 * 1024 && input.starts_with(b"/*!")
 }
 
+fn q0_small_license_js_u16_fast_skip_is_likely_safe(input: &[u8]) -> bool {
+    input.len() > 24 * 1024 && input.len() <= 32 * 1024 && input.starts_with(b"/*!")
+}
+
 fn q0_medium_license_js_64k_medium_skip_is_likely_safe(input: &[u8]) -> bool {
     input.len() > 32 * 1024 && input.len() <= 64 * 1024 && input.starts_with(b"/*!")
 }
@@ -1171,6 +1181,7 @@ fn q0_known_text_collect_route_is_likely_safe(input: &[u8]) -> bool {
         || q0_medium_license_comment_64k_table_is_likely_safe(input)
         || q0_small_json_32k_u16_table_is_likely_safe(input)
         || q0_medium_json_32k_table_is_likely_safe(input)
+        || q0_small_license_js_u16_fast_skip_is_likely_safe(input)
         || q0_small_license_js_u16_medium_skip_is_likely_safe(input)
         || q0_medium_license_js_64k_medium_skip_is_likely_safe(input)
         || q0_medium_css_64k_fast_skip_is_likely_safe(input)
@@ -3918,6 +3929,12 @@ mod tests {
             &script_4k.repeat(8)[..32 * 1024]
         ));
         assert!(q0_small_license_js_u16_medium_skip_is_likely_safe(
+            &script_4k.repeat(4)[..16 * 1024]
+        ));
+        assert!(q0_small_license_js_u16_fast_skip_is_likely_safe(
+            &script_4k.repeat(8)[..32 * 1024]
+        ));
+        assert!(!q0_small_license_js_u16_fast_skip_is_likely_safe(
             &script_4k.repeat(4)[..16 * 1024]
         ));
         assert!(q0_medium_license_js_64k_medium_skip_is_likely_safe(
