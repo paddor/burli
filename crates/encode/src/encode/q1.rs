@@ -1137,13 +1137,24 @@ impl Workspace {
         }
 
         let table_size = table_size(input.len());
-        if table_size == 32768 {
-            collect_with_stack_u16_table::<15, 32768, FASTER_U16_SKIP_START, false>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            );
-            return Ok(&self.batch);
+        match table_size {
+            2048 => {
+                collect_with_stack_u16_table::<11, 2048, DEFAULT_U16_SKIP_START, false>(
+                    &mut self.batch,
+                    input,
+                    max_backward_distance,
+                );
+                return Ok(&self.batch);
+            }
+            32768 => {
+                collect_with_stack_u16_table::<15, 32768, FASTER_U16_SKIP_START, false>(
+                    &mut self.batch,
+                    input,
+                    max_backward_distance,
+                );
+                return Ok(&self.batch);
+            }
+            _ => {}
         }
 
         self.collect_fast_skip(input, max_backward_distance)

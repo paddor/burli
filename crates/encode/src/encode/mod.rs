@@ -474,7 +474,9 @@ impl EncoderPlan {
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
-                    } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input) {
+                    } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input)
+                        || q0_tiny_license_js_no_last_distance_probe_is_likely_safe(input)
+                    {
                         q1::collect_fast_skip_without_last_distance_probe(
                             input,
                             local_max_backward_distance,
@@ -1120,6 +1122,12 @@ fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
 
 fn q0_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
     input.len() > 2 * 1024 && input.len() <= 4 * 1024 && input.starts_with(b"/*!")
+}
+
+fn q0_tiny_license_js_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
+    input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
+        && input.len() <= 2 * 1024
+        && input.starts_with(b"/*!")
 }
 
 fn q0_small_json_static_distance_prefix_is_likely_safe(input: &[u8]) -> bool {
@@ -3666,6 +3674,21 @@ mod tests {
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
+        assert!(q0_tiny_license_js_no_last_distance_probe_is_likely_safe(
+            &script_2k[..2048]
+        ));
+        assert!(q0_tiny_license_js_no_last_distance_probe_is_likely_safe(
+            &script_2k[..1025]
+        ));
+        assert!(!q0_tiny_license_js_no_last_distance_probe_is_likely_safe(
+            &script_1k[..1024]
+        ));
+        assert!(!q0_tiny_license_js_no_last_distance_probe_is_likely_safe(
+            &script_4k[..2049]
+        ));
+        assert!(!q0_tiny_license_js_no_last_distance_probe_is_likely_safe(
+            &css_2k[..2048]
+        ));
         assert!(q0_medium_minified_js_medium_skip_is_likely_safe(
             &module_12k
         ));
