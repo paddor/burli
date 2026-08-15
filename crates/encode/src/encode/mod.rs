@@ -537,8 +537,8 @@ impl EncoderPlan {
                         self.q1_fast_literal_prefix,
                     );
                 }
-                if q0_small_license_js_fast_command_prefix_is_likely_safe(input) {
-                    return q1::write_fast_command_prefixes(
+                if q0_small_license_js_balanced_command_prefix_is_likely_safe(input) {
+                    return q1::write_balanced_command_prefixes(
                         writer,
                         input,
                         input.len(),
@@ -1246,7 +1246,7 @@ fn q0_small_css_static_distance_prefix_is_likely_safe(input: &[u8]) -> bool {
         && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
 }
 
-fn q0_small_license_js_fast_command_prefix_is_likely_safe(input: &[u8]) -> bool {
+fn q0_small_license_js_balanced_command_prefix_is_likely_safe(input: &[u8]) -> bool {
     input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
         && input.len() <= 2 * 1024
         && input.starts_with(b"/*!")
@@ -4079,19 +4079,19 @@ mod tests {
         assert!(!q0_small_css_static_distance_prefix_is_likely_safe(
             &script_2k[..2048]
         ));
-        assert!(q0_small_license_js_fast_command_prefix_is_likely_safe(
+        assert!(q0_small_license_js_balanced_command_prefix_is_likely_safe(
             &script_2k[..2048]
         ));
-        assert!(!q0_small_license_js_fast_command_prefix_is_likely_safe(
+        assert!(!q0_small_license_js_balanced_command_prefix_is_likely_safe(
             &script_1k[..1024]
         ));
-        assert!(q0_small_license_js_fast_command_prefix_is_likely_safe(
+        assert!(q0_small_license_js_balanced_command_prefix_is_likely_safe(
             &script_2k[..1025]
         ));
-        assert!(!q0_small_license_js_fast_command_prefix_is_likely_safe(
+        assert!(!q0_small_license_js_balanced_command_prefix_is_likely_safe(
             &script_4k[..2049]
         ));
-        assert!(!q0_small_license_js_fast_command_prefix_is_likely_safe(
+        assert!(!q0_small_license_js_balanced_command_prefix_is_likely_safe(
             &css_2k[..2048]
         ));
     }
