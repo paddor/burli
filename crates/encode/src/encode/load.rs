@@ -38,6 +38,31 @@ pub(super) fn read_u64_le_trusted(input: &[u8], pos: usize) -> u64 {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trusted_u32_load_matches_safe_little_endian_load() {
+        let input: Vec<u8> = (0..=255).cycle().take(512).collect();
+        for pos in 0..=input.len() - 4 {
+            let expected = u32::from_le_bytes(input[pos..pos + 4].try_into().unwrap());
+
+            assert_eq!(read_u32_le_trusted(&input, pos), expected);
+        }
+    }
+
+    #[test]
+    fn trusted_u64_load_matches_safe_little_endian_load() {
+        let input: Vec<u8> = (0..=255).cycle().take(512).collect();
+        for pos in 0..=input.len() - 8 {
+            let expected = u64::from_le_bytes(input[pos..pos + 8].try_into().unwrap());
+
+            assert_eq!(read_u64_le_trusted(&input, pos), expected);
+        }
+    }
+}
+
 #[cfg(kani)]
 mod verification {
     use super::*;
