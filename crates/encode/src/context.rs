@@ -7,6 +7,7 @@ pub struct Compressor {
     options: Options,
     workspace: crate::encode::Workspace,
     writer: BitWriter,
+    scratch: Vec<u8>,
 }
 
 impl Compressor {
@@ -15,6 +16,7 @@ impl Compressor {
             options: Options::default().quality(quality)?,
             workspace: crate::encode::Workspace::default(),
             writer: BitWriter::new(),
+            scratch: Vec::new(),
         })
     }
 
@@ -23,6 +25,7 @@ impl Compressor {
             options,
             workspace: crate::encode::Workspace::default(),
             writer: BitWriter::new(),
+            scratch: Vec::new(),
         }
     }
 
@@ -59,15 +62,22 @@ impl Compressor {
         input: &[u8],
         output: &mut [u8],
     ) -> Result<usize, CompressError> {
-        let compressed = self.compress(input)?;
-        if compressed.len() > output.len() {
+        self.scratch.clear();
+        crate::encode::compress_into_with_options_workspace(
+            input,
+            &self.options,
+            &mut self.workspace,
+            &mut self.writer,
+            &mut self.scratch,
+        )?;
+        if self.scratch.len() > output.len() {
             return Err(CompressError::OutputLimitExceeded {
                 limit: output.len(),
-                needed: compressed.len(),
+                needed: self.scratch.len(),
             });
         }
-        output[..compressed.len()].copy_from_slice(&compressed);
-        Ok(compressed.len())
+        output[..self.scratch.len()].copy_from_slice(&self.scratch);
+        Ok(self.scratch.len())
     }
 }
 

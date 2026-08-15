@@ -40,10 +40,16 @@ pub fn compress_into(
     output: &mut alloc::vec::Vec<u8>,
     quality: u8,
 ) -> Result<usize, CompressError> {
-    let before = output.len();
-    let compressed = compress(input, quality)?;
-    output.extend_from_slice(&compressed);
-    Ok(output.len() - before)
+    let options = Options::default().quality(quality)?;
+    let mut workspace = encode::Workspace::default();
+    let mut writer = burli_core::bits::BitWriter::new();
+    encode::compress_into_with_options_workspace(
+        input,
+        &options,
+        &mut workspace,
+        &mut writer,
+        output,
+    )
 }
 
 #[cfg(feature = "alloc")]

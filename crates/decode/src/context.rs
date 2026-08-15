@@ -5,17 +5,22 @@ use burli_core::{DecompressError, format::DEFAULT_MAX_OUTPUT_SIZE};
 #[derive(Clone, Debug)]
 pub struct Decompressor {
     max_output_size: usize,
+    scratch: Vec<u8>,
 }
 
 impl Decompressor {
     pub const fn new() -> Self {
         Self {
             max_output_size: DEFAULT_MAX_OUTPUT_SIZE,
+            scratch: Vec::new(),
         }
     }
 
-    pub const fn with_limit(max_output_size: usize) -> Self {
-        Self { max_output_size }
+    pub fn with_limit(max_output_size: usize) -> Self {
+        Self {
+            max_output_size,
+            scratch: Vec::new(),
+        }
     }
 
     pub const fn max_output_size(&self) -> usize {
@@ -36,8 +41,13 @@ impl Decompressor {
         output: &mut Vec<u8>,
     ) -> Result<usize, DecompressError> {
         let before = output.len();
-        let decompressed = self.decompress(input)?;
-        output.extend_from_slice(&decompressed);
+        self.scratch.clear();
+        crate::stored::decompress_into_empty_with_limit(
+            input,
+            self.max_output_size,
+            &mut self.scratch,
+        )?;
+        output.extend_from_slice(&self.scratch);
         Ok(output.len() - before)
     }
 
@@ -47,9 +57,10 @@ impl Decompressor {
         output: &mut [u8],
     ) -> Result<usize, DecompressError> {
         let limit = self.max_output_size.min(output.len());
-        let decompressed = crate::decompress_with_limit(input, limit)?;
-        output[..decompressed.len()].copy_from_slice(&decompressed);
-        Ok(decompressed.len())
+        self.scratch.clear();
+        crate::stored::decompress_into_empty_with_limit(input, limit, &mut self.scratch)?;
+        output[..self.scratch.len()].copy_from_slice(&self.scratch);
+        Ok(self.scratch.len())
     }
 }
 
@@ -70,7 +81,7 @@ impl DecompressContext {
         }
     }
 
-    pub const fn with_limit(max_output_size: usize) -> Self {
+    pub fn with_limit(max_output_size: usize) -> Self {
         Self {
             inner: Decompressor::with_limit(max_output_size),
         }

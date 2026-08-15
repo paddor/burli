@@ -119,9 +119,27 @@ fn slice_apis_report_needed_sizes_without_partial_success() {
             })
         );
 
+        let mut compressor = burli::Compressor::new(quality).unwrap();
+        assert_eq!(
+            compressor.compress_into_slice(&input, &mut too_small_encoded),
+            Err(BurliError::OutputLimitExceeded {
+                limit: encoded.len() - 1,
+                needed: encoded.len(),
+            })
+        );
+
         let mut too_small_decoded = vec![0_u8; input.len() - 1];
         assert_eq!(
             burli::decompress_into_slice(&encoded, &mut too_small_decoded),
+            Err(BurliError::OutputLimitExceeded {
+                limit: input.len() - 1,
+                needed: input.len(),
+            })
+        );
+
+        let mut decompressor = burli::Decompressor::new();
+        assert_eq!(
+            decompressor.decompress_into_slice(&encoded, &mut too_small_decoded),
             Err(BurliError::OutputLimitExceeded {
                 limit: input.len() - 1,
                 needed: input.len(),

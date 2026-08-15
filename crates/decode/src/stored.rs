@@ -21,27 +21,38 @@ pub fn decompress_with_limit(
     input: &[u8],
     max_output_size: usize,
 ) -> Result<Vec<u8>, DecompressError> {
-    let mut reader = BitReader::new(input);
-    let window_bits = read_window_bits(&mut reader)?;
     let mut output = if max_output_size <= MAX_META_BLOCK_SIZE {
         Vec::with_capacity(max_output_size)
     } else {
         Vec::new()
     };
+    decompress_into_empty_with_limit(input, max_output_size, &mut output)?;
+    Ok(output)
+}
+
+pub(crate) fn decompress_into_empty_with_limit(
+    input: &[u8],
+    max_output_size: usize,
+    output: &mut Vec<u8>,
+) -> Result<usize, DecompressError> {
+    debug_assert!(output.is_empty());
+
+    let mut reader = BitReader::new(input);
+    let window_bits = read_window_bits(&mut reader)?;
     let mut distances = DistanceRing::new();
 
     loop {
         match read_meta_block_header(&mut reader)? {
             MetaBlockHeader::LastEmpty => {
                 finish_stream(&reader)?;
-                return Ok(output);
+                return Ok(output.len());
             }
             MetaBlockHeader::Metadata { len, is_last } => {
                 reader.read_zero_padding_to_byte()?;
                 let _metadata = reader.read_aligned_bytes(len)?;
                 if is_last {
                     finish_stream(&reader)?;
-                    return Ok(output);
+                    return Ok(output.len());
                 }
             }
             MetaBlockHeader::Uncompressed { len } => {
@@ -64,7 +75,7 @@ pub fn decompress_with_limit(
             MetaBlockHeader::Compressed { len, is_last } => {
                 crate::compressed::decode_meta_block(
                     &mut reader,
-                    &mut output,
+                    output,
                     len,
                     max_output_size,
                     window_bits,
@@ -72,7 +83,7 @@ pub fn decompress_with_limit(
                 )?;
                 if is_last {
                     finish_stream(&reader)?;
-                    return Ok(output);
+                    return Ok(output.len());
                 }
             }
         }
