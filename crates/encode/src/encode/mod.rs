@@ -54,6 +54,7 @@ pub(crate) struct Workspace {
     q3: q3::Workspace,
     q4: q4::Workspace,
     q5: q5::Workspace,
+    token_prefix: PrefixCodeScratch,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -634,6 +635,18 @@ impl EncoderPlan {
                         &mut workspace.q1,
                         self.q1_fast_literal_prefix,
                     );
+                } else if q1_no_cross_one_lazy_is_likely_safe(input) {
+                    q2::collect_without_dictionary_one_lazy(
+                        input,
+                        local_max_backward_distance,
+                        &mut workspace.q2,
+                    )
+                } else if q1_no_cross_sparse_tail_no_last_is_likely_safe(input) {
+                    q2::collect_without_dictionary_no_lazy_sparse_tail_no_last_distance_probe(
+                        input,
+                        local_max_backward_distance,
+                        &mut workspace.q2,
+                    )
                 } else {
                     q2::collect_without_dictionary_no_lazy_sparse_tail(
                         input,
@@ -644,11 +657,12 @@ impl EncoderPlan {
                 if !tokens.iter().any(|token| token.is_copy()) {
                     return write_compressed_literal_meta_block(writer, input);
                 }
-                return write_token_batches_with_symbol_limit(
+                return write_recomputed_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     Q1_DELAYED_SYMBOLS,
+                    &mut workspace.token_prefix,
                 );
             }
 
@@ -879,7 +893,6 @@ struct PreparedBatch {
     command_frequencies: [usize; COMMAND_ALPHABET_SIZE],
     distance_frequencies: [usize; 64],
     has_distance: bool,
-    has_copy: bool,
 }
 
 impl PreparedBatch {
@@ -890,7 +903,6 @@ impl PreparedBatch {
             command_frequencies: [0; COMMAND_ALPHABET_SIZE],
             distance_frequencies: [0; 64],
             has_distance: false,
-            has_copy: false,
         }
     }
 
@@ -905,8 +917,46 @@ impl PreparedBatch {
             self.distance_frequencies[usize::from(distance.symbol)] += 1;
             self.has_distance = true;
         }
-        self.has_copy |= token.is_copy();
         self.prepared.push(prepared_token);
+        Ok(())
+    }
+
+    fn ensure_distance_frequencies(&mut self) {
+        if !self.has_distance {
+            self.distance_frequencies[0] = 1;
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TokenBatchFrequencies {
+    literal_frequencies: [usize; LITERAL_ALPHABET_SIZE],
+    command_frequencies: [usize; COMMAND_ALPHABET_SIZE],
+    distance_frequencies: [usize; 64],
+    has_distance: bool,
+}
+
+impl TokenBatchFrequencies {
+    fn new() -> Self {
+        Self {
+            literal_frequencies: [0; LITERAL_ALPHABET_SIZE],
+            command_frequencies: [0; COMMAND_ALPHABET_SIZE],
+            distance_frequencies: [0; 64],
+            has_distance: false,
+        }
+    }
+
+    fn push(&mut self, input: &[u8], token: Token) -> Result<(), CompressError> {
+        let prepared_token = PreparedToken::new(token)?;
+        let token = prepared_token.token;
+        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
+            self.literal_frequencies[usize::from(literal)] += 1;
+        }
+        self.command_frequencies[usize::from(prepared_token.command_symbol)] += 1;
+        if let Some(distance) = prepared_token.distance {
+            self.distance_frequencies[usize::from(distance.symbol)] += 1;
+            self.has_distance = true;
+        }
         Ok(())
     }
 
@@ -964,6 +1014,30 @@ fn write_token_batches_with_symbol_limit(
             q2_token_batch_span_with_symbol_limit(&tokens[start..], symbol_limit);
         let end = local_end + start;
         write_token_batch_q2_with_len(writer, input, &tokens[start..end], block_len)?;
+        start = end;
+    }
+    Ok(())
+}
+
+fn write_recomputed_token_batches_with_symbol_limit(
+    writer: &mut BitWriter,
+    input: &[u8],
+    tokens: &[Token],
+    symbol_limit: usize,
+    prefix: &mut PrefixCodeScratch,
+) -> Result<(), CompressError> {
+    let mut start = 0;
+    while start < tokens.len() {
+        let (local_end, block_len) =
+            q2_token_batch_span_with_symbol_limit(&tokens[start..], symbol_limit);
+        let end = local_end + start;
+        write_token_batch_q2_recomputed_with_len(
+            writer,
+            input,
+            &tokens[start..end],
+            block_len,
+            prefix,
+        )?;
         start = end;
     }
     Ok(())
@@ -1290,6 +1364,50 @@ fn q1_large_markup_lazy_is_likely_safe(input: &[u8]) -> bool {
     lt_count >= 8 && gt_count >= 8
 }
 
+fn q1_no_cross_one_lazy_is_likely_safe(input: &[u8]) -> bool {
+    let sample = &input[..input.len().min(64 * 1024)];
+    if sample.is_empty() {
+        return false;
+    }
+
+    let mut whitespace = 0_usize;
+    let mut ascii_printable = 0_usize;
+    let mut high = 0_usize;
+    let mut zero = 0_usize;
+    let mut alpha = 0_usize;
+    for &byte in sample {
+        whitespace += usize::from(matches!(byte, b' ' | b'\n' | b'\r' | b'\t'));
+        ascii_printable +=
+            usize::from((32..=126).contains(&byte) || matches!(byte, b'\n' | b'\r' | b'\t'));
+        high += usize::from(byte >= 128);
+        zero += usize::from(byte == 0);
+        alpha += usize::from(byte.is_ascii_alphabetic());
+    }
+
+    let len = sample.len();
+    let tabular_text =
+        ascii_printable * 100 >= len * 98 && whitespace * 100 >= len * 40 && alpha * 100 < len * 20;
+    let zero_high_mixed = zero * 100 >= len * 25 && high * 100 >= len * 2;
+    tabular_text || zero_high_mixed
+}
+
+fn q1_no_cross_sparse_tail_no_last_is_likely_safe(input: &[u8]) -> bool {
+    let sample = &input[..input.len().min(64 * 1024)];
+    if sample.is_empty() {
+        return false;
+    }
+
+    let mut high = 0_usize;
+    let mut zero = 0_usize;
+    for &byte in sample {
+        high += usize::from(byte >= 128);
+        zero += usize::from(byte == 0);
+    }
+
+    let len = sample.len();
+    zero * 100 >= len * 25 && high * 100 < len * 2
+}
+
 fn q1_no_cross_fast_writer_is_likely_safe(input: &[u8]) -> bool {
     let sample = &input[..input.len().min(64 * 1024)];
     if sample.is_empty() {
@@ -1313,7 +1431,7 @@ fn q1_no_cross_fast_writer_is_likely_safe(input: &[u8]) -> bool {
     }
 
     let len = sample.len();
-    if zero * 100 >= len * 25 && high * 100 < len * 2 {
+    if zero * 100 >= len * 25 {
         return false;
     }
     if ascii_printable * 100 >= len * 98 && whitespace * 100 >= len * 18 {
@@ -1482,6 +1600,19 @@ fn write_token_batch_q2_with_len(
     write_token_batch_with_len(writer, input, tokens, block_len)
 }
 
+fn write_token_batch_q2_recomputed_with_len(
+    writer: &mut BitWriter,
+    input: &[u8],
+    tokens: &[Token],
+    block_len: usize,
+    prefix: &mut PrefixCodeScratch,
+) -> Result<(), CompressError> {
+    if tokens.len() <= 1024 {
+        return write_static_entropy_token_batch(writer, input, tokens, block_len);
+    }
+    write_token_batch_recomputed_with_len(writer, input, tokens, block_len, prefix)
+}
+
 fn write_token_batch_with_len(
     writer: &mut BitWriter,
     input: &[u8],
@@ -1497,6 +1628,115 @@ fn write_token_batch_with_len(
     }
     batch.ensure_distance_frequencies();
     write_prepared_token_batch_with_len(writer, input, &batch, block_len)
+}
+
+fn write_token_batch_recomputed_with_len(
+    writer: &mut BitWriter,
+    input: &[u8],
+    tokens: &[Token],
+    block_len: usize,
+    prefix: &mut PrefixCodeScratch,
+) -> Result<(), CompressError> {
+    if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
+        return Err(BurliError::Format("invalid compressed Brotli block size"));
+    }
+    let mut frequencies = TokenBatchFrequencies::new();
+    for &token in tokens {
+        frequencies.push(input, token)?;
+    }
+    frequencies.ensure_distance_frequencies();
+
+    write_meta_block_len(writer, block_len)?;
+    write_block_and_context_header(writer)?;
+    prefix.reserve_for(COMMAND_ALPHABET_SIZE, COMMAND_ALPHABET_SIZE);
+    let literal_code_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+        writer,
+        &frequencies.literal_frequencies,
+        prefix,
+        MAX_CODE_BITS,
+    )?;
+    let command_code_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+        writer,
+        &frequencies.command_frequencies,
+        prefix,
+        MAX_CODE_BITS,
+    )?;
+    let distance_code_map = write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
+        writer,
+        &frequencies.distance_frequencies,
+        prefix,
+        MAX_CODE_BITS,
+    )?;
+
+    let mut pending_bits = 0_u64;
+    let mut pending_width = 0_u8;
+    for &token in tokens {
+        let prepared_token = PreparedToken::new(token)?;
+        let token = prepared_token.token;
+        let insert = prepared_token.insert;
+        let copy = prepared_token.copy;
+        let command_code = command_code_map[usize::from(prepared_token.command_symbol)];
+        debug_assert!(command_code.len != u8::MAX);
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            command_code.len,
+            u64::from(command_code.bits),
+        );
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            insert.extra_bits,
+            insert.extra,
+        );
+        if let Some(copy) = copy {
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                copy.extra_bits,
+                copy.extra,
+            );
+        }
+
+        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
+            let literal_code = literal_code_map[usize::from(literal)];
+            debug_assert!(literal_code.len != u8::MAX);
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                literal_code.len,
+                u64::from(literal_code.bits),
+            );
+        }
+
+        if let Some(distance) = prepared_token.distance {
+            let distance_code = distance_code_map[usize::from(distance.symbol)];
+            debug_assert!(distance_code.len != u8::MAX);
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                distance_code.len,
+                u64::from(distance_code.bits),
+            );
+            append_pending_bits(
+                writer,
+                &mut pending_bits,
+                &mut pending_width,
+                distance.extra_bits,
+                distance.extra,
+            );
+        }
+    }
+    if pending_width != 0 {
+        writer.write_bits_trusted_fits(pending_width, pending_bits);
+    }
+
+    Ok(())
 }
 
 fn write_static_entropy_token_batch(
@@ -3738,6 +3978,29 @@ mod tests {
             b"Many words in a sentence with enough spaces to look like prose. ".repeat(1200);
         let numeric_table_like = b"1 2 3 4 5 6 7 8 9 0                         \n".repeat(1600);
         let dictionary_like = b"word<entry>definition</entry> ".repeat(2600);
+        let zero_high_mixed = (0..64 * 1024)
+            .map(|index| match index % 4 {
+                0 => 0,
+                1 => 200,
+                _ => index as u8,
+            })
+            .collect::<Vec<_>>();
+        let zero_low_mixed = (0..64 * 1024)
+            .map(|index| if index % 4 == 0 { 0 } else { b'a' })
+            .collect::<Vec<_>>();
+        assert!(q1_no_cross_one_lazy_is_likely_safe(&numeric_table_like));
+        assert!(q1_no_cross_one_lazy_is_likely_safe(&zero_high_mixed));
+        assert!(!q1_no_cross_one_lazy_is_likely_safe(&prose_like));
+        assert!(!q1_no_cross_one_lazy_is_likely_safe(&dictionary_like));
+        assert!(q1_no_cross_sparse_tail_no_last_is_likely_safe(
+            &zero_low_mixed
+        ));
+        assert!(!q1_no_cross_sparse_tail_no_last_is_likely_safe(
+            &zero_high_mixed
+        ));
+        assert!(!q1_no_cross_sparse_tail_no_last_is_likely_safe(
+            &numeric_table_like
+        ));
         assert!(!q1_no_cross_fast_writer_is_likely_safe(&prose_like));
         assert!(!q1_no_cross_fast_writer_is_likely_safe(&numeric_table_like));
         assert!(q1_no_cross_fast_writer_is_likely_safe(&sparse_binary));
