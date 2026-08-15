@@ -26,7 +26,7 @@ const CODE_LENGTH_ORDER: [u8; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 1
 const MAX_SIMPLE_PREFIX_SYMBOLS: usize = 4;
 const INITIAL_LAST_DISTANCE: usize = 4;
 const MAX_DELAYED_SYMBOLS: usize = 0x2fff;
-const Q1_DELAYED_SYMBOLS: usize = 0x7fff;
+const Q1_DELAYED_SYMBOLS: usize = 0x9fff;
 const Q4_DELAYED_SYMBOLS: usize = 3840;
 const Q5_DELAYED_SYMBOLS: usize = 3584;
 const Q0_DIRECT_MAX_INPUT: usize = 384;
@@ -636,7 +636,7 @@ impl EncoderPlan {
                     writer,
                     input,
                     &tokens,
-                    MAX_DELAYED_SYMBOLS,
+                    Q1_DELAYED_SYMBOLS,
                 );
             }
 
