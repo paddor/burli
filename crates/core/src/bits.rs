@@ -301,8 +301,12 @@ impl BitWriter {
             return;
         }
         let bytes = self.bit_buffer.to_le_bytes();
-        self.output
-            .extend_from_slice(&bytes[..usize::from(byte_count)]);
+        match byte_count {
+            1 => self.output.push(bytes[0]),
+            _ => self
+                .output
+                .extend_from_slice(&bytes[..usize::from(byte_count)]),
+        }
         self.bit_buffer >>= byte_count * 8;
         self.bit_count -= byte_count * 8;
     }

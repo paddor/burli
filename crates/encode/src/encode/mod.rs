@@ -3167,10 +3167,8 @@ fn append_pending_bits(
     bits: u64,
 ) {
     debug_assert!(width <= MAX_BITS_PER_OP);
+    debug_assert!(width != 0 || bits == 0);
     debug_assert!(width == 0 || bits < (1_u64 << width));
-    if width == 0 {
-        return;
-    }
     if *pending_width + width > MAX_BITS_PER_OP {
         writer.write_bits_trusted_fits(*pending_width, *pending_bits);
         *pending_bits = 0;

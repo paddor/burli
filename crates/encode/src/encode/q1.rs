@@ -1568,12 +1568,13 @@ fn collect_with_u32_table_m6<
             pos += copy_len;
             insert_start = pos;
             last_distance = distance;
-            if STORE_TAIL_HASHES {
-                store_tail_hashes_in_u32_table_m6::<TABLE_BITS>(table, input, pos);
-            }
 
             if pos > len_limit {
                 break;
+            }
+
+            if STORE_TAIL_HASHES {
+                store_tail_hashes_in_u32_table_m6::<TABLE_BITS>(table, input, pos);
             }
 
             let key = hash6_at_const::<TABLE_BITS>(input, pos);
@@ -1722,13 +1723,13 @@ fn collect_with_u16_table_m4<
             pos += copy_len;
             insert_start = pos;
             last_distance = distance;
-            let current_key =
-                store_tail_hashes_in_u16_table_m4::<TABLE_BITS, TABLE_LEN>(table, input, pos);
 
             if pos > len_limit {
                 break;
             }
 
+            let current_key =
+                store_tail_hashes_in_u16_table_m4::<TABLE_BITS, TABLE_LEN>(table, input, pos);
             let current_word = read_u32_le(input, pos);
             let key = current_key.unwrap_or_else(|| hash4_const::<TABLE_BITS>(current_word));
             let entry = table[key];
@@ -1754,6 +1755,7 @@ fn collect_with_u16_table_m4<
     }
 }
 
+#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn scan_to_match_in_u32_table_m6<
     const TABLE_BITS: usize,
@@ -1771,6 +1773,29 @@ fn scan_to_match_in_u32_table_m6<
     let mut skip = SKIP_START;
     let mut next_pos = *pos;
 
+    if !USE_LAST_DISTANCE || last_distance == NO_LAST_DISTANCE {
+        loop {
+            let key = *next_hash;
+            let step = skip >> 5;
+            skip += 1;
+            *pos = next_pos;
+            if step > len_limit - *pos {
+                return None;
+            }
+            next_pos = *pos + step;
+            *next_hash = hash6_at_const::<TABLE_BITS>(input, next_pos);
+
+            let candidate = table[key] as usize;
+            table[key] = *pos as u32;
+            if candidate < *pos
+                && *pos - candidate <= max_distance
+                && is_match6(input, candidate, *pos)
+            {
+                return Some(candidate);
+            }
+        }
+    }
+
     loop {
         let key = *next_hash;
         let step = skip >> 5;
@@ -1782,7 +1807,7 @@ fn scan_to_match_in_u32_table_m6<
         next_pos = *pos + step;
         *next_hash = hash6_at_const::<TABLE_BITS>(input, next_pos);
 
-        if USE_LAST_DISTANCE && last_distance != NO_LAST_DISTANCE && *pos >= last_distance {
+        if *pos >= last_distance {
             let candidate = *pos - last_distance;
             if is_match6(input, candidate, *pos) {
                 table[key] = *pos as u32;
@@ -1799,6 +1824,7 @@ fn scan_to_match_in_u32_table_m6<
     }
 }
 
+#[inline(always)]
 fn store_tail_hashes_in_u32_table_m6<const TABLE_BITS: usize>(
     table: &mut [u32],
     input: &[u8],
@@ -1828,6 +1854,7 @@ fn store_tail_hashes_in_u32_table_m6<const TABLE_BITS: usize>(
     }
 }
 
+#[inline(always)]
 fn push_literals_to_batch(batch: &mut Batch, input: &[u8], insert_start: usize, insert_len: usize) {
     if insert_len == 0 {
         return;
@@ -1835,6 +1862,7 @@ fn push_literals_to_batch(batch: &mut Batch, input: &[u8], insert_start: usize, 
     batch.push_literals(input, insert_start, insert_len);
 }
 
+#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn scan_to_match_in_u16_table_m4<
     const TABLE_BITS: usize,
@@ -1853,6 +1881,30 @@ fn scan_to_match_in_u16_table_m4<
     let mut skip = SKIP_START;
     let mut next_pos = *pos;
 
+    if !USE_LAST_DISTANCE || last_distance == NO_LAST_DISTANCE {
+        loop {
+            let key = *next_hash;
+            let step = skip >> 5;
+            skip += 1;
+            *pos = next_pos;
+            if step > len_limit - *pos {
+                return None;
+            }
+            next_pos = *pos + step;
+            let current_word = *next_word;
+            *next_word = read_u32_le(input, next_pos);
+            *next_hash = hash4_const::<TABLE_BITS>(*next_word);
+
+            let entry = table[key];
+            table[key] = position_to_u16_entry(*pos);
+            let candidate = usize::from(entry);
+            debug_assert!(candidate < *pos);
+            if read_u32_le(input, candidate) == current_word {
+                return Some(candidate);
+            }
+        }
+    }
+
     loop {
         let key = *next_hash;
         let step = skip >> 5;
@@ -1866,7 +1918,7 @@ fn scan_to_match_in_u16_table_m4<
         *next_word = read_u32_le(input, next_pos);
         *next_hash = hash4_const::<TABLE_BITS>(*next_word);
 
-        if USE_LAST_DISTANCE && last_distance != NO_LAST_DISTANCE && *pos >= last_distance {
+        if *pos >= last_distance {
             let candidate = *pos - last_distance;
             if read_u32_le(input, candidate) == current_word {
                 table[key] = position_to_u16_entry(*pos);
@@ -1884,6 +1936,7 @@ fn scan_to_match_in_u16_table_m4<
     }
 }
 
+#[inline(always)]
 fn store_tail_hashes_in_u16_table_m4<const TABLE_BITS: usize, const TABLE_LEN: usize>(
     table: &mut [u16; TABLE_LEN],
     input: &[u8],
