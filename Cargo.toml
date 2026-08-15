@@ -34,6 +34,26 @@ workspace = true
 proptest = "1"
 rust-brotli = { package = "brotli", version = "8.0.4" }
 
+[[test]]
+name = "burli-api"
+path = "tests/api.rs"
+
+[[test]]
+name = "burli-c-brotli"
+path = "tests/c_brotli.rs"
+
+[[test]]
+name = "burli-errors"
+path = "tests/errors.rs"
+
+[[test]]
+name = "burli-google-conformance"
+path = "tests/google_conformance.rs"
+
+[[test]]
+name = "burli-roundtrip"
+path = "tests/roundtrip.rs"
+
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 

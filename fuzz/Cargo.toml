@@ -13,21 +13,21 @@ libfuzzer-sys = "0.4"
 rust-brotli = { package = "brotli", version = "8.0.4" }
 
 [[bin]]
-name = "decode"
+name = "burli-decode"
 path = "fuzz_targets/decode.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "roundtrip"
+name = "burli-roundtrip"
 path = "fuzz_targets/roundtrip.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
-name = "fragmented"
+name = "burli-fragmented"
 path = "fuzz_targets/fragmented.rs"
 test = false
 doc = false

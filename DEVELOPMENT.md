@@ -20,9 +20,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 Long decoder conformance tests are ignored by default:
 
 ```bash
-cargo nextest run --profile conformance --release --test google_conformance \
+cargo nextest run --profile conformance --release --test burli-google-conformance \
   --run-ignored ignored-only
-cargo nextest run --profile conformance --release --test c_brotli \
+cargo nextest run --profile conformance --release --test burli-c-brotli \
   --run-ignored ignored-only
 ```
 
@@ -30,7 +30,7 @@ Focused upstream case:
 
 ```bash
 BURLI_GOOGLE_BROTLI_CASE=alice29.txt.compressed \
-  cargo nextest run --profile conformance --release --test google_conformance \
+  cargo nextest run --profile conformance --release --test burli-google-conformance \
   --run-ignored ignored-only
 ```
 
@@ -38,7 +38,7 @@ Exhaustive byte-fragmented upstream stream soak:
 
 ```bash
 BURLI_GOOGLE_BROTLI_FRAGMENTED_EXHAUSTIVE=1 \
-  cargo nextest run --profile soak --release --test google_conformance \
+  cargo nextest run --profile soak --release --test burli-google-conformance \
   --run-ignored ignored-only
 ```
 
@@ -60,8 +60,8 @@ insert command mapping.
 Requires cargo-fuzz:
 
 ```bash
-cargo fuzz run decode
-cargo fuzz run roundtrip
+cargo fuzz run burli-decode
+cargo fuzz run burli-roundtrip
 ```
 
 ## Bench
