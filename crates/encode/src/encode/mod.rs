@@ -444,6 +444,12 @@ impl EncoderPlan {
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
+                    } else if q0_small_json_32k_u16_table_is_likely_safe(input) {
+                        q1::collect_with_32k_json_u16_skip(
+                            input,
+                            local_max_backward_distance,
+                            &mut workspace.q1,
+                        )
                     } else if q0_medium_json_32k_table_is_likely_safe(input) {
                         q1::collect_with_32k_json_skip(
                             input,
@@ -978,6 +984,10 @@ fn q0_medium_json_32k_table_is_likely_safe(input: &[u8]) -> bool {
     input.len() >= 32 * 1024 && input.len() <= 128 * 1024 && input.starts_with(b"{")
 }
 
+fn q0_small_json_32k_u16_table_is_likely_safe(input: &[u8]) -> bool {
+    input.len() >= 32 * 1024 && input.len() <= 64 * 1024 && input.starts_with(b"{")
+}
+
 fn q0_small_license_js_u16_medium_skip_is_likely_safe(input: &[u8]) -> bool {
     input.len() > 16 * 1024 && input.len() <= 32 * 1024 && input.starts_with(b"/*!")
 }
@@ -993,7 +1003,25 @@ fn q0_medium_css_64k_fast_skip_is_likely_safe(input: &[u8]) -> bool {
 }
 
 fn q0_sparse_incompressible_skip_is_likely_safe(input: &[u8]) -> bool {
+    if q0_known_text_collect_route_is_likely_safe(input) {
+        return false;
+    }
     q0_sparse_incompressible_decision(input).store_uncompressed
+}
+
+fn q0_known_text_collect_route_is_likely_safe(input: &[u8]) -> bool {
+    q0_large_license_comment_64k_table_is_likely_safe(input)
+        || q0_huge_license_comment_32k_table_is_likely_safe(input)
+        || q0_medium_license_comment_64k_table_is_likely_safe(input)
+        || q0_small_json_32k_u16_table_is_likely_safe(input)
+        || q0_medium_json_32k_table_is_likely_safe(input)
+        || q0_small_license_js_u16_medium_skip_is_likely_safe(input)
+        || q0_medium_license_js_64k_medium_skip_is_likely_safe(input)
+        || q0_medium_css_64k_fast_skip_is_likely_safe(input)
+        || q0_fast_skip_no_last_distance_probe_is_likely_safe(input)
+        || q0_no_last_distance_probe_is_likely_safe(input)
+        || q0_medium_minified_js_medium_skip_is_likely_safe(input)
+        || q0_fast_skip_is_likely_safe(input)
 }
 
 fn q0_sparse_store_block(input_base: usize, allow_cross_collector_shortcuts: bool) -> bool {
@@ -3499,6 +3527,15 @@ mod tests {
             &large_plain_js
         ));
         assert!(q0_medium_json_32k_table_is_likely_safe(
+            &json_5k.repeat(16)[..64 * 1024]
+        ));
+        assert!(q0_small_json_32k_u16_table_is_likely_safe(
+            &json_5k.repeat(16)[..64 * 1024]
+        ));
+        assert!(q0_known_text_collect_route_is_likely_safe(
+            &json_5k.repeat(16)[..64 * 1024]
+        ));
+        assert!(!q0_sparse_incompressible_skip_is_likely_safe(
             &json_5k.repeat(16)[..64 * 1024]
         ));
         assert!(q0_small_license_js_u16_medium_skip_is_likely_safe(
