@@ -978,11 +978,11 @@ fn copy_literals(
 
     let mut previous = previous_literal_bytes(output);
     for _ in 0..count {
-        let literal_block_type = header.literals.current_type(reader)?;
+        let literal_block_type = header.literals.current_type_multi(reader)?;
         let context = literal_context(previous, header, literal_block_type);
         let tree_index = header.literal_context_map[literal_block_type * 64 + context];
         let literal = read_literal(reader, &literal_codes[tree_index])?;
-        header.literals.consume_one();
+        header.literals.consume_one_multi();
         output.push(literal);
         previous = (literal, previous.0);
     }
@@ -1156,10 +1156,12 @@ fn read_literal_trusted(reader: &mut BitReader<'_>, code: &PrefixCode) -> u8 {
     }
 }
 
+#[inline(always)]
 fn literal_context(previous: (u8, u8), header: &CompressedHeader, block_type: usize) -> usize {
     literal_context_for_mode(previous, header.context_modes[block_type])
 }
 
+#[inline(always)]
 fn previous_literal_bytes(output: &[u8]) -> (u8, u8) {
     let len = output.len();
     if len >= 2 {
@@ -1171,6 +1173,7 @@ fn previous_literal_bytes(output: &[u8]) -> (u8, u8) {
     }
 }
 
+#[inline(always)]
 fn literal_context_for_mode(previous: (u8, u8), mode: u8) -> usize {
     let (p1, p2) = previous;
     match mode {
