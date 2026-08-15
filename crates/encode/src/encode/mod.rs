@@ -306,7 +306,7 @@ impl EncoderPlan {
             None if quality == 0 && input_len <= max_backward_distance => MAX_META_BLOCK_SIZE,
             None if quality == 0 => 1_usize << 18,
             None if quality == 1 && input_len <= max_backward_distance => MAX_META_BLOCK_SIZE,
-            None if quality == 1 => 1_usize << 18,
+            None if quality == 1 => max_backward_distance + 16,
             None if quality == 2 => ((max_backward_distance + 16) << 1).min(MAX_META_BLOCK_SIZE),
             None if quality == 3 => ((max_backward_distance + 16) << 1).min(MAX_META_BLOCK_SIZE),
             None if quality == 4 => ((max_backward_distance + 16) << 1).min(MAX_META_BLOCK_SIZE),
@@ -598,7 +598,7 @@ impl EncoderPlan {
                     q1_sparse_skip(input),
                     Q1SparseSkip::Store | Q1SparseSkip::Moderate
                 ) {
-                    let batch = q1::collect_with_128k_default_skip(
+                    let batch = q1::collect_with_64k_sparse_skip(
                         input,
                         local_max_backward_distance,
                         &mut workspace.q1,
