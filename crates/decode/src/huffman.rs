@@ -40,13 +40,9 @@ impl Lookup {
     }
 
     #[inline(always)]
-    const fn len(self) -> u8 {
-        (self.0 >> 12) as u8
-    }
-
-    #[inline(always)]
-    const fn symbol(self) -> u16 {
-        self.0 & Self::SYMBOL_MASK
+    const fn parts(self) -> (u16, u8) {
+        let raw = self.0;
+        (raw & Self::SYMBOL_MASK, (raw >> 12) as u8)
     }
 }
 
@@ -232,9 +228,10 @@ impl PrefixCode {
         if reader.has_bits(self.fast_bits) {
             let lookup = self.fast
                 [reader.peek_bits_trusted_with_mask(self.fast_bits, self.fast_mask) as usize];
-            debug_assert!(lookup.len() != 0);
-            reader.drop_bits_trusted(lookup.len());
-            return Ok(lookup.symbol());
+            let (symbol, len) = lookup.parts();
+            debug_assert!(len != 0);
+            reader.drop_bits_trusted(len);
+            return Ok(symbol);
         }
 
         self.decode_non_single_with_padded_lookup(reader)
@@ -247,9 +244,10 @@ impl PrefixCode {
 
         let lookup =
             self.fast[reader.peek_bits_trusted_with_mask(self.fast_bits, self.fast_mask) as usize];
-        debug_assert!(lookup.len() != 0);
-        reader.drop_bits_trusted(lookup.len());
-        lookup.symbol()
+        let (symbol, len) = lookup.parts();
+        debug_assert!(len != 0);
+        reader.drop_bits_trusted(len);
+        symbol
     }
 
     #[cold]
@@ -266,7 +264,7 @@ impl PrefixCode {
         let available = remaining.min(usize::from(self.fast_bits));
         let index = reader.peek_bits(available as u8)? as usize;
         let lookup = self.fast[index];
-        let len = lookup.len();
+        let (symbol, len) = lookup.parts();
         if len == 0 {
             return Err(BurliError::Format("invalid Brotli Huffman code"));
         }
@@ -275,7 +273,7 @@ impl PrefixCode {
         }
 
         reader.drop_bits(len)?;
-        Ok(lookup.symbol())
+        Ok(symbol)
     }
 }
 
