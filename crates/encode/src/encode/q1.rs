@@ -666,20 +666,12 @@ pub(super) fn collect_q0_default_skip<'a>(
     workspace.collect_q0_default_skip(input, max_backward_distance)
 }
 
-pub(super) fn collect_with_64k_sparse_skip<'a>(
+pub(super) fn collect_with_64k_sparse_stride<'a>(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &'a mut Workspace,
 ) -> &'a Batch {
-    workspace.collect_with_64k_sparse_skip(input, max_backward_distance)
-}
-
-pub(super) fn collect_with_128k_default_skip<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_with_128k_default_skip(input, max_backward_distance)
+    workspace.collect_with_64k_sparse_stride(input, max_backward_distance)
 }
 
 pub(super) fn collect_with_32k_json_skip<'a>(
@@ -1286,7 +1278,7 @@ impl Workspace {
     }
 
     #[allow(clippy::large_stack_arrays)]
-    fn collect_with_64k_sparse_skip(
+    fn collect_with_64k_sparse_stride(
         &mut self,
         input: &[u8],
         max_backward_distance: usize,
@@ -1298,39 +1290,12 @@ impl Workspace {
             return &self.batch;
         }
 
-        let mut table = [0_u32; 1 << 16];
-        collect_with_u32_table_m6::<16, SPARSE_U32_SKIP_START, true, true>(
+        let mut table = [NO_POSITION; 1 << 16];
+        collect_with_u32_table_m6_sparse_stride::<16>(
             &mut self.batch,
             input,
             max_backward_distance,
             &mut table,
-        );
-        &self.batch
-    }
-
-    fn collect_with_128k_default_skip(
-        &mut self,
-        input: &[u8],
-        max_backward_distance: usize,
-    ) -> &Batch {
-        self.reset(input.len());
-
-        if input.len() < INPUT_MARGIN_BYTES {
-            self.push_literals(input, 0, input.len());
-            return &self.batch;
-        }
-
-        const TABLE_SIZE: usize = 1 << 17;
-        if self.table.len() != TABLE_SIZE {
-            self.table.resize(TABLE_SIZE, 0);
-        } else {
-            self.table.fill(0);
-        }
-        collect_with_u32_table_m6::<17, DEFAULT_U32_SKIP_START, true, true>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-            &mut self.table,
         );
         &self.batch
     }
@@ -1552,7 +1517,6 @@ const FAST_U16_SKIP_START: usize = 96;
 const FASTER_U16_SKIP_START: usize = 128;
 const DEFAULT_U32_SKIP_START: usize = 32;
 const Q0_U32_SKIP_START: usize = 48;
-const SPARSE_U32_SKIP_START: usize = 40;
 const MEDIUM_U32_SKIP_START: usize = 64;
 const JSON_U32_SKIP_START: usize = 80;
 const FAST_U32_SKIP_START: usize = 96;
@@ -1659,6 +1623,73 @@ fn collect_with_u32_table_m6<
             break;
         }
         next_hash = hash6_at_const::<TABLE_BITS>(input, pos);
+    }
+
+    if insert_start < input.len() {
+        push_literals_to_batch(batch, input, insert_start, input.len() - insert_start);
+    }
+}
+
+fn collect_with_u32_table_m6_sparse_stride<const TABLE_BITS: usize>(
+    batch: &mut Batch,
+    input: &[u8],
+    max_backward_distance: usize,
+    table: &mut [u32],
+) {
+    const SPARSE_STRIDE: usize = 64;
+
+    debug_assert_eq!(table.len(), 1_usize << TABLE_BITS);
+    let max_distance = max_backward_distance.min(MAX_DISTANCE);
+    let len_limit = input
+        .len()
+        .saturating_sub(6)
+        .min(input.len().saturating_sub(INPUT_MARGIN_BYTES));
+    if len_limit <= 1 {
+        push_literals_to_batch(batch, input, 0, input.len());
+        return;
+    }
+
+    let mut pos = 0;
+    let mut insert_start = 0;
+    let mut last_distance = NO_LAST_DISTANCE;
+
+    while pos <= len_limit {
+        let key = hash6_at_const::<TABLE_BITS>(input, pos);
+        let candidate = if last_distance != NO_LAST_DISTANCE
+            && pos >= last_distance
+            && is_match6(input, pos - last_distance, pos)
+        {
+            table[key] = pos as u32;
+            Some(pos - last_distance)
+        } else {
+            let candidate = table[key] as usize;
+            table[key] = pos as u32;
+            (candidate < pos && pos - candidate <= max_distance && is_match6(input, candidate, pos))
+                .then_some(candidate)
+        };
+
+        if let Some(candidate) = candidate {
+            let distance = pos - candidate;
+            let max_copy_len = (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
+            if max_copy_len >= 6 {
+                let copy_len = 6 + match_len(input, candidate + 6, pos + 6, max_copy_len - 6);
+                batch.push_copy(
+                    input,
+                    insert_start,
+                    pos - insert_start,
+                    copy_len,
+                    distance,
+                    last_distance,
+                );
+                pos += copy_len;
+                insert_start = pos;
+                last_distance = distance;
+                pos = pos.saturating_add(SPARSE_STRIDE - 1) & !(SPARSE_STRIDE - 1);
+                continue;
+            }
+        }
+
+        pos += SPARSE_STRIDE;
     }
 
     if insert_start < input.len() {

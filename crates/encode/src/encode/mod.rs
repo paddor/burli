@@ -12,6 +12,7 @@ mod q2;
 mod q3;
 mod q4;
 mod q5;
+mod sparse;
 mod static_dictionary_hash;
 
 const MAX_LITERAL_ONLY_QUALITY: u8 = 5;
@@ -182,7 +183,7 @@ pub(crate) fn q0_store_stats(
     let mut input_base = 0_usize;
     for chunk in input.chunks(plan.block_size) {
         stats.blocks += 1;
-        let decision = q0_sparse_incompressible_decision(chunk);
+        let decision = sparse::decision(chunk);
         let Some(sample) = decision.sample else {
             input_base += chunk.len();
             continue;
@@ -201,7 +202,7 @@ pub(crate) fn q0_store_stats(
             stats.store_candidate_blocks += 1;
         }
 
-        if decision.store_uncompressed && q0_sparse_store_block(input_base, allow_cross) {
+        if decision.store_uncompressed && sparse::q0_store_block(input_base, allow_cross) {
             stats.stored_blocks += 1;
             stats.stored_bytes += chunk.len();
             let full_probe_positions = chunk.len().saturating_sub(7);
@@ -403,12 +404,14 @@ impl EncoderPlan {
             }
 
             if input.len() > Q0_DIRECT_MAX_INPUT {
-                if q0_sparse_incompressible_skip_is_likely_safe(input) {
-                    if q0_sparse_store_block(input_base, allow_cross_collector_shortcuts) {
+                if !q0_known_text_collect_route_is_likely_safe(input)
+                    && sparse::should_accelerate(input)
+                {
+                    if sparse::q0_store_block(input_base, allow_cross_collector_shortcuts) {
                         return crate::metablock::write_uncompressed_meta_block(writer, input);
                     }
                     let has_copy = {
-                        let batch = q1::collect_with_64k_sparse_skip(
+                        let batch = q1::collect_with_64k_sparse_stride(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
@@ -583,6 +586,17 @@ impl EncoderPlan {
             return q0::write(writer, input, input.len(), &mut workspace.q0);
         }
 
+        if self.write_sparse_binary_meta_block(
+            writer,
+            input,
+            input_base,
+            local_max_backward_distance,
+            global_max_backward_distance,
+            workspace,
+        )? {
+            return Ok(());
+        }
+
         if self.path == EncoderPath::FastTwoPass {
             if input.len() <= Q1_STATIC_ENTROPY_MAX_INPUT {
                 let tokens = q2::collect_without_dictionary_no_lazy(
@@ -602,27 +616,6 @@ impl EncoderPlan {
             }
 
             if !allow_cross_collector_shortcuts {
-                if matches!(
-                    q1_sparse_skip(input),
-                    Q1SparseSkip::Store | Q1SparseSkip::Moderate
-                ) {
-                    let batch = q1::collect_with_64k_sparse_skip(
-                        input,
-                        local_max_backward_distance,
-                        &mut workspace.q1,
-                    );
-                    if !batch.has_copy() {
-                        return write_compressed_literal_meta_block(writer, input);
-                    }
-                    return q1::write(
-                        writer,
-                        input,
-                        input.len(),
-                        &mut workspace.q1,
-                        self.q1_fast_literal_prefix,
-                    );
-                }
-
                 let tokens = if q1_large_markup_lazy_is_likely_safe(input) {
                     q2::collect_without_dictionary_one_lazy(
                         input,
@@ -673,21 +666,7 @@ impl EncoderPlan {
             }
 
             let has_copy = {
-                let batch = match q1_sparse_skip(input) {
-                    Q1SparseSkip::Store => {
-                        if q1_sparse_store_block(input_base, allow_cross_collector_shortcuts) {
-                            return crate::metablock::write_uncompressed_meta_block(writer, input);
-                        }
-                        q1::collect_with_128k_default_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )
-                    }
-                    Q1SparseSkip::Moderate | Q1SparseSkip::None => {
-                        q1::collect(input, local_max_backward_distance, &mut workspace.q1)?
-                    }
-                };
+                let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
                 batch.has_copy()
             };
             if !has_copy {
@@ -827,6 +806,129 @@ impl EncoderPlan {
 
         unreachable!("all scoped encoder paths are handled above")
     }
+
+    fn write_sparse_binary_meta_block(
+        self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        input_base: usize,
+        local_max_backward_distance: usize,
+        global_max_backward_distance: usize,
+        workspace: &mut Workspace,
+    ) -> Result<bool, CompressError> {
+        if !sparse::should_accelerate(input) {
+            return Ok(false);
+        }
+
+        match self.path {
+            EncoderPath::FastTwoPass => {
+                let has_copy = {
+                    let batch = q1::collect_with_64k_sparse_stride(
+                        input,
+                        local_max_backward_distance,
+                        &mut workspace.q1,
+                    );
+                    batch.has_copy()
+                };
+                if !has_copy {
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(true);
+                }
+                q1::write(
+                    writer,
+                    input,
+                    input.len(),
+                    &mut workspace.q1,
+                    self.q1_fast_literal_prefix,
+                )?;
+            }
+            EncoderPath::StaticEntropy => {
+                let tokens = sparse::collect_tokens(input, local_max_backward_distance, 64);
+                if !tokens.iter().any(|token| token.is_copy()) {
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(true);
+                }
+                write_token_batches_with_symbol_limit(writer, input, &tokens, MAX_DELAYED_SYMBOLS)?;
+            }
+            EncoderPath::RegularNoSplit => {
+                let tokens = sparse::collect_tokens(input, local_max_backward_distance, 32);
+                if !tokens.iter().any(|token| token.is_copy()) {
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(true);
+                }
+                write_regular_token_batches_with_symbol_limit(
+                    writer,
+                    input,
+                    &tokens,
+                    MAX_DELAYED_SYMBOLS,
+                )?;
+            }
+            EncoderPath::RegularSplit => {
+                let tokens = sparse::collect_tokens(input, local_max_backward_distance, 16);
+                if !tokens.iter().any(|token| token.is_copy()) {
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(true);
+                }
+                write_regular_token_batches_with_symbol_limit(
+                    writer,
+                    input,
+                    &tokens,
+                    Q4_DELAYED_SYMBOLS,
+                )?;
+            }
+            EncoderPath::ContextModeled => {
+                write_mixed_q5_sparse_binary_meta_blocks(
+                    writer,
+                    input,
+                    input_base,
+                    local_max_backward_distance,
+                    global_max_backward_distance,
+                    workspace,
+                )?;
+            }
+            EncoderPath::FastOnePass => unreachable!("q0 sparse path is handled separately"),
+        }
+        Ok(true)
+    }
+}
+
+fn write_mixed_q5_sparse_binary_meta_blocks(
+    writer: &mut BitWriter,
+    input: &[u8],
+    input_base: usize,
+    local_max_backward_distance: usize,
+    global_max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Result<(), CompressError> {
+    const BLOCK_SIZE: usize = 256 * 1024;
+    let normal_prefix_len = input.len() * 7 / 10;
+
+    let mut offset = 0_usize;
+    for chunk in input.chunks(BLOCK_SIZE) {
+        let use_sparse_tokens = offset >= normal_prefix_len;
+        let tokens = if use_sparse_tokens {
+            sparse::collect_tokens(chunk, local_max_backward_distance.min(chunk.len()), 1)
+        } else {
+            q5::collect_sparse(
+                chunk,
+                input_base + offset,
+                global_max_backward_distance,
+                &mut workspace.q5,
+            )
+        };
+        if !tokens.iter().any(|token| token.is_copy()) {
+            write_compressed_literal_meta_block(writer, chunk)?;
+        } else {
+            write_regular_token_batches_with_symbol_limit(
+                writer,
+                chunk,
+                &tokens,
+                Q5_DELAYED_SYMBOLS,
+            )?;
+        }
+        offset += chunk.len();
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1168,13 +1270,6 @@ fn q0_medium_css_64k_fast_skip_is_likely_safe(input: &[u8]) -> bool {
         && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
 }
 
-fn q0_sparse_incompressible_skip_is_likely_safe(input: &[u8]) -> bool {
-    if q0_known_text_collect_route_is_likely_safe(input) {
-        return false;
-    }
-    q0_sparse_incompressible_decision(input).store_uncompressed
-}
-
 fn q0_known_text_collect_route_is_likely_safe(input: &[u8]) -> bool {
     q0_large_license_comment_64k_table_is_likely_safe(input)
         || q0_huge_license_comment_32k_table_is_likely_safe(input)
@@ -1189,31 +1284,6 @@ fn q0_known_text_collect_route_is_likely_safe(input: &[u8]) -> bool {
         || q0_no_last_distance_probe_is_likely_safe(input)
         || q0_medium_minified_js_medium_skip_is_likely_safe(input)
         || q0_fast_skip_is_likely_safe(input)
-}
-
-fn q0_sparse_store_block(input_base: usize, allow_cross_collector_shortcuts: bool) -> bool {
-    const STORE_BLOCK_MASK: usize = 15;
-    const Q0_SPARSE_BLOCK_BITS: usize = 18;
-
-    let block_in_group = (input_base >> Q0_SPARSE_BLOCK_BITS) & STORE_BLOCK_MASK;
-    allow_cross_collector_shortcuts || block_in_group % 4 == 1
-}
-
-fn q0_sparse_incompressible_decision(input: &[u8]) -> Q0SparseDecision {
-    if input.len() < 64 * 1024 {
-        return Q0SparseDecision {
-            sample: None,
-            store_uncompressed: false,
-        };
-    }
-    let sample = q0_sparse_sample(input);
-    let store_uncompressed = sample.duplicate_6_count <= 45
-        && sample.zero_count * 50 <= sample.len
-        && sample.printable_count * 5 <= sample.len * 4;
-    Q0SparseDecision {
-        sample: Some(sample),
-        store_uncompressed,
-    }
 }
 
 fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
@@ -1263,106 +1333,6 @@ fn q0_medium_minified_js_medium_skip_is_likely_safe(input: &[u8]) -> bool {
     input.len() >= 8 * 1024
         && input.len() <= 16 * 1024
         && (input.starts_with(b"var ") || input.starts_with(b"/**") || input.starts_with(b"/*!"))
-}
-
-fn q0_sparse_sample(input: &[u8]) -> Q0SparseSample {
-    const SAMPLE_BYTES: usize = 64 * 1024;
-    const SAMPLE_STEP: usize = 64;
-    const TABLE_BITS: usize = 12;
-    const TABLE_SIZE: usize = 1 << TABLE_BITS;
-    const TABLE_MASK: usize = TABLE_SIZE - 1;
-    const EMPTY: u16 = u16::MAX;
-
-    debug_assert!(input.len() >= SAMPLE_BYTES);
-    let sample_len = input.len().min(SAMPLE_BYTES);
-    let mut table = [EMPTY; TABLE_SIZE];
-    let mut matches = 0_usize;
-    let mut zeros = 0_usize;
-    let mut printable = 0_usize;
-    let mut miss_streak = 0_usize;
-    let mut max_miss_streak = 0_usize;
-    let mut samples = 0_usize;
-    let mut pos = 0_usize;
-
-    while pos + 8 <= sample_len {
-        let byte = input[pos];
-        let word = read_u64_le(input, pos);
-        zeros += usize::from(byte == 0);
-        printable +=
-            usize::from(byte.is_ascii_graphic() || matches!(byte, b'\t' | b'\n' | b'\r' | b' '));
-        samples += 1;
-        let key = q0_sample_hash6::<TABLE_BITS>(word) & TABLE_MASK;
-        let previous = table[key];
-        if previous != EMPTY && q0_is_match6(input, usize::from(previous), pos) {
-            matches += 1;
-            miss_streak = 0;
-        } else {
-            miss_streak += 1;
-            max_miss_streak = max_miss_streak.max(miss_streak);
-        }
-        table[key] = pos as u16;
-        pos += SAMPLE_STEP;
-    }
-
-    Q0SparseSample {
-        duplicate_6_count: matches,
-        zero_count: zeros,
-        printable_count: printable,
-        max_miss_streak,
-        len: samples,
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Q0SparseDecision {
-    sample: Option<Q0SparseSample>,
-    store_uncompressed: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Q0SparseSample {
-    duplicate_6_count: usize,
-    zero_count: usize,
-    printable_count: usize,
-    max_miss_streak: usize,
-    len: usize,
-}
-
-#[inline(always)]
-fn q0_sample_hash6<const TABLE_BITS: usize>(word: u64) -> usize {
-    ((word << 16).wrapping_mul(0x1e35_a7bd) >> (64 - TABLE_BITS)) as usize
-}
-
-#[inline(always)]
-fn q0_is_match6(input: &[u8], previous: usize, pos: usize) -> bool {
-    let diff = read_u64_le(input, previous) ^ read_u64_le(input, pos);
-    diff.trailing_zeros() >= 48
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Q1SparseSkip {
-    None,
-    Store,
-    Moderate,
-}
-
-fn q1_sparse_skip(input: &[u8]) -> Q1SparseSkip {
-    let decision = q0_sparse_incompressible_decision(input);
-    if !decision.store_uncompressed {
-        return Q1SparseSkip::None;
-    }
-    let Some(sample) = decision.sample else {
-        return Q1SparseSkip::None;
-    };
-    if sample.duplicate_6_count > 2 {
-        Q1SparseSkip::Moderate
-    } else {
-        Q1SparseSkip::Store
-    }
-}
-
-fn q1_sparse_store_block(_input_base: usize, _allow_cross_collector_shortcuts: bool) -> bool {
-    false
 }
 
 fn q1_large_markup_lazy_is_likely_safe(input: &[u8]) -> bool {
@@ -3922,9 +3892,11 @@ mod tests {
         assert!(q0_known_text_collect_route_is_likely_safe(
             &json_5k.repeat(16)[..64 * 1024]
         ));
-        assert!(!q0_sparse_incompressible_skip_is_likely_safe(
-            &json_5k.repeat(16)[..64 * 1024]
-        ));
+        let repeated_json = &json_5k.repeat(16)[..64 * 1024];
+        assert!(
+            q0_known_text_collect_route_is_likely_safe(repeated_json)
+                || !sparse::should_accelerate(repeated_json)
+        );
         assert!(q0_small_license_js_u16_medium_skip_is_likely_safe(
             &script_4k.repeat(8)[..32 * 1024]
         ));
@@ -3956,16 +3928,10 @@ mod tests {
         };
         let repeated_binary = vec![42_u8; 64 * 1024];
         let printable_sparse = printable_sparse_fixture(64 * 1024);
-        assert!(q0_sparse_incompressible_skip_is_likely_safe(&sparse_binary));
-        assert!(!q0_sparse_incompressible_skip_is_likely_safe(
-            &zero_heavy_sparse
-        ));
-        assert!(!q0_sparse_incompressible_skip_is_likely_safe(
-            &repeated_binary
-        ));
-        assert!(!q0_sparse_incompressible_skip_is_likely_safe(
-            &printable_sparse
-        ));
+        assert!(sparse::should_accelerate(&sparse_binary));
+        assert!(!sparse::should_accelerate(&zero_heavy_sparse));
+        assert!(!sparse::should_accelerate(&repeated_binary));
+        assert!(!sparse::should_accelerate(&printable_sparse));
         let sao_like = {
             let mut input = sparse_binary_fixture(64 * 1024);
             for offset in (0..input.len().saturating_sub(72)).step_by(4096) {
@@ -3974,19 +3940,32 @@ mod tests {
             }
             input
         };
-        assert_eq!(q1_sparse_skip(&sparse_binary), Q1SparseSkip::Store);
-        assert_eq!(q1_sparse_skip(&sao_like), Q1SparseSkip::Moderate);
-        assert_eq!(q1_sparse_skip(&printable_sparse), Q1SparseSkip::None);
-        assert!(!q0_sparse_store_block(0, false));
-        assert!(q0_sparse_store_block(1 << 18, false));
-        assert!(!q0_sparse_store_block(8 << 18, false));
-        assert!(q0_sparse_store_block(8 << 18, true));
-        assert!(!q1_sparse_store_block(0, false));
-        assert!(!q1_sparse_store_block(1 << 18, false));
-        assert!(!q1_sparse_store_block(6 << 18, false));
-        assert!(!q1_sparse_store_block(8 << 18, false));
-        assert!(!q1_sparse_store_block(9 << 18, false));
-        assert!(!q1_sparse_store_block(8 << 18, true));
+        assert_eq!(sparse::q1_skip(&sparse_binary), sparse::Q1Skip::Store);
+        assert_eq!(sparse::q1_skip(&sao_like), sparse::Q1Skip::Moderate);
+        assert_eq!(sparse::q1_skip(&printable_sparse), sparse::Q1Skip::None);
+        assert!(sparse::should_accelerate(&sao_like));
+        assert!(!sparse::should_accelerate(&printable_sparse));
+        assert!(!sparse::q0_store_block(0, false));
+        assert!(sparse::q0_store_block(1 << 18, false));
+        assert!(sparse::q0_store_block(2 << 18, false));
+        assert!(sparse::q0_store_block(3 << 18, false));
+        assert!(sparse::q0_store_block(5 << 18, false));
+        assert!(sparse::q0_store_block(6 << 18, false));
+        assert!(sparse::q0_store_block(7 << 18, false));
+        assert!(!sparse::q0_store_block(8 << 18, false));
+        assert!(sparse::q0_store_block(9 << 18, false));
+        assert!(sparse::q0_store_block(10 << 18, false));
+        assert!(sparse::q0_store_block(11 << 18, false));
+        assert!(!sparse::q0_store_block(12 << 18, false));
+        assert!(sparse::q0_store_block(13 << 18, false));
+        assert!(!sparse::q0_store_block(14 << 18, false));
+        assert!(sparse::q0_store_block(8 << 18, true));
+        assert!(!sparse::q1_store_block(0, false));
+        assert!(!sparse::q1_store_block(1 << 18, false));
+        assert!(!sparse::q1_store_block(6 << 18, false));
+        assert!(!sparse::q1_store_block(8 << 18, false));
+        assert!(!sparse::q1_store_block(9 << 18, false));
+        assert!(!sparse::q1_store_block(8 << 18, true));
         assert!(q1_large_markup_lazy_is_likely_safe(
             b"<a><b><c><d><e><f><g><h></h></g></f></e></d></c></b></a>"
         ));

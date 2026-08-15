@@ -66,42 +66,93 @@ pub(super) fn collect(
     workspace: &mut Workspace,
 ) -> Vec<Token> {
     if input.len() <= 1024 {
-        collect_with_params::<8, 4, 4, 4, false>(
+        collect_with_params::<8, 4, 4, 4, false, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
         )
     } else if input.len() <= 96 * 1024 {
-        collect_with_params::<13, 3, 4, 4, true>(
+        collect_with_params::<13, 3, 4, 4, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
         )
     } else if input.len() <= 160 * 1024 {
-        collect_with_params::<15, 3, 4, 4, true>(
+        collect_with_params::<15, 3, 4, 4, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
         )
     } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
-        collect_with_params::<13, 3, 4, 4, true>(
+        collect_with_params::<13, 3, 4, 4, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
         )
     } else if input.len() >= LARGE_INPUT_THRESHOLD {
-        collect_with_params::<15, 4, 5, 8, true>(
+        collect_with_params::<15, 4, 5, 8, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
         )
     } else {
-        collect_with_params::<14, 3, 4, 4, false>(
+        collect_with_params::<14, 3, 4, 4, false, 1>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
+    }
+}
+
+pub(super) fn collect_sparse(
+    input: &[u8],
+    input_base: usize,
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+) -> Vec<Token> {
+    if input.len() <= 1024 {
+        collect_with_params::<8, 4, 4, 4, false, 4>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
+    } else if input.len() <= 96 * 1024 {
+        collect_with_params::<13, 3, 4, 4, true, 4>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
+    } else if input.len() <= 160 * 1024 {
+        collect_with_params::<15, 3, 4, 4, true, 4>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
+    } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
+        collect_with_params::<13, 3, 4, 4, true, 4>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
+    } else if input.len() >= LARGE_INPUT_THRESHOLD {
+        collect_with_params::<15, 4, 5, 8, true, 4>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+        )
+    } else {
+        collect_with_params::<14, 3, 4, 4, false, 4>(
             input,
             input_base,
             max_backward_distance,
@@ -116,6 +167,7 @@ fn collect_with_params<
     const HASH_LEN: usize,
     const HASH_READ_LEN: usize,
     const SKIP_DICT_AFTER_MATCH: bool,
+    const SPARSE_SKIP_MULTIPLIER: usize,
 >(
     input: &[u8],
     input_base: usize,
@@ -158,7 +210,13 @@ fn collect_with_params<
         else {
             pos += 1;
             if pos > apply_sparse_search {
-                pos = skip_sparse::<BUCKET_BITS, BLOCK_BITS, HASH_LEN, HASH_READ_LEN>(
+                pos = skip_sparse::<
+                    BUCKET_BITS,
+                    BLOCK_BITS,
+                    HASH_LEN,
+                    HASH_READ_LEN,
+                    SPARSE_SKIP_MULTIPLIER,
+                >(
                     input,
                     &mut counts,
                     &mut buckets,
@@ -474,6 +532,7 @@ fn skip_sparse<
     const BLOCK_BITS: usize,
     const HASH_LEN: usize,
     const HASH_READ_LEN: usize,
+    const SPARSE_SKIP_MULTIPLIER: usize,
 >(
     input: &[u8],
     counts: &mut [u32],
@@ -483,17 +542,18 @@ fn skip_sparse<
     start: usize,
 ) -> usize {
     let margin = HASH_READ_LEN - 1;
+    debug_assert!(SPARSE_SKIP_MULTIPLIER != 0);
     if pos > start + 4 * SPARSE_SEARCH_WINDOW {
-        let pos_jump = (pos + 16).min(pos_end.saturating_sub(margin));
+        let pos_jump = (pos + 16 * SPARSE_SKIP_MULTIPLIER).min(pos_end.saturating_sub(margin));
         while pos < pos_jump {
             store::<BUCKET_BITS, BLOCK_BITS, HASH_LEN, HASH_READ_LEN>(input, counts, buckets, pos);
-            pos += 4;
+            pos += 4 * SPARSE_SKIP_MULTIPLIER;
         }
     } else {
-        let pos_jump = (pos + 8).min(pos_end.saturating_sub(margin));
+        let pos_jump = (pos + 8 * SPARSE_SKIP_MULTIPLIER).min(pos_end.saturating_sub(margin));
         while pos < pos_jump {
             store::<BUCKET_BITS, BLOCK_BITS, HASH_LEN, HASH_READ_LEN>(input, counts, buckets, pos);
-            pos += 2;
+            pos += 2 * SPARSE_SKIP_MULTIPLIER;
         }
     }
     pos
