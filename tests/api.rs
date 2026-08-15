@@ -4,6 +4,8 @@ use std::io::{Cursor, Write};
 
 use burli::{BurliError, Options, Quality};
 
+const LOCAL_CORPUS_RATIO_SAMPLE_LIMIT: u64 = 1024 * 1024;
+
 #[test]
 fn validates_quality() {
     assert_eq!(Quality::new(0).unwrap().get(), 0);
@@ -419,9 +421,98 @@ fn local_silesia_q4_q5_round_trip_through_burli() {
 }
 
 #[test]
+#[ignore = "uses local benchmark corpus if already downloaded"]
+fn local_web_corpus_geomean_ratio_is_monotone() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/corpus/web");
+    assert_local_corpus_geomean_ratio_is_monotone(
+        &root,
+        &[
+            "jquery-3.7.1.js",
+            "lodash-4.17.21.js",
+            "bootstrap-5.3.3.bundle.js",
+            "bootstrap-5.3.3.css",
+            "github-markdown-5.5.1.css",
+            "normalize-8.0.1.css",
+            "react-18.2.0.production.min.js",
+            "preact-10.19.6.module.js",
+            "vue-3.4.21.global.prod.js",
+            "citm-catalog.json",
+            "mdn-getting-started.html",
+            "mdn-debug-example.html",
+            "mdn-document-structure.html",
+            "whatwg-html-source",
+        ],
+    );
+}
+
+#[test]
+#[ignore = "uses local benchmark corpus if already downloaded"]
+fn local_silesia_corpus_geomean_ratio_is_monotone() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/corpus/silesia");
+    assert_local_corpus_geomean_ratio_is_monotone(
+        &root,
+        &[
+            "dickens", "mozilla", "mr", "nci", "ooffice", "osdb", "reymont", "samba", "sao",
+            "webster", "x-ray", "xml",
+        ],
+    );
+}
+
+#[test]
 fn decoder_rejects_invalid_input() {
     assert!(matches!(
         burli::decompress(b"not brotli"),
         Err(BurliError::Format(_) | BurliError::InvalidWindowBits(_))
     ));
+}
+
+fn assert_local_corpus_geomean_ratio_is_monotone(root: &std::path::Path, entries: &[&str]) {
+    if !root.exists() {
+        return;
+    }
+
+    let mut inputs = Vec::new();
+    for entry in entries {
+        let path = root.join(entry);
+        let input = read_corpus_prefix(&path);
+        assert!(!input.is_empty(), "empty corpus input: {}", path.display());
+        inputs.push((*entry, input));
+    }
+
+    let mut previous = 0.0_f64;
+    for quality in 0..=5 {
+        let geomean = geomean_compression_ratio(&inputs, quality);
+        assert!(
+            geomean + 1e-12 >= previous,
+            "{} q{quality} geomean ratio regressed: {geomean:.6} < {previous:.6}",
+            root.display()
+        );
+        previous = geomean;
+    }
+}
+
+fn geomean_compression_ratio(inputs: &[(&str, Vec<u8>)], quality: u8) -> f64 {
+    let log_sum = inputs
+        .iter()
+        .map(|(entry, input)| {
+            let encoded = burli::compress(input, quality)
+                .unwrap_or_else(|error| panic!("q{quality} {entry} encode failed: {error:?}"));
+            ((input.len() as f64) / (encoded.len() as f64)).ln()
+        })
+        .sum::<f64>();
+
+    (log_sum / inputs.len() as f64).exp()
+}
+
+fn read_corpus_prefix(path: &std::path::Path) -> Vec<u8> {
+    let file = std::fs::File::open(path)
+        .unwrap_or_else(|error| panic!("failed to open {}: {error}", path.display()));
+    let mut reader = file.take(LOCAL_CORPUS_RATIO_SAMPLE_LIMIT);
+    let mut input = Vec::new();
+
+    reader
+        .read_to_end(&mut input)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+
+    input
 }

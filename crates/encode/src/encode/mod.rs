@@ -725,31 +725,21 @@ impl EncoderPlan {
                 )?;
             }
             EncoderPath::RegularSplit => {
-                if q4_low_compress_split_sample(sparse_decision.sample) {
-                    write_split_q4_sparse_binary_meta_blocks(
-                        writer,
-                        input,
-                        local_max_backward_distance,
-                        tune::Q4_LOW_COMPRESS_BLOCK_SIZE,
-                        tune::Q4_LOW_COMPRESS_STORE_BLOCKS,
-                    )?;
-                } else {
-                    let tokens = sparse::collect_tokens(
-                        input,
-                        local_max_backward_distance,
-                        tune::Q4_LOW_COMPRESS_SPARSE_STRIDE,
-                    );
-                    if !tokens.iter().any(|token| token.is_copy()) {
-                        write_compressed_literal_meta_block(writer, input)?;
-                        return Ok(true);
-                    }
-                    write_regular_token_batches_with_symbol_limit(
-                        writer,
-                        input,
-                        &tokens,
-                        tune::Q4_DELAYED_SYMBOLS,
-                    )?;
+                let tokens = sparse::collect_tokens(
+                    input,
+                    local_max_backward_distance,
+                    tune::Q4_LOW_COMPRESS_SPARSE_STRIDE,
+                );
+                if !tokens.iter().any(|token| token.is_copy()) {
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(true);
                 }
+                write_regular_token_batches_with_symbol_limit(
+                    writer,
+                    input,
+                    &tokens,
+                    tune::LOW_COMPRESS_DELAYED_SYMBOLS,
+                )?;
             }
             EncoderPath::ContextModeled => {
                 let tokens = sparse::collect_tokens(
@@ -765,47 +755,13 @@ impl EncoderPlan {
                     writer,
                     input,
                     &tokens,
-                    tune::Q5_DELAYED_SYMBOLS,
+                    tune::LOW_COMPRESS_DELAYED_SYMBOLS,
                 )?;
             }
             EncoderPath::FastOnePass => unreachable!("q0 sparse path is handled separately"),
         }
         Ok(true)
     }
-}
-
-fn write_split_q4_sparse_binary_meta_blocks(
-    writer: &mut BitWriter,
-    input: &[u8],
-    local_max_backward_distance: usize,
-    block_size: usize,
-    store_blocks: u16,
-) -> Result<(), CompressError> {
-    debug_assert!(block_size != 0);
-    for (block_index, chunk) in input.chunks(block_size).enumerate() {
-        let block_in_group = block_index & tune::Q4_LOW_COMPRESS_STORE_BLOCK_MASK;
-        if (store_blocks & (1 << block_in_group)) != 0 {
-            crate::metablock::write_uncompressed_meta_block(writer, chunk)?;
-            continue;
-        }
-
-        let tokens = sparse::collect_tokens(
-            chunk,
-            local_max_backward_distance.min(chunk.len()),
-            tune::Q4_LOW_COMPRESS_SPARSE_STRIDE,
-        );
-        if !tokens.iter().any(|token| token.is_copy()) {
-            write_compressed_literal_meta_block(writer, chunk)?;
-            continue;
-        }
-        write_regular_token_batches_with_symbol_limit(
-            writer,
-            chunk,
-            &tokens,
-            tune::Q4_DELAYED_SYMBOLS,
-        )?;
-    }
-    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1162,10 +1118,6 @@ fn q0_dense_sample(sample: Option<sparse::Sample>) -> bool {
 
 fn q0_low_dup_sample(sample: Option<sparse::Sample>) -> bool {
     sample.is_some_and(|sample| sample.duplicate_6_count <= tune::Q0_LOW_DUP6_MAX)
-}
-
-fn q4_low_compress_split_sample(sample: Option<sparse::Sample>) -> bool {
-    sample.is_some_and(|sample| sample.duplicate_6_count >= tune::Q4_LOW_COMPRESS_SPLIT_DUP6_MIN)
 }
 
 fn q0_collect_by_size<'a>(

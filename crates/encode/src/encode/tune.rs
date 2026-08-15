@@ -2,6 +2,7 @@ pub(super) const MAX_DELAYED_SYMBOLS: usize = 0x2fff;
 pub(super) const Q1_DELAYED_SYMBOLS: usize = 0x9fff;
 pub(super) const Q4_DELAYED_SYMBOLS: usize = 3840;
 pub(super) const Q5_DELAYED_SYMBOLS: usize = 3584;
+pub(super) const LOW_COMPRESS_DELAYED_SYMBOLS: usize = MAX_DELAYED_SYMBOLS;
 
 pub(super) const Q0_DIRECT_MAX_INPUT: usize = 384;
 pub(super) const Q0_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
@@ -46,13 +47,8 @@ pub(super) const Q0_LOW_COMPRESS_STORE_BLOCKS: u16 = !((1 << 0) | (1 << 5) | (1 
 
 pub(super) const Q2_LOW_COMPRESS_SPARSE_STRIDE: usize = 64;
 pub(super) const Q3_LOW_COMPRESS_SPARSE_STRIDE: usize = 32;
-pub(super) const Q4_LOW_COMPRESS_SPARSE_STRIDE: usize = 32;
-pub(super) const Q4_LOW_COMPRESS_BLOCK_SIZE: usize = 512 * 1024;
-pub(super) const Q4_LOW_COMPRESS_STORE_BLOCK_MASK: usize = 15;
-pub(super) const Q4_LOW_COMPRESS_STORE_BLOCKS: u16 =
-    (1 << 1) | (1 << 3) | (1 << 5) | (1 << 7) | (1 << 9) | (1 << 11) | (1 << 13) | (1 << 15);
-pub(super) const Q4_LOW_COMPRESS_SPLIT_DUP6_MIN: usize = 8;
-pub(super) const Q5_LOW_COMPRESS_SPARSE_STRIDE: usize = 8;
+pub(super) const Q4_LOW_COMPRESS_SPARSE_STRIDE: usize = 4;
+pub(super) const Q5_LOW_COMPRESS_SPARSE_STRIDE: usize = 1;
 
 pub(super) const Q1_DEFAULT_U16_SKIP_START: usize = 61;
 pub(super) const Q1_MEDIUM_U16_SKIP_START: usize = 72;
