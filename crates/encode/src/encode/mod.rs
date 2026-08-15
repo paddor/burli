@@ -670,22 +670,10 @@ impl EncoderPlan {
 
         match self.path {
             EncoderPath::FastTwoPass => {
-                let has_copy = {
-                    let batch = q1::collect_with_64k_sparse_stride(
-                        input,
-                        local_max_backward_distance,
-                        &mut workspace.q1,
-                    );
-                    batch.has_copy()
-                };
-                if !has_copy {
-                    write_compressed_literal_meta_block(writer, input)?;
-                    return Ok(true);
-                }
-                q1::write(
+                write_split_q1_sparse_binary_meta_blocks(
                     writer,
                     input,
-                    input.len(),
+                    local_max_backward_distance,
                     &mut workspace.q1,
                     self.q1_fast_literal_prefix,
                 )?;
@@ -762,6 +750,37 @@ impl EncoderPlan {
         }
         Ok(true)
     }
+}
+
+fn write_split_q1_sparse_binary_meta_blocks(
+    writer: &mut BitWriter,
+    input: &[u8],
+    local_max_backward_distance: usize,
+    workspace: &mut q1::Workspace,
+    fast_literal_prefix: bool,
+) -> Result<(), CompressError> {
+    for (block_index, chunk) in input.chunks(tune::Q1_LOW_COMPRESS_BLOCK_SIZE).enumerate() {
+        let block_in_group = block_index & tune::Q1_LOW_COMPRESS_STORE_BLOCK_MASK;
+        if (tune::Q1_LOW_COMPRESS_STORE_BLOCKS & (1 << block_in_group)) != 0 {
+            crate::metablock::write_uncompressed_meta_block(writer, chunk)?;
+            continue;
+        }
+
+        let has_copy = {
+            let batch = q1::collect_with_64k_sparse_stride(
+                chunk,
+                local_max_backward_distance.min(chunk.len()),
+                workspace,
+            );
+            batch.has_copy()
+        };
+        if !has_copy {
+            write_compressed_literal_meta_block(writer, chunk)?;
+            continue;
+        }
+        q1::write(writer, chunk, chunk.len(), workspace, fast_literal_prefix)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

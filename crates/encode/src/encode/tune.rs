@@ -45,9 +45,12 @@ pub(super) const Q0_LOW_COMPRESS_STORE_BLOCK_BITS: usize = 18;
 pub(super) const Q0_LOW_COMPRESS_STORE_BLOCK_MASK: usize = 15;
 pub(super) const Q0_LOW_COMPRESS_STORE_BLOCKS: u16 = !((1 << 0) | (1 << 5) | (1 << 10));
 
-pub(super) const Q2_LOW_COMPRESS_SPARSE_STRIDE: usize = 64;
-pub(super) const Q3_LOW_COMPRESS_SPARSE_STRIDE: usize = 32;
-pub(super) const Q4_LOW_COMPRESS_SPARSE_STRIDE: usize = 4;
+pub(super) const Q1_LOW_COMPRESS_BLOCK_SIZE: usize = 512 * 1024;
+pub(super) const Q1_LOW_COMPRESS_STORE_BLOCK_MASK: usize = 1;
+pub(super) const Q1_LOW_COMPRESS_STORE_BLOCKS: u16 = 1 << 1;
+pub(super) const Q2_LOW_COMPRESS_SPARSE_STRIDE: usize = 512;
+pub(super) const Q3_LOW_COMPRESS_SPARSE_STRIDE: usize = 128;
+pub(super) const Q4_LOW_COMPRESS_SPARSE_STRIDE: usize = 6;
 pub(super) const Q5_LOW_COMPRESS_SPARSE_STRIDE: usize = 1;
 
 pub(super) const Q1_DEFAULT_U16_SKIP_START: usize = 61;
