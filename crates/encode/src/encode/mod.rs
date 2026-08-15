@@ -1197,12 +1197,8 @@ fn q1_sparse_skip(input: &[u8]) -> Q1SparseSkip {
     }
 }
 
-fn q1_sparse_store_block(input_base: usize, allow_cross_collector_shortcuts: bool) -> bool {
-    const STORE_BLOCK_MASK: usize = 15;
-    const Q1_SPARSE_BLOCK_BITS: usize = 18;
-
-    let block_in_group = (input_base >> Q1_SPARSE_BLOCK_BITS) & STORE_BLOCK_MASK;
-    allow_cross_collector_shortcuts || matches!(block_in_group, 1 | 9)
+fn q1_sparse_store_block(_input_base: usize, _allow_cross_collector_shortcuts: bool) -> bool {
+    false
 }
 
 fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
@@ -3598,11 +3594,11 @@ mod tests {
         assert!(!q0_sparse_store_block(8 << 18, false));
         assert!(q0_sparse_store_block(8 << 18, true));
         assert!(!q1_sparse_store_block(0, false));
-        assert!(q1_sparse_store_block(1 << 18, false));
+        assert!(!q1_sparse_store_block(1 << 18, false));
         assert!(!q1_sparse_store_block(6 << 18, false));
         assert!(!q1_sparse_store_block(8 << 18, false));
-        assert!(q1_sparse_store_block(9 << 18, false));
-        assert!(q1_sparse_store_block(8 << 18, true));
+        assert!(!q1_sparse_store_block(9 << 18, false));
+        assert!(!q1_sparse_store_block(8 << 18, true));
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
