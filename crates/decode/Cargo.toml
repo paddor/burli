@@ -7,6 +7,8 @@ description = "Brotli decoder for burli"
 license = "MIT"
 repository = "https://github.com/paddor/burli"
 readme = "README.md"
+categories = ["compression"]
+keywords = ["brotli", "compression", "decoder"]
 
 [lints]
 workspace = true
