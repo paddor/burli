@@ -541,6 +541,15 @@ impl EncoderPlan {
                         self.q1_fast_literal_prefix,
                     );
                 }
+                if q0_medium_minified_js_medium_skip_is_likely_safe(input) {
+                    return q1::write_fast_command_prefixes(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
+                }
                 return q1::write(
                     writer,
                     input,
