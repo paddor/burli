@@ -1165,7 +1165,7 @@ fn q1_sparse_store_block(input_base: usize, allow_cross_collector_shortcuts: boo
     const Q1_SPARSE_BLOCK_BITS: usize = 18;
 
     let block_in_group = (input_base >> Q1_SPARSE_BLOCK_BITS) & STORE_BLOCK_MASK;
-    allow_cross_collector_shortcuts || matches!(block_in_group, 1 | 3 | 5 | 7 | 9)
+    allow_cross_collector_shortcuts || matches!(block_in_group, 1 | 6 | 11)
 }
 
 fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
