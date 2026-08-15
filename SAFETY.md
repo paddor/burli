@@ -28,6 +28,7 @@ Decoder is highest risk. It handles untrusted bytes. It must:
 - enforce max output length;
 - reject invalid Huffman tables and distances;
 - keep ring-buffer copy bounds explicit;
+- keep raw dictionary bytes separate from output history;
 - test truncation, bit flips, splices, and trailing-data policy.
 
 Encoder is lower risk but still must:

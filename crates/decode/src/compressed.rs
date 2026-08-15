@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use burli_core::{BurliError, DecompressError, bits::BitReader};
 
-use crate::huffman::PrefixCode;
+use crate::{dictionary::RawDictionary, huffman::PrefixCode};
 
 const LITERAL_ALPHABET_SIZE: usize = 256;
 const COMMAND_ALPHABET_SIZE: usize = 704;
@@ -61,44 +61,32 @@ impl DistanceRing {
     }
 }
 
-pub(crate) fn decode_meta_block(
-    reader: &mut BitReader<'_>,
-    output: &mut Vec<u8>,
-    len: usize,
-    max_output_size: usize,
-    window_bits: u8,
-    distances: &mut DistanceRing,
-) -> Result<(), DecompressError> {
-    decode_meta_block_with_base(
-        reader,
-        output,
-        0,
-        len,
-        max_output_size,
-        window_bits,
-        distances,
-    )
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MetaBlockDecodeParams<'a> {
+    pub(crate) output_base: usize,
+    pub(crate) len: usize,
+    pub(crate) max_output_size: usize,
+    pub(crate) window_bits: u8,
+    pub(crate) raw_dictionary: RawDictionary<'a>,
 }
 
 pub(crate) fn decode_meta_block_with_base(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
-    output_base: usize,
-    len: usize,
-    max_output_size: usize,
-    window_bits: u8,
+    params: MetaBlockDecodeParams<'_>,
     distances: &mut DistanceRing,
 ) -> Result<(), DecompressError> {
     let start = output.len();
     let needed = start
-        .checked_add(len)
+        .checked_add(params.len)
         .ok_or(BurliError::Format("Brotli output length overflow"))?;
-    let global_needed = output_base
+    let global_needed = params
+        .output_base
         .checked_add(needed)
         .ok_or(BurliError::Format("Brotli output length overflow"))?;
-    if global_needed > max_output_size {
+    if global_needed > params.max_output_size {
         return Err(BurliError::OutputLimitExceeded {
-            limit: max_output_size,
+            limit: params.max_output_size,
             needed: global_needed,
         });
     }
@@ -114,18 +102,19 @@ pub(crate) fn decode_meta_block_with_base(
         header.distance_tree_count(),
         header.distance_alphabet_size,
     )?;
-    let window_size = (1_usize << window_bits) - 16;
+    let window_size = (1_usize << params.window_bits) - 16;
     decode_meta_block_body(
         reader,
         output,
         needed,
-        output_base,
+        params.output_base,
         window_size,
         &mut header,
         &literal_codes,
         &command_codes,
         &distance_codes,
         distances,
+        params.raw_dictionary,
     )
 }
 
@@ -142,6 +131,7 @@ fn decode_meta_block_body(
     command_codes: &[PrefixCode],
     distance_codes: &[PrefixCode],
     distances: &mut DistanceRing,
+    raw_dictionary: RawDictionary<'_>,
 ) -> Result<(), DecompressError> {
     let single_command_block = header.commands.types() == 1;
     let single_distance_block = header.distances.types() == 1;
@@ -261,6 +251,7 @@ fn decode_meta_block_body(
                 push_distance: distance_symbol != 0,
             },
             distances,
+            raw_dictionary,
         )?;
     }
 
@@ -287,6 +278,7 @@ fn copy_from_distance(
     output: &mut Vec<u8>,
     request: CopyRequest,
     distances: &mut DistanceRing,
+    raw_dictionary: RawDictionary<'_>,
 ) -> Result<(), DecompressError> {
     let produced = output.len();
     let global_produced = request
@@ -294,11 +286,36 @@ fn copy_from_distance(
         .checked_add(produced)
         .ok_or(BurliError::Format("Brotli output length overflow"))?;
     let max_allowed_distance = request.window_size.min(global_produced);
-    if request.distance > max_allowed_distance {
+    let mut static_dictionary_distance_base = max_allowed_distance;
+    if !raw_dictionary.is_empty() {
+        let raw_dictionary_distance_end = max_allowed_distance
+            .checked_add(raw_dictionary.len())
+            .ok_or(BurliError::Format(
+                "Brotli raw dictionary distance overflow",
+            ))?;
+        if request.distance > max_allowed_distance
+            && request.distance <= raw_dictionary_distance_end
+        {
+            crate::dictionary::append_raw_lz77_copy(
+                output,
+                raw_dictionary,
+                request.distance,
+                max_allowed_distance,
+                request.len,
+                request.needed,
+            )?;
+            if request.push_distance {
+                distances.push(request.distance);
+            }
+            return Ok(());
+        }
+        static_dictionary_distance_base = raw_dictionary_distance_end;
+    }
+    if request.distance > static_dictionary_distance_base {
         crate::dictionary::append_lookup(
             output,
             request.distance,
-            max_allowed_distance,
+            static_dictionary_distance_base,
             request.len,
             request.needed,
         )?;
@@ -1460,6 +1477,7 @@ mod tests {
                 push_distance: false,
             },
             &mut distances,
+            RawDictionary::empty(),
         )
         .unwrap();
 
@@ -1483,6 +1501,7 @@ mod tests {
                 push_distance: true,
             },
             &mut distances,
+            RawDictionary::empty(),
         )
         .unwrap();
 
@@ -1507,6 +1526,7 @@ mod tests {
                 push_distance: true,
             },
             &mut distances,
+            RawDictionary::empty(),
         )
         .unwrap();
 
@@ -1531,6 +1551,7 @@ mod tests {
                 push_distance: true,
             },
             &mut distances,
+            RawDictionary::empty(),
         )
         .unwrap();
 
@@ -1583,6 +1604,7 @@ mod tests {
                 push_distance: true,
             },
             &mut distances,
+            RawDictionary::empty(),
         )
         .unwrap();
 

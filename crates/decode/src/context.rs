@@ -10,6 +10,7 @@ use burli_core::{DecompressError, format::DEFAULT_MAX_OUTPUT_SIZE};
 /// [`decompress_into_slice`](Self::decompress_into_slice) calls.
 pub struct Decompressor {
     max_output_size: usize,
+    raw_dictionary: Vec<u8>,
     scratch: Vec<u8>,
 }
 
@@ -18,6 +19,7 @@ impl Decompressor {
     pub const fn new() -> Self {
         Self {
             max_output_size: DEFAULT_MAX_OUTPUT_SIZE,
+            raw_dictionary: Vec::new(),
             scratch: Vec::new(),
         }
     }
@@ -26,6 +28,26 @@ impl Decompressor {
     pub fn with_limit(max_output_size: usize) -> Self {
         Self {
             max_output_size,
+            raw_dictionary: Vec::new(),
+            scratch: Vec::new(),
+        }
+    }
+
+    /// Create a decompressor with a raw LZ77 prefix dictionary.
+    pub fn with_raw_dictionary(dictionary: &[u8]) -> Self {
+        Self {
+            max_output_size: DEFAULT_MAX_OUTPUT_SIZE,
+            raw_dictionary: dictionary.to_vec(),
+            scratch: Vec::new(),
+        }
+    }
+
+    /// Create a decompressor with a raw LZ77 prefix dictionary and hard output
+    /// limit.
+    pub fn with_raw_dictionary_and_limit(dictionary: &[u8], max_output_size: usize) -> Self {
+        Self {
+            max_output_size,
+            raw_dictionary: dictionary.to_vec(),
             scratch: Vec::new(),
         }
     }
@@ -40,13 +62,28 @@ impl Decompressor {
         self.max_output_size = max_output_size;
     }
 
+    /// Replace the raw LZ77 prefix dictionary.
+    pub fn set_raw_dictionary(&mut self, dictionary: &[u8]) {
+        self.raw_dictionary.clear();
+        self.raw_dictionary.extend_from_slice(dictionary);
+    }
+
+    /// Remove the raw LZ77 prefix dictionary.
+    pub fn clear_raw_dictionary(&mut self) {
+        self.raw_dictionary.clear();
+    }
+
     /// Decompress `input` into a new `Vec`.
     ///
     /// # Errors
     ///
     /// Returns an error for malformed streams or output-limit violations.
     pub fn decompress(&mut self, input: &[u8]) -> Result<Vec<u8>, DecompressError> {
-        crate::decompress_with_limit(input, self.max_output_size)
+        crate::stored::decompress_with_raw_dictionary_and_limit(
+            input,
+            crate::dictionary::RawDictionary::new(&self.raw_dictionary),
+            self.max_output_size,
+        )
     }
 
     /// Decompress `input` and append to `output`.
@@ -68,6 +105,7 @@ impl Decompressor {
             input,
             self.max_output_size,
             &mut self.scratch,
+            crate::dictionary::RawDictionary::new(&self.raw_dictionary),
         )?;
         output.extend_from_slice(&self.scratch);
         Ok(output.len() - before)
@@ -89,7 +127,12 @@ impl Decompressor {
     ) -> Result<usize, DecompressError> {
         let limit = self.max_output_size.min(output.len());
         self.scratch.clear();
-        crate::stored::decompress_into_empty_with_limit(input, limit, &mut self.scratch)?;
+        crate::stored::decompress_into_empty_with_limit(
+            input,
+            limit,
+            &mut self.scratch,
+            crate::dictionary::RawDictionary::new(&self.raw_dictionary),
+        )?;
         output[..self.scratch.len()].copy_from_slice(&self.scratch);
         Ok(self.scratch.len())
     }
@@ -121,6 +164,21 @@ impl DecompressContext {
         }
     }
 
+    /// Create a context with a raw LZ77 prefix dictionary.
+    pub fn with_raw_dictionary(dictionary: &[u8]) -> Self {
+        Self {
+            inner: Decompressor::with_raw_dictionary(dictionary),
+        }
+    }
+
+    /// Create a context with a raw LZ77 prefix dictionary and hard output
+    /// limit.
+    pub fn with_raw_dictionary_and_limit(dictionary: &[u8], max_output_size: usize) -> Self {
+        Self {
+            inner: Decompressor::with_raw_dictionary_and_limit(dictionary, max_output_size),
+        }
+    }
+
     /// Return the configured maximum output size.
     pub const fn max_output_size(&self) -> usize {
         self.inner.max_output_size()
@@ -129,6 +187,16 @@ impl DecompressContext {
     /// Replace the output limit without releasing reusable buffers.
     pub fn set_limit(&mut self, max_output_size: usize) {
         self.inner.set_limit(max_output_size);
+    }
+
+    /// Replace the raw LZ77 prefix dictionary.
+    pub fn set_raw_dictionary(&mut self, dictionary: &[u8]) {
+        self.inner.set_raw_dictionary(dictionary);
+    }
+
+    /// Remove the raw LZ77 prefix dictionary.
+    pub fn clear_raw_dictionary(&mut self) {
+        self.inner.clear_raw_dictionary();
     }
 
     /// Decompress `input` into a new `Vec`.

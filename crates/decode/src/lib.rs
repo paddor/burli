@@ -50,6 +50,44 @@ pub fn decompress_with_limit(
     stored::decompress_with_limit(input, max_output_size)
 }
 
+/// Decompress a complete Brotli stream with a raw LZ77 prefix dictionary.
+///
+/// The dictionary must match the dictionary used by the encoder. This does not
+/// parse serialized shared dictionaries and does not replace Brotli's static
+/// dictionary.
+///
+/// # Errors
+///
+/// Returns an error for malformed streams, unsupported large-window streams, or
+/// output-limit violations.
+#[cfg(feature = "alloc")]
+pub fn decompress_with_raw_dictionary(
+    input: &[u8],
+    dictionary: &[u8],
+) -> Result<alloc::vec::Vec<u8>, DecompressError> {
+    decompress_with_raw_dictionary_and_limit(input, dictionary, DEFAULT_MAX_OUTPUT_SIZE)
+}
+
+/// Decompress a complete Brotli stream with a raw LZ77 prefix dictionary and
+/// maximum output size.
+///
+/// # Errors
+///
+/// Returns [`DecompressError::OutputLimitExceeded`] if the decoded stream would
+/// exceed `max_output_size`.
+#[cfg(feature = "alloc")]
+pub fn decompress_with_raw_dictionary_and_limit(
+    input: &[u8],
+    dictionary: &[u8],
+    max_output_size: usize,
+) -> Result<alloc::vec::Vec<u8>, DecompressError> {
+    stored::decompress_with_raw_dictionary_and_limit(
+        input,
+        crate::dictionary::RawDictionary::new(dictionary),
+        max_output_size,
+    )
+}
+
 /// Decompress `input` and append bytes to `output`.
 ///
 /// # Errors
@@ -62,7 +100,12 @@ pub fn decompress_into(
 ) -> Result<usize, DecompressError> {
     let before = output.len();
     let mut decompressed = alloc::vec::Vec::new();
-    stored::decompress_into_empty_with_limit(input, DEFAULT_MAX_OUTPUT_SIZE, &mut decompressed)?;
+    stored::decompress_into_empty_with_limit(
+        input,
+        DEFAULT_MAX_OUTPUT_SIZE,
+        &mut decompressed,
+        crate::dictionary::RawDictionary::empty(),
+    )?;
     output.extend_from_slice(&decompressed);
     Ok(output.len() - before)
 }
@@ -75,7 +118,12 @@ pub fn decompress_into(
 #[cfg(feature = "alloc")]
 pub fn decompress_into_slice(input: &[u8], output: &mut [u8]) -> Result<usize, DecompressError> {
     let mut decompressed = alloc::vec::Vec::with_capacity(output.len());
-    stored::decompress_into_empty_with_limit(input, output.len(), &mut decompressed)?;
+    stored::decompress_into_empty_with_limit(
+        input,
+        output.len(),
+        &mut decompressed,
+        crate::dictionary::RawDictionary::empty(),
+    )?;
     output[..decompressed.len()].copy_from_slice(&decompressed);
     Ok(decompressed.len())
 }

@@ -11,6 +11,91 @@ use burli_core::{
 mod transform;
 use transform::{transform_dictionary_word, transformed_dictionary_word_len};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RawDictionary<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> RawDictionary<'a> {
+    pub(crate) const fn empty() -> Self {
+        Self { bytes: &[] }
+    }
+
+    pub(crate) const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+
+    pub(crate) const fn len(self) -> usize {
+        self.bytes.len()
+    }
+
+    pub(crate) const fn is_empty(self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
+pub(crate) fn append_raw_lz77_copy(
+    output: &mut Vec<u8>,
+    dictionary: RawDictionary<'_>,
+    distance: usize,
+    max_allowed_distance: usize,
+    copy_len: usize,
+    needed: usize,
+) -> Result<(), DecompressError> {
+    let end = output
+        .len()
+        .checked_add(copy_len)
+        .ok_or(BurliError::Format("Brotli raw dictionary copy overflow"))?;
+    if end > needed {
+        return Err(BurliError::Format(
+            "Brotli raw dictionary copy exceeds meta-block size",
+        ));
+    }
+
+    let dictionary_address = dictionary
+        .len()
+        .checked_add(max_allowed_distance)
+        .and_then(|base| base.checked_sub(distance))
+        .ok_or(BurliError::Format("invalid Brotli raw dictionary distance"))?;
+    let dictionary_suffix = dictionary
+        .bytes
+        .get(dictionary_address..)
+        .ok_or(BurliError::Format("invalid Brotli raw dictionary distance"))?;
+    let copied_from_dictionary = copy_len.min(dictionary_suffix.len());
+    output.extend_from_slice(&dictionary_suffix[..copied_from_dictionary]);
+
+    let mut remaining = copy_len - copied_from_dictionary;
+    if remaining == 0 {
+        debug_assert_eq!(output.len(), end);
+        return Ok(());
+    }
+
+    let mut source = output
+        .len()
+        .checked_sub(copied_from_dictionary)
+        .and_then(|old_len| old_len.checked_sub(max_allowed_distance))
+        .ok_or(BurliError::Format(
+            "Brotli raw dictionary continuation underflow",
+        ))?;
+    while remaining != 0 {
+        let available = output.len().checked_sub(source).ok_or(BurliError::Format(
+            "Brotli raw dictionary continuation underflow",
+        ))?;
+        if available == 0 {
+            return Err(BurliError::Format(
+                "invalid Brotli raw dictionary continuation",
+            ));
+        }
+        let chunk = available.min(remaining);
+        output.extend_from_within(source..source + chunk);
+        source += chunk;
+        remaining -= chunk;
+    }
+
+    debug_assert_eq!(output.len(), end);
+    Ok(())
+}
+
 pub(crate) fn append_lookup(
     output: &mut Vec<u8>,
     distance: usize,
@@ -100,6 +185,36 @@ mod tests {
             Err(BurliError::Format("invalid Brotli dictionary word length"))
         ));
     }
+
+    #[test]
+    fn raw_lz77_copy_reads_dictionary_suffix() {
+        let mut output = b"abc".to_vec();
+        let dictionary = RawDictionary::new(b"012345");
+
+        append_raw_lz77_copy(&mut output, dictionary, 5, 3, 2, 5).unwrap();
+
+        assert_eq!(output, b"abc45");
+    }
+
+    #[test]
+    fn raw_lz77_copy_continues_into_window_beginning() {
+        let mut output = b"abcdef".to_vec();
+        let dictionary = RawDictionary::new(b"XYZ");
+
+        append_raw_lz77_copy(&mut output, dictionary, 9, 6, 7, 13).unwrap();
+
+        assert_eq!(output, b"abcdefXYZabcd");
+    }
+
+    #[test]
+    fn raw_lz77_copy_can_overlap_after_dictionary() {
+        let mut output = Vec::new();
+        let dictionary = RawDictionary::new(b"ab");
+
+        append_raw_lz77_copy(&mut output, dictionary, 2, 0, 6, 6).unwrap();
+
+        assert_eq!(output, b"ababab");
+    }
 }
 
 #[cfg(kani)]
@@ -114,5 +229,20 @@ mod verification {
             lookup(1, 0, len),
             Err(BurliError::Format("invalid Brotli dictionary word length"))
         ));
+    }
+
+    #[kani::proof]
+    fn raw_lz77_distance_range_maps_inside_dictionary() {
+        let dictionary_len = usize::from(kani::any::<u8>());
+        let max_allowed_distance = usize::from(kani::any::<u8>());
+        let delta = usize::from(kani::any::<u8>());
+
+        kani::assume(dictionary_len != 0);
+        kani::assume((1..=dictionary_len).contains(&delta));
+
+        let distance = max_allowed_distance + delta;
+        let dictionary_address = dictionary_len + max_allowed_distance - distance;
+
+        assert!(dictionary_address < dictionary_len);
     }
 }

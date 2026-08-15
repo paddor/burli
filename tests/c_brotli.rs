@@ -11,7 +11,18 @@ const DEFAULT_WINDOW_BITS: c_int = 22;
 const BROTLI_MODE_GENERIC: c_int = 0;
 const BROTLI_MODE_TEXT: c_int = 1;
 const BROTLI_MODE_FONT: c_int = 2;
+const BROTLI_PARAM_QUALITY: c_int = 1;
+const BROTLI_PARAM_LGWIN: c_int = 2;
+const BROTLI_OPERATION_FINISH: c_int = 2;
+const BROTLI_SHARED_DICTIONARY_RAW: c_int = 0;
+const BROTLI_DECODER_RESULT_ERROR: c_int = 0;
 const BROTLI_DECODER_RESULT_SUCCESS: c_int = 1;
+const BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT: c_int = 2;
+const BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT: c_int = 3;
+
+enum BrotliEncoderState {}
+enum BrotliEncoderPreparedDictionary {}
+enum BrotliDecoderState {}
 
 #[link(name = "brotlienc")]
 #[link(name = "brotlidec")]
@@ -32,6 +43,58 @@ unsafe extern "C" {
         encoded_buffer: *const u8,
         decoded_size: *mut usize,
         decoded_buffer: *mut u8,
+    ) -> c_int;
+    fn BrotliEncoderCreateInstance(
+        alloc_func: *mut std::ffi::c_void,
+        free_func: *mut std::ffi::c_void,
+        opaque: *mut std::ffi::c_void,
+    ) -> *mut BrotliEncoderState;
+    fn BrotliEncoderDestroyInstance(state: *mut BrotliEncoderState);
+    fn BrotliEncoderSetParameter(state: *mut BrotliEncoderState, param: c_int, value: u32)
+    -> c_int;
+    fn BrotliEncoderPrepareDictionary(
+        dictionary_type: c_int,
+        data_size: usize,
+        data: *const u8,
+        quality: c_int,
+        alloc_func: *mut std::ffi::c_void,
+        free_func: *mut std::ffi::c_void,
+        opaque: *mut std::ffi::c_void,
+    ) -> *mut BrotliEncoderPreparedDictionary;
+    fn BrotliEncoderDestroyPreparedDictionary(dictionary: *mut BrotliEncoderPreparedDictionary);
+    fn BrotliEncoderAttachPreparedDictionary(
+        state: *mut BrotliEncoderState,
+        dictionary: *const BrotliEncoderPreparedDictionary,
+    ) -> c_int;
+    fn BrotliEncoderCompressStream(
+        state: *mut BrotliEncoderState,
+        op: c_int,
+        available_in: *mut usize,
+        next_in: *mut *const u8,
+        available_out: *mut usize,
+        next_out: *mut *mut u8,
+        total_out: *mut usize,
+    ) -> c_int;
+    fn BrotliEncoderIsFinished(state: *mut BrotliEncoderState) -> c_int;
+    fn BrotliDecoderCreateInstance(
+        alloc_func: *mut std::ffi::c_void,
+        free_func: *mut std::ffi::c_void,
+        opaque: *mut std::ffi::c_void,
+    ) -> *mut BrotliDecoderState;
+    fn BrotliDecoderDestroyInstance(state: *mut BrotliDecoderState);
+    fn BrotliDecoderAttachDictionary(
+        state: *mut BrotliDecoderState,
+        dictionary_type: c_int,
+        data_size: usize,
+        data: *const u8,
+    ) -> c_int;
+    fn BrotliDecoderDecompressStream(
+        state: *mut BrotliDecoderState,
+        available_in: *mut usize,
+        next_in: *mut *const u8,
+        available_out: *mut usize,
+        next_out: *mut *mut u8,
+        total_out: *mut usize,
     ) -> c_int;
 }
 
@@ -98,6 +161,81 @@ fn c_brotli_q0_to_q5_web_fixture_slices_decode_through_burli() {
             assert_bytes_eq(&decoded, &input, &format!("C q{quality} web slice"));
         }
     }
+}
+
+#[test]
+fn c_brotli_raw_dictionary_decodes_through_burli() {
+    let dictionary =
+        b"raw-dictionary-entry:function renderTemplate(item){return item.label + item.value;}|"
+            .repeat(1024);
+    let input = dictionary[128..dictionary.len() - 128].to_vec();
+    let encoded = c_brotli_compress_with_raw_dictionary(&input, &dictionary, 11);
+
+    assert!(
+        encoded.len() < input.len() / 16,
+        "C Brotli did not use raw dictionary enough: {} -> {}",
+        input.len(),
+        encoded.len()
+    );
+    assert!(
+        burli::decompress(&encoded).is_err(),
+        "dictionary-backed stream decoded without raw dictionary"
+    );
+    assert_eq!(
+        burli::decompress_with_raw_dictionary(&encoded, &dictionary).unwrap(),
+        input
+    );
+    assert_eq!(
+        burli::decompress_with_raw_dictionary_and_limit(&encoded, &dictionary, input.len())
+            .unwrap(),
+        input
+    );
+    assert_eq!(
+        burli::decompress_with_raw_dictionary_and_limit(&encoded, &dictionary, input.len() - 1),
+        Err(burli::BurliError::OutputLimitExceeded {
+            limit: input.len() - 1,
+            needed: input.len(),
+        })
+    );
+
+    let mut decompressor = burli::Decompressor::new();
+    assert!(decompressor.decompress(&encoded).is_err());
+    decompressor.set_raw_dictionary(&dictionary);
+    assert_eq!(decompressor.decompress(&encoded).unwrap(), input);
+    decompressor.clear_raw_dictionary();
+    assert!(decompressor.decompress(&encoded).is_err());
+    decompressor.set_raw_dictionary(&dictionary);
+
+    let mut appended = b"decoded:".to_vec();
+    let written = decompressor
+        .decompress_into(&encoded, &mut appended)
+        .unwrap();
+    assert_eq!(written, input.len());
+    assert_eq!(&appended[b"decoded:".len()..], input);
+
+    let mut slice = vec![0_u8; input.len()];
+    let written = decompressor
+        .decompress_into_slice(&encoded, &mut slice)
+        .unwrap();
+    assert_eq!(written, input.len());
+    assert_eq!(slice, input);
+
+    let decoded_by_c = c_brotli_decompress_with_raw_dictionary(&encoded, &dictionary, input.len())
+        .expect("C Brotli failed to decode its raw-dictionary stream");
+    assert_eq!(decoded_by_c, input);
+
+    let mut stream = burli::StreamDecoder::with_raw_dictionary(encoded.as_slice(), &dictionary);
+    let mut streamed = Vec::new();
+    stream.read_to_end(&mut streamed).unwrap();
+    assert_eq!(streamed, input);
+
+    let mut limited =
+        burli::StreamDecoder::with_raw_dictionary_and_limit(encoded.as_slice(), &dictionary, 4);
+    let mut streamed = Vec::new();
+    assert_eq!(
+        limited.read_to_end(&mut streamed).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
 }
 
 #[test]
@@ -505,6 +643,68 @@ fn c_brotli_compress_with(input: &[u8], quality: u8, mode: c_int, lgwin: c_int) 
     output
 }
 
+fn c_brotli_compress_with_raw_dictionary(input: &[u8], dictionary: &[u8], quality: u8) -> Vec<u8> {
+    unsafe {
+        let state = BrotliEncoderCreateInstance(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert!(!state.is_null(), "C Brotli encoder allocation failed");
+        assert_eq!(
+            BrotliEncoderSetParameter(state, BROTLI_PARAM_QUALITY, u32::from(quality)),
+            1,
+            "C Brotli quality parameter failed"
+        );
+        assert_eq!(
+            BrotliEncoderSetParameter(state, BROTLI_PARAM_LGWIN, DEFAULT_WINDOW_BITS as u32),
+            1,
+            "C Brotli window parameter failed"
+        );
+
+        let prepared = BrotliEncoderPrepareDictionary(
+            BROTLI_SHARED_DICTIONARY_RAW,
+            dictionary.len(),
+            dictionary.as_ptr(),
+            c_int::from(quality),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert!(!prepared.is_null(), "C Brotli dictionary prepare failed");
+        assert_eq!(
+            BrotliEncoderAttachPreparedDictionary(state, prepared),
+            1,
+            "C Brotli dictionary attach failed"
+        );
+
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut output = Vec::new();
+        while BrotliEncoderIsFinished(state) == 0 {
+            let mut chunk = [0_u8; 4096];
+            let mut available_out = chunk.len();
+            let mut next_out = chunk.as_mut_ptr();
+            let ok = BrotliEncoderCompressStream(
+                state,
+                BROTLI_OPERATION_FINISH,
+                &raw mut available_in,
+                &raw mut next_in,
+                &raw mut available_out,
+                &raw mut next_out,
+                std::ptr::null_mut(),
+            );
+            assert_eq!(ok, 1, "C Brotli dictionary compression failed");
+            let produced = chunk.len() - available_out;
+            output.extend_from_slice(&chunk[..produced]);
+        }
+
+        BrotliEncoderDestroyPreparedDictionary(prepared);
+        BrotliEncoderDestroyInstance(state);
+        output
+    }
+}
+
 fn rust_brotli_compress(input: &[u8], quality: u32) -> Vec<u8> {
     let mut encoder = rust_brotli::CompressorReader::new(input, 4096, quality, 22);
     let mut output = Vec::new();
@@ -528,4 +728,60 @@ fn c_brotli_decompress(input: &[u8], decoded_size: usize) -> Option<Vec<u8>> {
     }
     output.truncate(output_size);
     Some(output)
+}
+
+fn c_brotli_decompress_with_raw_dictionary(
+    input: &[u8],
+    dictionary: &[u8],
+    decoded_size: usize,
+) -> Option<Vec<u8>> {
+    unsafe {
+        let state = BrotliDecoderCreateInstance(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert!(!state.is_null(), "C Brotli decoder allocation failed");
+        assert_eq!(
+            BrotliDecoderAttachDictionary(
+                state,
+                BROTLI_SHARED_DICTIONARY_RAW,
+                dictionary.len(),
+                dictionary.as_ptr(),
+            ),
+            1,
+            "C Brotli decoder dictionary attach failed"
+        );
+
+        let mut available_in = input.len();
+        let mut next_in = input.as_ptr();
+        let mut output = Vec::with_capacity(decoded_size);
+        loop {
+            let mut chunk = [0_u8; 4096];
+            let mut available_out = chunk.len();
+            let mut next_out = chunk.as_mut_ptr();
+            let result = BrotliDecoderDecompressStream(
+                state,
+                &raw mut available_in,
+                &raw mut next_in,
+                &raw mut available_out,
+                &raw mut next_out,
+                std::ptr::null_mut(),
+            );
+            let produced = chunk.len() - available_out;
+            output.extend_from_slice(&chunk[..produced]);
+            match result {
+                BROTLI_DECODER_RESULT_SUCCESS => {
+                    BrotliDecoderDestroyInstance(state);
+                    return Some(output);
+                }
+                BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT => {}
+                BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT | BROTLI_DECODER_RESULT_ERROR => {
+                    BrotliDecoderDestroyInstance(state);
+                    return None;
+                }
+                other => panic!("unexpected C Brotli decoder result: {other}"),
+            }
+        }
+    }
 }

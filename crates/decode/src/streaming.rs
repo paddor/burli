@@ -3,7 +3,7 @@ use std::io::{self, Read};
 use burli_core::{BurliError, DecompressError, bits::BitReader};
 
 use crate::{
-    compressed::DistanceRing,
+    compressed::{DistanceRing, MetaBlockDecodeParams},
     stored::{self, MetaBlockHeader},
 };
 
@@ -21,6 +21,7 @@ pub struct StreamDecoder<R> {
     bit_pos: usize,
     window_bits: Option<u8>,
     distances: DistanceRing,
+    raw_dictionary: Vec<u8>,
     output: Vec<u8>,
     output_pos: usize,
     output_base: usize,
@@ -56,6 +57,38 @@ impl<R: Read> StreamDecoder<R> {
             bit_pos: 0,
             window_bits: None,
             distances: DistanceRing::new(),
+            raw_dictionary: Vec::new(),
+            output: Vec::new(),
+            output_pos: 0,
+            output_base: 0,
+            state: State::Reading,
+        }
+    }
+
+    /// Create a stream decoder with a raw LZ77 prefix dictionary.
+    pub fn with_raw_dictionary(inner: R, dictionary: &[u8]) -> Self {
+        Self::with_raw_dictionary_and_limit(
+            inner,
+            dictionary,
+            burli_core::format::DEFAULT_MAX_OUTPUT_SIZE,
+        )
+    }
+
+    /// Create a stream decoder with a raw LZ77 prefix dictionary and hard
+    /// output limit.
+    pub fn with_raw_dictionary_and_limit(
+        inner: R,
+        dictionary: &[u8],
+        max_output_size: usize,
+    ) -> Self {
+        Self {
+            inner,
+            max_output_size,
+            encoded: Vec::new(),
+            bit_pos: 0,
+            window_bits: None,
+            distances: DistanceRing::new(),
+            raw_dictionary: dictionary.to_vec(),
             output: Vec::new(),
             output_pos: 0,
             output_base: 0,
@@ -184,10 +217,13 @@ impl<R: Read> StreamDecoder<R> {
                 crate::compressed::decode_meta_block_with_base(
                     &mut reader,
                     &mut output,
-                    self.output_base,
-                    len,
-                    self.max_output_size,
-                    window_bits,
+                    MetaBlockDecodeParams {
+                        output_base: self.output_base,
+                        len,
+                        max_output_size: self.max_output_size,
+                        window_bits,
+                        raw_dictionary: crate::dictionary::RawDictionary::new(&self.raw_dictionary),
+                    },
                     &mut distances,
                 )?;
                 if is_last {

@@ -95,6 +95,35 @@ pub fn decompress_with_limit(input: &[u8], max_output_size: usize) -> Result<all
     burli_decode::decompress_with_limit(input, max_output_size)
 }
 
+/// Decompress a complete Brotli stream with a raw LZ77 prefix dictionary.
+///
+/// # Errors
+///
+/// Returns an error for malformed streams or output-limit violations.
+#[cfg(feature = "alloc")]
+pub fn decompress_with_raw_dictionary(
+    input: &[u8],
+    dictionary: &[u8],
+) -> Result<alloc::vec::Vec<u8>> {
+    burli_decode::decompress_with_raw_dictionary(input, dictionary)
+}
+
+/// Decompress a complete Brotli stream with a raw LZ77 prefix dictionary and
+/// maximum output size.
+///
+/// # Errors
+///
+/// Returns [`BurliError::OutputLimitExceeded`] if the decoded stream would
+/// exceed `max_output_size`.
+#[cfg(feature = "alloc")]
+pub fn decompress_with_raw_dictionary_and_limit(
+    input: &[u8],
+    dictionary: &[u8],
+    max_output_size: usize,
+) -> Result<alloc::vec::Vec<u8>> {
+    burli_decode::decompress_with_raw_dictionary_and_limit(input, dictionary, max_output_size)
+}
+
 /// Decompress `input` and append bytes to `output`.
 ///
 /// Returns the number of bytes appended. The caller buffer is not modified when

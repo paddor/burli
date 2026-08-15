@@ -72,11 +72,21 @@ The default build uses a small unsafe copy primitive for non-overlapping
 backward copies. The `paranoid` feature replaces it with safe
 `Vec::extend_from_within`.
 
-## Static Dictionary
+## Dictionaries
 
 Dictionary references resolve through the shared Brotli dictionary table and
 transform code. The transform path validates length classes and UTF-8-sensitive
 uppercase transforms before appending bytes.
+
+Raw LZ77 prefix dictionaries are supported on decode. They are kept separate
+from the output ring. Distances in the range after the normal backward window
+copy from the raw dictionary suffix first, then continue into the beginning of
+the regular LZ77 window if the copy length crosses the dictionary end. Static
+dictionary distance IDs are shifted by the raw dictionary length, matching the
+shared Brotli dictionary rules.
+
+Serialized shared dictionaries and custom static word/transform dictionaries
+are not implemented.
 
 ## Encoder
 

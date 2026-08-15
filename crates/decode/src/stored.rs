@@ -1,6 +1,9 @@
 use alloc::vec::Vec;
 
-use crate::compressed::DistanceRing;
+use crate::{
+    compressed::{DistanceRing, MetaBlockDecodeParams},
+    dictionary::RawDictionary,
+};
 use burli_core::{
     BurliError, DecompressError,
     bits::BitReader,
@@ -21,12 +24,20 @@ pub fn decompress_with_limit(
     input: &[u8],
     max_output_size: usize,
 ) -> Result<Vec<u8>, DecompressError> {
+    decompress_with_raw_dictionary_and_limit(input, RawDictionary::empty(), max_output_size)
+}
+
+pub(crate) fn decompress_with_raw_dictionary_and_limit(
+    input: &[u8],
+    raw_dictionary: RawDictionary<'_>,
+    max_output_size: usize,
+) -> Result<Vec<u8>, DecompressError> {
     let mut output = if max_output_size <= MAX_META_BLOCK_SIZE {
         Vec::with_capacity(max_output_size)
     } else {
         Vec::new()
     };
-    decompress_into_empty_with_limit(input, max_output_size, &mut output)?;
+    decompress_into_empty_with_limit(input, max_output_size, &mut output, raw_dictionary)?;
     Ok(output)
 }
 
@@ -34,6 +45,7 @@ pub(crate) fn decompress_into_empty_with_limit(
     input: &[u8],
     max_output_size: usize,
     output: &mut Vec<u8>,
+    raw_dictionary: RawDictionary<'_>,
 ) -> Result<usize, DecompressError> {
     debug_assert!(output.is_empty());
 
@@ -73,12 +85,16 @@ pub(crate) fn decompress_into_empty_with_limit(
                 output.extend_from_slice(bytes);
             }
             MetaBlockHeader::Compressed { len, is_last } => {
-                crate::compressed::decode_meta_block(
+                crate::compressed::decode_meta_block_with_base(
                     &mut reader,
                     output,
-                    len,
-                    max_output_size,
-                    window_bits,
+                    MetaBlockDecodeParams {
+                        output_base: 0,
+                        len,
+                        max_output_size,
+                        window_bits,
+                        raw_dictionary,
+                    },
                     &mut distances,
                 )?;
                 if is_last {

@@ -52,5 +52,11 @@ let mut decoded = Vec::new();
 decompressor.decompress_into(&output, &mut decoded)?;
 ```
 
+Raw LZ77 prefix dictionaries are decode-only for now:
+
+```rust
+let original = burli::decompress_with_raw_dictionary(&compressed, dictionary)?;
+```
+
 Streaming is available with `StreamEncoder` and `StreamDecoder` when the `std`
 feature is enabled.
