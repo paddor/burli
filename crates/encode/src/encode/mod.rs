@@ -304,6 +304,7 @@ impl EncoderPlan {
         let block_size = match options.block_bits_value() {
             Some(bits) => 1_usize << bits,
             None if quality == 0 && input_len <= max_backward_distance => MAX_META_BLOCK_SIZE,
+            None if quality == 0 => 1_usize << 18,
             None if quality == 1 && input_len <= max_backward_distance => MAX_META_BLOCK_SIZE,
             None if quality == 1 => 1_usize << 18,
             None if quality == 2 => ((max_backward_distance + 16) << 1).min(MAX_META_BLOCK_SIZE),
@@ -405,14 +406,23 @@ impl EncoderPlan {
                         return crate::metablock::write_uncompressed_meta_block(writer, input);
                     }
                     let has_copy = {
-                        let batch =
-                            q0::collect(input, local_max_backward_distance, &mut workspace.q0)?;
+                        let batch = q1::collect_with_64k_sparse_skip(
+                            input,
+                            local_max_backward_distance,
+                            &mut workspace.q1,
+                        );
                         batch.has_copy()
                     };
                     if !has_copy {
                         return write_compressed_literal_meta_block(writer, input);
                     }
-                    return q0::write(writer, input, input.len(), &mut workspace.q0);
+                    return q1::write(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
                 }
 
                 let has_copy = {
@@ -564,11 +574,16 @@ impl EncoderPlan {
 
             let has_copy = {
                 let batch = match q1_sparse_skip(input) {
-                    Q1SparseSkip::Moderate => q1::collect_with_64k_sparse_skip(
-                        input,
-                        local_max_backward_distance,
-                        &mut workspace.q1,
-                    ),
+                    Q1SparseSkip::Store | Q1SparseSkip::Moderate => {
+                        if q1_sparse_store_block(input_base, allow_cross_collector_shortcuts) {
+                            return crate::metablock::write_uncompressed_meta_block(writer, input);
+                        }
+                        q1::collect_with_64k_sparse_skip(
+                            input,
+                            local_max_backward_distance,
+                            &mut workspace.q1,
+                        )
+                    }
                     Q1SparseSkip::None => {
                         q1::collect(input, local_max_backward_distance, &mut workspace.q1)?
                     }
@@ -983,9 +998,10 @@ fn q0_sparse_incompressible_skip_is_likely_safe(input: &[u8]) -> bool {
 
 fn q0_sparse_store_block(input_base: usize, allow_cross_collector_shortcuts: bool) -> bool {
     const STORE_BLOCK_MASK: usize = 15;
+    const Q0_SPARSE_BLOCK_BITS: usize = 18;
 
-    let block_in_group = (input_base >> MIN_BLOCK_BITS) & STORE_BLOCK_MASK;
-    allow_cross_collector_shortcuts || !matches!(block_in_group, 0 | 8)
+    let block_in_group = (input_base >> Q0_SPARSE_BLOCK_BITS) & STORE_BLOCK_MASK;
+    allow_cross_collector_shortcuts || block_in_group % 4 == 1
 }
 
 fn q0_sparse_incompressible_decision(input: &[u8]) -> Q0SparseDecision {
@@ -1125,6 +1141,7 @@ fn q0_is_match6(input: &[u8], previous: usize, pos: usize) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Q1SparseSkip {
     None,
+    Store,
     Moderate,
 }
 
@@ -1139,8 +1156,16 @@ fn q1_sparse_skip(input: &[u8]) -> Q1SparseSkip {
     if sample.duplicate_6_count > 2 {
         Q1SparseSkip::Moderate
     } else {
-        Q1SparseSkip::None
+        Q1SparseSkip::Store
     }
+}
+
+fn q1_sparse_store_block(input_base: usize, allow_cross_collector_shortcuts: bool) -> bool {
+    const STORE_BLOCK_MASK: usize = 15;
+    const Q1_SPARSE_BLOCK_BITS: usize = 18;
+
+    let block_in_group = (input_base >> Q1_SPARSE_BLOCK_BITS) & STORE_BLOCK_MASK;
+    allow_cross_collector_shortcuts || matches!(block_in_group, 1 | 3 | 5 | 7 | 9)
 }
 
 fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
@@ -3516,13 +3541,17 @@ mod tests {
             }
             input
         };
-        assert_eq!(q1_sparse_skip(&sparse_binary), Q1SparseSkip::None);
+        assert_eq!(q1_sparse_skip(&sparse_binary), Q1SparseSkip::Store);
         assert_eq!(q1_sparse_skip(&sao_like), Q1SparseSkip::Moderate);
         assert_eq!(q1_sparse_skip(&printable_sparse), Q1SparseSkip::None);
         assert!(!q0_sparse_store_block(0, false));
-        assert!(q0_sparse_store_block(1 << MIN_BLOCK_BITS, false));
-        assert!(!q0_sparse_store_block(8 << MIN_BLOCK_BITS, false));
-        assert!(q0_sparse_store_block(8 << MIN_BLOCK_BITS, true));
+        assert!(q0_sparse_store_block(1 << 18, false));
+        assert!(!q0_sparse_store_block(8 << 18, false));
+        assert!(q0_sparse_store_block(8 << 18, true));
+        assert!(!q1_sparse_store_block(0, false));
+        assert!(q1_sparse_store_block(1 << 18, false));
+        assert!(!q1_sparse_store_block(8 << 18, false));
+        assert!(q1_sparse_store_block(8 << 18, true));
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
