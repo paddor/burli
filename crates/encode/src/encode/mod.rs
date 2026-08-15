@@ -591,6 +591,31 @@ impl EncoderPlan {
                 );
             }
 
+            if !allow_cross_collector_shortcuts {
+                let tokens = if q1_large_markup_lazy_is_likely_safe(input) {
+                    q2::collect_without_dictionary_one_lazy(
+                        input,
+                        local_max_backward_distance,
+                        &mut workspace.q2,
+                    )
+                } else {
+                    q2::collect_without_dictionary_no_lazy(
+                        input,
+                        local_max_backward_distance,
+                        &mut workspace.q2,
+                    )
+                };
+                if !tokens.iter().any(|token| token.is_copy()) {
+                    return write_compressed_literal_meta_block(writer, input);
+                }
+                return write_token_batches_with_symbol_limit(
+                    writer,
+                    input,
+                    &tokens,
+                    MAX_DELAYED_SYMBOLS,
+                );
+            }
+
             let has_copy = {
                 let batch = match q1_sparse_skip(input) {
                     Q1SparseSkip::Store => {
@@ -1203,6 +1228,16 @@ fn q1_sparse_skip(input: &[u8]) -> Q1SparseSkip {
 
 fn q1_sparse_store_block(_input_base: usize, _allow_cross_collector_shortcuts: bool) -> bool {
     false
+}
+
+fn q1_large_markup_lazy_is_likely_safe(input: &[u8]) -> bool {
+    let mut lt_count = 0_usize;
+    let mut gt_count = 0_usize;
+    for &byte in input.iter().take(1024) {
+        lt_count += usize::from(byte == b'<');
+        gt_count += usize::from(byte == b'>');
+    }
+    lt_count >= 8 && gt_count >= 8
 }
 
 fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
@@ -3603,6 +3638,10 @@ mod tests {
         assert!(!q1_sparse_store_block(8 << 18, false));
         assert!(!q1_sparse_store_block(9 << 18, false));
         assert!(!q1_sparse_store_block(8 << 18, true));
+        assert!(q1_large_markup_lazy_is_likely_safe(
+            b"<a><b><c><d><e><f><g><h></h></g></f></e></d></c></b></a>"
+        ));
+        assert!(!q1_large_markup_lazy_is_likely_safe(&script_4k));
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
