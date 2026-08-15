@@ -10,6 +10,9 @@ const COMMAND_ALPHABET_SIZE: usize = 704;
 const BLOCK_LENGTH_ALPHABET_SIZE: usize = 26;
 const LAST_DISTANCES: [usize; 4] = [16, 15, 11, 4];
 const CHUNKED_COPY_MIN_DISTANCE: usize = 8;
+const STACK_COPY_MAX_LEN: usize = 64;
+const EXTENDED_STACK_COPY_MAX_LEN: usize = 80;
+const EXTENDED_STACK_COPY_MIN_OUTPUT: usize = 1 << 20;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DistanceRing {
@@ -297,9 +300,14 @@ fn copy_from_distance(
             let byte = output[src];
             output.push(byte);
         }
-    } else if request.len <= 64 && request.distance >= request.len {
+    } else if should_use_stack_copy(request) {
         let src = produced - request.distance;
-        let mut copy = [0_u8; 64];
+        let mut copy = [0_u8; STACK_COPY_MAX_LEN];
+        copy[..request.len].copy_from_slice(&output[src..src + request.len]);
+        output.extend_from_slice(&copy[..request.len]);
+    } else if should_use_extended_stack_copy(request) {
+        let src = produced - request.distance;
+        let mut copy = [0_u8; EXTENDED_STACK_COPY_MAX_LEN];
         copy[..request.len].copy_from_slice(&output[src..src + request.len]);
         output.extend_from_slice(&copy[..request.len]);
     } else {
@@ -315,6 +323,16 @@ fn copy_from_distance(
         distances.push(request.distance);
     }
     Ok(())
+}
+
+fn should_use_stack_copy(request: CopyRequest) -> bool {
+    request.distance >= request.len && request.len <= STACK_COPY_MAX_LEN
+}
+
+fn should_use_extended_stack_copy(request: CopyRequest) -> bool {
+    request.distance >= request.len
+        && request.len <= EXTENDED_STACK_COPY_MAX_LEN
+        && request.needed >= EXTENDED_STACK_COPY_MIN_OUTPUT
 }
 
 fn copy_repeated_pattern(output: &mut Vec<u8>, distance: usize, len: usize) {
