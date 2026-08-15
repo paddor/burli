@@ -32,7 +32,6 @@ const Q4_DELAYED_SYMBOLS: usize = 3840;
 const Q5_DELAYED_SYMBOLS: usize = 3584;
 const Q0_DIRECT_MAX_INPUT: usize = 384;
 const Q0_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
-const Q0_SHAPE_SAMPLE_BYTES: usize = 4 * 1024;
 const Q1_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
 const Q2_STATIC_NO_DICTIONARY_MAX_INPUT: usize = 4 * 1024;
 const Q2_MEDIUM_H3_MIN_INPUT: usize = 8 * 1024;
@@ -342,60 +341,16 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::FastOnePass {
-            let q0_shape = Q0Shape::sample(input);
-
-            if q0_small_fast_literal_meta_block_is_likely_safe(&q0_shape) {
-                return write_fast_compressed_literal_meta_block(writer, input);
-            }
-
-            if q0_one_k_css_q1_meta_block_is_likely_safe(&q0_shape) {
-                let has_copy = {
-                    let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
-                    batch.has_copy()
-                };
-                if !has_copy {
-                    return write_compressed_literal_meta_block(writer, input);
-                }
-                return q1::write(
-                    writer,
-                    input,
-                    input.len(),
-                    &mut workspace.q1,
-                    self.q1_fast_literal_prefix,
-                );
-            }
-
-            if q0_tiny_json_q1_meta_block_is_likely_safe(&q0_shape) {
-                let has_copy = {
-                    let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
-                    batch.has_copy()
-                };
-                if !has_copy {
-                    return write_compressed_literal_meta_block(writer, input);
-                }
-                return q1::write_balanced_literal_command_prefixes(
-                    writer,
-                    input,
-                    input.len(),
-                    &mut workspace.q1,
-                );
-            }
-
             if input.len() <= Q0_STATIC_ENTROPY_MAX_INPUT && input.len() > Q0_DIRECT_MAX_INPUT {
-                let tokens = if q0_one_k_script_or_css_no_last_probe_is_likely_safe(&q0_shape) {
-                    q2::collect_without_dictionary_no_lazy_no_last_distance_probe(
-                        input,
-                        local_max_backward_distance,
-                        &mut workspace.q2,
-                    )
-                } else {
-                    q2::collect_without_dictionary_no_lazy(
-                        input,
-                        local_max_backward_distance,
-                        &mut workspace.q2,
-                    )
-                };
+                let tokens = q2::collect_without_dictionary_no_lazy(
+                    input,
+                    local_max_backward_distance,
+                    &mut workspace.q2,
+                );
                 if !tokens.iter().any(|token| token.is_copy()) {
+                    if input.len() <= 512 {
+                        return write_fast_compressed_literal_meta_block(writer, input);
+                    }
                     return write_compressed_literal_meta_block(writer, input);
                 }
                 return write_token_batches_with_symbol_limit(
@@ -407,9 +362,8 @@ impl EncoderPlan {
             }
 
             if input.len() > Q0_DIRECT_MAX_INPUT {
-                if !q0_known_text_collect_route_is_likely_safe(&q0_shape)
-                    && sparse::should_accelerate(input)
-                {
+                let sparse_decision = sparse::decision(input);
+                if sparse_decision.store_uncompressed {
                     if sparse::q0_store_block(input_base, allow_cross_collector_shortcuts) {
                         return crate::metablock::write_uncompressed_meta_block(writer, input);
                     }
@@ -434,175 +388,63 @@ impl EncoderPlan {
                 }
 
                 let has_copy = {
-                    let batch = if q0_large_web_text_32k_fast_skip_is_likely_safe(&q0_shape)
-                        || q0_huge_script_32k_table_is_likely_safe(&q0_shape)
-                    {
-                        q1::collect_with_32k_faster_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )
-                    } else if q0_large_script_64k_table_is_likely_safe(&q0_shape) {
-                        q1::collect_with_64k_fast_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )
-                    } else if q0_medium_script_64k_table_is_likely_safe(&q0_shape) {
-                        q1::collect_with_64k_medium_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )
-                    } else if q0_small_json_32k_u16_table_is_likely_safe(&q0_shape) {
-                        q1::collect_with_32k_json_u16_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )
-                    } else if q0_medium_json_32k_table_is_likely_safe(&q0_shape) {
-                        q1::collect_with_32k_json_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )
-                    } else if q0_small_script_u16_fast_skip_is_likely_safe(&q0_shape) {
-                        q1::collect_fast_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )?
-                    } else if q0_small_script_u16_medium_skip_is_likely_safe(&q0_shape) {
-                        q1::collect_medium_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )?
-                    } else if q0_medium_script_64k_medium_skip_is_likely_safe(&q0_shape) {
-                        q1::collect_with_64k_medium_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )
-                    } else if q0_medium_css_64k_fast_skip_is_likely_safe(&q0_shape) {
-                        q1::collect_with_64k_fast_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )
-                    } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(&q0_shape)
-                        || q0_tiny_script_no_last_distance_probe_is_likely_safe(&q0_shape)
-                    {
-                        q1::collect_fast_skip_without_last_distance_probe(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )?
-                    } else if q0_no_last_distance_probe_is_likely_safe(&q0_shape) {
-                        q1::collect_without_last_distance_probe(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )?
-                    } else if q0_medium_script_medium_skip_is_likely_safe(&q0_shape) {
-                        q1::collect_medium_skip_without_last_distance_probe(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )?
-                    } else if q0_fast_skip_is_likely_safe(&q0_shape) {
-                        q1::collect_fast_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )?
-                    } else if input.len() > 128 * 1024 {
-                        q1::collect_with_64k_medium_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )
-                    } else {
-                        q1::collect_q0_default_skip(
-                            input,
-                            local_max_backward_distance,
-                            &mut workspace.q1,
-                        )?
-                    };
+                    let batch = q0_collect_by_size(
+                        input,
+                        local_max_backward_distance,
+                        sparse_decision.sample,
+                        workspace,
+                    )?;
                     batch.has_copy()
                 };
                 if !has_copy {
                     return write_compressed_literal_meta_block(writer, input);
                 }
-                if q0_small_json_static_distance_prefix_is_likely_safe(&q0_shape) {
-                    return q1::write_balanced_literal_command_prefixes(
-                        writer,
-                        input,
-                        input.len(),
-                        &mut workspace.q1,
-                    );
+                match q0_write_route(input.len(), sparse_decision.sample) {
+                    Q0WriteRoute::Standard => {
+                        return q1::write(
+                            writer,
+                            input,
+                            input.len(),
+                            &mut workspace.q1,
+                            self.q1_fast_literal_prefix,
+                        );
+                    }
+                    Q0WriteRoute::BalancedCommand => {
+                        return q1::write_balanced_command_prefixes(
+                            writer,
+                            input,
+                            input.len(),
+                            &mut workspace.q1,
+                            self.q1_fast_literal_prefix,
+                        );
+                    }
+                    Q0WriteRoute::FastCommand => {
+                        return q1::write_fast_command_prefixes(
+                            writer,
+                            input,
+                            input.len(),
+                            &mut workspace.q1,
+                            self.q1_fast_literal_prefix,
+                        );
+                    }
+                    Q0WriteRoute::BalancedLiteralCommand => {
+                        return q1::write_balanced_literal_command_prefixes(
+                            writer,
+                            input,
+                            input.len(),
+                            &mut workspace.q1,
+                        );
+                    }
+                    Q0WriteRoute::PackedLiteralBody => {
+                        return q1::write_packed_literal_body(
+                            writer,
+                            input,
+                            input.len(),
+                            &mut workspace.q1,
+                            self.q1_fast_literal_prefix,
+                        );
+                    }
                 }
-                if q0_small_css_static_distance_prefix_is_likely_safe(&q0_shape) {
-                    return q1::write_balanced_command_prefixes(
-                        writer,
-                        input,
-                        input.len(),
-                        &mut workspace.q1,
-                        self.q1_fast_literal_prefix,
-                    );
-                }
-                if q0_small_script_balanced_command_prefix_is_likely_safe(&q0_shape) {
-                    return q1::write_balanced_command_prefixes(
-                        writer,
-                        input,
-                        input.len(),
-                        &mut workspace.q1,
-                        self.q1_fast_literal_prefix,
-                    );
-                }
-                if q0_medium_json_32k_table_is_likely_safe(&q0_shape) {
-                    return q1::write_packed_literal_body(
-                        writer,
-                        input,
-                        input.len(),
-                        &mut workspace.q1,
-                        self.q1_fast_literal_prefix,
-                    );
-                }
-                if q0_medium_script_medium_skip_is_likely_safe(&q0_shape) {
-                    return q1::write_fast_command_prefixes(
-                        writer,
-                        input,
-                        input.len(),
-                        &mut workspace.q1,
-                        self.q1_fast_literal_prefix,
-                    );
-                }
-                if q0_large_script_balanced_command_prefix_is_likely_safe(&q0_shape) {
-                    return q1::write_balanced_command_prefixes(
-                        writer,
-                        input,
-                        input.len(),
-                        &mut workspace.q1,
-                        self.q1_fast_literal_prefix,
-                    );
-                }
-                if q0_large_css_balanced_command_prefix_is_likely_safe(&q0_shape) {
-                    return q1::write_balanced_command_prefixes(
-                        writer,
-                        input,
-                        input.len(),
-                        &mut workspace.q1,
-                        self.q1_fast_literal_prefix,
-                    );
-                }
-                return q1::write(
-                    writer,
-                    input,
-                    input.len(),
-                    &mut workspace.q1,
-                    self.q1_fast_literal_prefix,
-                );
             }
 
             let has_copy = {
@@ -1264,322 +1106,117 @@ const fn min_match_len(quality: u8) -> usize {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct Q0Shape {
-    len: usize,
-    sample_len: usize,
-    printable: usize,
-    whitespace: usize,
-    alpha: usize,
-    digit: usize,
-    high: usize,
-    zero: usize,
-    quote: usize,
-    colon: usize,
-    comma: usize,
-    brace: usize,
-    bracket: usize,
-    angle: usize,
-    at: usize,
-    semicolon: usize,
-    slash: usize,
-    star: usize,
-    exclamation: usize,
-    paren: usize,
-    equals: usize,
-    dash: usize,
-    underscore: usize,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Q0CollectRoute {
+    FastNoLastDistance,
+    NoLastDistance,
+    DefaultSkip,
+    MediumNoLastDistance,
+    MediumSkip,
+    K64FastSkip,
+    K64MediumSkip,
+    K32U16Skip,
+    K32DenseSkip,
+    K32FasterSkip,
 }
 
-impl Q0Shape {
-    fn sample(input: &[u8]) -> Self {
-        let sample_len = input.len().min(Q0_SHAPE_SAMPLE_BYTES);
-        let mut shape = Self {
-            len: input.len(),
-            sample_len,
-            ..Self::default()
-        };
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Q0WriteRoute {
+    Standard,
+    BalancedCommand,
+    FastCommand,
+    BalancedLiteralCommand,
+    PackedLiteralBody,
+}
 
-        for &byte in &input[..sample_len] {
-            shape.printable +=
-                usize::from((32..=126).contains(&byte) || matches!(byte, b'\n' | b'\r' | b'\t'));
-            shape.whitespace += usize::from(matches!(byte, b' ' | b'\n' | b'\r' | b'\t'));
-            shape.alpha += usize::from(byte.is_ascii_alphabetic());
-            shape.digit += usize::from(byte.is_ascii_digit());
-            shape.high += usize::from(byte >= 128);
-            shape.zero += usize::from(byte == 0);
-            shape.quote += usize::from(matches!(byte, b'"' | b'\''));
-            shape.colon += usize::from(byte == b':');
-            shape.comma += usize::from(byte == b',');
-            shape.brace += usize::from(matches!(byte, b'{' | b'}'));
-            shape.bracket += usize::from(matches!(byte, b'[' | b']'));
-            shape.angle += usize::from(matches!(byte, b'<' | b'>'));
-            shape.at += usize::from(byte == b'@');
-            shape.semicolon += usize::from(byte == b';');
-            shape.slash += usize::from(byte == b'/');
-            shape.star += usize::from(byte == b'*');
-            shape.exclamation += usize::from(byte == b'!');
-            shape.paren += usize::from(matches!(byte, b'(' | b')'));
-            shape.equals += usize::from(byte == b'=');
-            shape.dash += usize::from(byte == b'-');
-            shape.underscore += usize::from(byte == b'_');
+fn q0_collect_route(input_len: usize, sample: Option<sparse::Sample>) -> Q0CollectRoute {
+    match input_len {
+        0..=2048 => Q0CollectRoute::FastNoLastDistance,
+        2049..=4096 => Q0CollectRoute::NoLastDistance,
+        4097..=8192 => Q0CollectRoute::DefaultSkip,
+        8193..=16_384 => Q0CollectRoute::MediumNoLastDistance,
+        16_385..=32_768 => Q0CollectRoute::MediumSkip,
+        32_769..=65_536 if q0_dense_sample(sample) => Q0CollectRoute::K32U16Skip,
+        65_537..=131_072 if q0_dense_sample(sample) => Q0CollectRoute::K32DenseSkip,
+        32_769..=131_072 if q0_low_dup_sample(sample) => Q0CollectRoute::K64MediumSkip,
+        32_769..=131_072 => Q0CollectRoute::K64FastSkip,
+        1_048_577.. => Q0CollectRoute::K64MediumSkip,
+        _ => Q0CollectRoute::K32FasterSkip,
+    }
+}
+
+fn q0_write_route(input_len: usize, sample: Option<sparse::Sample>) -> Q0WriteRoute {
+    match input_len {
+        1025..=2048 => Q0WriteRoute::BalancedLiteralCommand,
+        8193..=16_384 => Q0WriteRoute::FastCommand,
+        32_769..=131_072 if q0_dense_sample(sample) => Q0WriteRoute::PackedLiteralBody,
+        131_073.. if !q0_dense_sample(sample) => Q0WriteRoute::BalancedCommand,
+        _ => Q0WriteRoute::Standard,
+    }
+}
+
+fn q0_dense_sample(sample: Option<sparse::Sample>) -> bool {
+    sample.is_some_and(|sample| sample.duplicate_6_count >= 512)
+}
+
+fn q0_low_dup_sample(sample: Option<sparse::Sample>) -> bool {
+    sample.is_some_and(|sample| sample.duplicate_6_count < 200)
+}
+
+fn q0_collect_by_size<'a>(
+    input: &[u8],
+    max_backward_distance: usize,
+    sample: Option<sparse::Sample>,
+    workspace: &'a mut Workspace,
+) -> Result<&'a q1::Batch, CompressError> {
+    match q0_collect_route(input.len(), sample) {
+        Q0CollectRoute::FastNoLastDistance => q1::collect_fast_skip_without_last_distance_probe(
+            input,
+            max_backward_distance,
+            &mut workspace.q1,
+        ),
+        Q0CollectRoute::NoLastDistance => {
+            q1::collect_without_last_distance_probe(input, max_backward_distance, &mut workspace.q1)
         }
-
-        shape
-    }
-
-    fn ratio_at_least(self, count: usize, pct: usize) -> bool {
-        self.sample_len != 0 && count * 100 >= self.sample_len * pct
-    }
-
-    fn ratio_below(self, count: usize, pct: usize) -> bool {
-        self.sample_len == 0 || count * 100 < self.sample_len * pct
-    }
-
-    fn text_like(self) -> bool {
-        self.sample_len != 0
-            && self.zero == 0
-            && self.ratio_at_least(self.printable, 94)
-            && self.ratio_below(self.high, 3)
-    }
-
-    fn markup_like(self) -> bool {
-        self.text_like() && self.angle >= 4 && self.alpha * 2 >= self.angle
-    }
-
-    fn css_like(self) -> bool {
-        self.text_like()
-            && self.colon >= 2
-            && self.semicolon >= 1
-            && (self.brace >= 2 || self.at >= 1 || self.dash >= 4)
-            && self.ratio_below(self.quote, 8)
-    }
-
-    fn json_like(self) -> bool {
-        self.text_like()
-            && self.quote >= 4
-            && self.colon >= 1
-            && self.comma >= 1
-            && self.brace + self.bracket >= 2
-            && self.semicolon == 0
-    }
-
-    fn script_like(self) -> bool {
-        if !self.text_like() {
-            return false;
+        Q0CollectRoute::DefaultSkip => {
+            q1::collect_q0_default_skip(input, max_backward_distance, &mut workspace.q1)
         }
-        if self.json_like() {
-            return false;
+        Q0CollectRoute::MediumNoLastDistance => {
+            q1::collect_medium_skip_without_last_distance_probe(
+                input,
+                max_backward_distance,
+                &mut workspace.q1,
+            )
         }
-        if self.css_like() && self.colon * 2 >= self.semicolon {
-            return false;
+        Q0CollectRoute::MediumSkip => {
+            q1::collect_medium_skip(input, max_backward_distance, &mut workspace.q1)
         }
-
-        let structural_syntax = self.paren + self.brace + self.equals;
-        let minified_script = self.paren >= 8
-            && self.brace + self.equals >= 8
-            && structural_syntax >= 16
-            && self.ratio_below(self.whitespace, 28);
-        let comment_wrapped_script = self.slash >= 2
-            && self.star >= 1
-            && self.exclamation + self.at >= 1
-            && self.paren >= 8
-            && self.brace + self.equals >= 8;
-        minified_script || comment_wrapped_script
+        Q0CollectRoute::K64FastSkip => Ok(q1::collect_with_64k_fast_skip(
+            input,
+            max_backward_distance,
+            &mut workspace.q1,
+        )),
+        Q0CollectRoute::K64MediumSkip => Ok(q1::collect_with_64k_medium_skip(
+            input,
+            max_backward_distance,
+            &mut workspace.q1,
+        )),
+        Q0CollectRoute::K32U16Skip => Ok(q1::collect_with_32k_u16_skip(
+            input,
+            max_backward_distance,
+            &mut workspace.q1,
+        )),
+        Q0CollectRoute::K32DenseSkip => Ok(q1::collect_with_32k_dense_skip(
+            input,
+            max_backward_distance,
+            &mut workspace.q1,
+        )),
+        Q0CollectRoute::K32FasterSkip => Ok(q1::collect_with_32k_faster_skip(
+            input,
+            max_backward_distance,
+            &mut workspace.q1,
+        )),
     }
-
-    fn web_text_like(self) -> bool {
-        self.css_like() || self.script_like() || self.json_like() || self.markup_like()
-    }
-}
-
-trait Q0ShapeSource {
-    fn q0_shape(&self) -> Q0Shape;
-}
-
-impl Q0ShapeSource for Q0Shape {
-    fn q0_shape(&self) -> Q0Shape {
-        *self
-    }
-}
-
-impl Q0ShapeSource for [u8] {
-    fn q0_shape(&self) -> Q0Shape {
-        Q0Shape::sample(self)
-    }
-}
-
-impl Q0ShapeSource for Vec<u8> {
-    fn q0_shape(&self) -> Q0Shape {
-        Q0Shape::sample(self)
-    }
-}
-
-fn q0_small_fast_literal_meta_block_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    let small_html = (257..=1024).contains(&shape.len) && shape.markup_like();
-    let tiny_comment_or_css =
-        (385..=512).contains(&shape.len) && (shape.script_like() || shape.css_like());
-    small_html || tiny_comment_or_css
-}
-
-fn q0_one_k_css_q1_meta_block_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    (513..=768).contains(&shape.len) && shape.css_like()
-}
-
-fn q0_one_k_script_or_css_no_last_probe_is_likely_safe<T: Q0ShapeSource + ?Sized>(
-    source: &T,
-) -> bool {
-    let shape = source.q0_shape();
-    (897..=Q0_STATIC_ENTROPY_MAX_INPUT).contains(&shape.len)
-        && (shape.script_like() || shape.css_like())
-}
-
-fn q0_tiny_json_q1_meta_block_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    (512..=Q0_STATIC_ENTROPY_MAX_INPUT).contains(&shape.len) && shape.json_like()
-}
-
-fn q0_large_script_64k_table_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len > 160 * 1024 && shape.script_like()
-}
-
-fn q0_huge_script_32k_table_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len > 256 * 1024 && shape.script_like()
-}
-
-fn q0_medium_script_64k_table_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    (128 * 1024..=160 * 1024).contains(&shape.len) && shape.script_like()
-}
-
-fn q0_medium_json_32k_table_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len >= 32 * 1024 && shape.len <= 128 * 1024 && shape.json_like()
-}
-
-fn q0_small_json_32k_u16_table_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len >= 32 * 1024 && shape.len <= 64 * 1024 && shape.json_like()
-}
-
-fn q0_small_script_u16_medium_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len >= 16 * 1024 && shape.len <= 32 * 1024 && shape.script_like()
-}
-
-fn q0_small_script_u16_fast_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len > 24 * 1024 && shape.len <= 32 * 1024 && shape.script_like()
-}
-
-fn q0_medium_script_64k_medium_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len > 32 * 1024 && shape.len <= 64 * 1024 && shape.script_like()
-}
-
-fn q0_medium_css_64k_fast_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len > 32 * 1024 && shape.len <= 128 * 1024 && shape.css_like()
-}
-
-fn q0_large_web_text_32k_fast_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len > 128 * 1024 && (shape.script_like() || shape.css_like())
-}
-
-fn q0_large_css_balanced_command_prefix_is_likely_safe<T: Q0ShapeSource + ?Sized>(
-    source: &T,
-) -> bool {
-    let shape = source.q0_shape();
-    shape.len > 128 * 1024 && shape.css_like()
-}
-
-fn q0_large_script_balanced_command_prefix_is_likely_safe<T: Q0ShapeSource + ?Sized>(
-    source: &T,
-) -> bool {
-    let shape = source.q0_shape();
-    shape.len > 128 * 1024 && shape.script_like()
-}
-
-fn q0_known_text_collect_route_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.web_text_like()
-        || q0_large_script_64k_table_is_likely_safe(&shape)
-        || q0_huge_script_32k_table_is_likely_safe(&shape)
-        || q0_medium_script_64k_table_is_likely_safe(&shape)
-        || q0_small_json_32k_u16_table_is_likely_safe(&shape)
-        || q0_medium_json_32k_table_is_likely_safe(&shape)
-        || q0_small_script_u16_fast_skip_is_likely_safe(&shape)
-        || q0_small_script_u16_medium_skip_is_likely_safe(&shape)
-        || q0_medium_script_64k_medium_skip_is_likely_safe(&shape)
-        || q0_medium_css_64k_fast_skip_is_likely_safe(&shape)
-        || q0_large_web_text_32k_fast_skip_is_likely_safe(&shape)
-        || q0_fast_skip_no_last_distance_probe_is_likely_safe(&shape)
-        || q0_no_last_distance_probe_is_likely_safe(&shape)
-        || q0_medium_script_medium_skip_is_likely_safe(&shape)
-        || q0_fast_skip_is_likely_safe(&shape)
-}
-
-fn q0_fast_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    let css = shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 32 * 1024 && shape.css_like();
-    let tiny_script =
-        shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 2 * 1024 && shape.script_like();
-    css || tiny_script
-}
-
-fn q0_no_last_distance_probe_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len > 2 * 1024 && shape.len <= 4 * 1024 && shape.script_like()
-}
-
-fn q0_tiny_script_no_last_distance_probe_is_likely_safe<T: Q0ShapeSource + ?Sized>(
-    source: &T,
-) -> bool {
-    let shape = source.q0_shape();
-    shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 2 * 1024 && shape.script_like()
-}
-
-fn q0_small_json_static_distance_prefix_is_likely_safe<T: Q0ShapeSource + ?Sized>(
-    source: &T,
-) -> bool {
-    let shape = source.q0_shape();
-    shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 4 * 1024 && shape.json_like()
-}
-
-fn q0_small_css_static_distance_prefix_is_likely_safe<T: Q0ShapeSource + ?Sized>(
-    source: &T,
-) -> bool {
-    let shape = source.q0_shape();
-    shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 2 * 1024 && shape.css_like()
-}
-
-fn q0_small_script_balanced_command_prefix_is_likely_safe<T: Q0ShapeSource + ?Sized>(
-    source: &T,
-) -> bool {
-    let shape = source.q0_shape();
-    shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 2 * 1024 && shape.script_like()
-}
-
-fn q0_fast_skip_no_last_distance_probe_is_likely_safe<T: Q0ShapeSource + ?Sized>(
-    source: &T,
-) -> bool {
-    let shape = source.q0_shape();
-    shape.len > 16 * 1024
-        && shape.len <= 32 * 1024
-        && shape.css_like()
-        && shape.at <= 1
-        && shape.brace <= 4
-        && !shape.ratio_at_least(shape.paren, 3)
-}
-
-fn q0_medium_script_medium_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
-    let shape = source.q0_shape();
-    shape.len >= 8 * 1024 && shape.len <= 16 * 1024 && shape.script_like()
 }
 
 fn q1_large_markup_lazy_is_likely_safe(input: &[u8]) -> bool {
@@ -4010,6 +3647,16 @@ fn alphabet_bits(alphabet_size: usize) -> u8 {
 mod tests {
     use super::*;
 
+    fn sparse_sample(duplicate_6_count: usize) -> sparse::Sample {
+        sparse::Sample {
+            duplicate_6_count,
+            zero_count: 0,
+            printable_count: 1024,
+            max_miss_streak: 0,
+            len: 1024,
+        }
+    }
+
     #[test]
     fn q1_emits_compressed_stream() {
         let input =
@@ -4056,114 +3703,77 @@ mod tests {
     }
 
     #[test]
-    fn q0_small_fast_literal_guard_is_narrow() {
-        let html = b"<!DOCTYPE html>\n<html><body>small page</body></html>\n".repeat(14);
-        let script = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(18);
-        let json = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(14);
-        let tiny_script = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(12);
-        let tiny_css = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(12);
-        let css_768 = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(18);
-        let css_1k = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(24);
+    fn q0_routes_by_size_and_sparse_outcome() {
         let css_2k = b"@charset \"UTF-8\";\n.selector{display:block;}\n".repeat(48);
-        let script_1k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(24);
         let script_2k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(48);
-        let script_4k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(96);
-        let json_1k = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(24);
-        let json_5k = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(100);
-        let module_12k = b"var n,l,u,t,i,o,r,f,e,c={},s=[];function demo(){return c;}".repeat(192);
-        let license_module_12k =
-            b"/** @license React */\n!function(){function demo(){return 1}}\n".repeat(192);
-        let medium_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(3072);
-        let large_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(4096);
-        let huge_license_js = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(6144);
-        let large_plain_js = b"function demo(){return demo();}\n".repeat(4096);
+        let json_2k = br#"{"areaNames":{"205705993":"Arena","205705994":"Hall"}}"#.repeat(48);
 
-        assert!(q0_small_fast_literal_meta_block_is_likely_safe(&html));
-        assert!(!q0_small_fast_literal_meta_block_is_likely_safe(&script));
-        assert!(!q0_small_fast_literal_meta_block_is_likely_safe(&json));
-        assert!(q0_small_fast_literal_meta_block_is_likely_safe(
-            &tiny_script[..512]
-        ));
-        assert!(q0_small_fast_literal_meta_block_is_likely_safe(
-            &tiny_css[..512]
-        ));
-        assert!(!q0_small_fast_literal_meta_block_is_likely_safe(
-            &html[..256]
-        ));
-        assert!(q0_one_k_css_q1_meta_block_is_likely_safe(&css_768[..768]));
-        assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(&css_1k[..1024]));
-        assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(
-            &script_1k[..1024]
-        ));
-        assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(&json_1k[..1024]));
-        assert!(q0_one_k_script_or_css_no_last_probe_is_likely_safe(
-            &script_1k[..1024]
-        ));
-        assert!(q0_one_k_script_or_css_no_last_probe_is_likely_safe(
-            &css_1k[..1024]
-        ));
-        assert!(!q0_one_k_script_or_css_no_last_probe_is_likely_safe(
-            &script
-        ));
-        assert!(!q0_one_k_script_or_css_no_last_probe_is_likely_safe(
-            &json_1k[..1024]
-        ));
-        assert!(q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..1024]));
-        assert!(q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..512]));
-        assert!(!q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..384]));
-        assert!(!q0_tiny_json_q1_meta_block_is_likely_safe(&css_1k[..1024]));
-        assert!(q0_medium_script_64k_table_is_likely_safe(
-            &medium_license_js
-        ));
-        assert!(!q0_large_script_64k_table_is_likely_safe(
-            &medium_license_js
-        ));
-        assert!(q0_large_script_64k_table_is_likely_safe(&large_license_js));
-        assert!(!q0_huge_script_32k_table_is_likely_safe(&large_license_js));
-        assert!(q0_huge_script_32k_table_is_likely_safe(&huge_license_js));
-        assert!(!q0_large_script_64k_table_is_likely_safe(&large_plain_js));
-        assert!(q0_medium_json_32k_table_is_likely_safe(
-            &json_5k.repeat(16)[..64 * 1024]
-        ));
-        assert!(q0_small_json_32k_u16_table_is_likely_safe(
-            &json_5k.repeat(16)[..64 * 1024]
-        ));
-        assert!(q0_known_text_collect_route_is_likely_safe(
-            &json_5k.repeat(16)[..64 * 1024]
-        ));
-        let repeated_json = &json_5k.repeat(16)[..64 * 1024];
-        assert!(
-            q0_known_text_collect_route_is_likely_safe(repeated_json)
-                || !sparse::should_accelerate(repeated_json)
+        assert_eq!(
+            q0_collect_route(css_2k[..2048].len(), None),
+            q0_collect_route(script_2k[..2048].len(), None)
         );
-        assert!(q0_small_script_u16_medium_skip_is_likely_safe(
-            &script_4k.repeat(8)[..32 * 1024]
-        ));
-        assert!(q0_small_script_u16_medium_skip_is_likely_safe(
-            &script_4k.repeat(4)[..16 * 1024]
-        ));
-        assert!(q0_small_script_u16_fast_skip_is_likely_safe(
-            &script_4k.repeat(8)[..32 * 1024]
-        ));
-        assert!(!q0_small_script_u16_fast_skip_is_likely_safe(
-            &script_4k.repeat(4)[..16 * 1024]
-        ));
-        assert!(q0_medium_script_64k_medium_skip_is_likely_safe(
-            &script_4k.repeat(16)[..64 * 1024]
-        ));
-        assert!(q0_medium_css_64k_fast_skip_is_likely_safe(
-            &css_2k.repeat(32)[..64 * 1024]
-        ));
-        assert!(!q0_medium_css_64k_fast_skip_is_likely_safe(
-            &css_2k.repeat(65)[..130 * 1024]
-        ));
-        let at_rule_css =
-            b"@media (prefers-color-scheme:dark){.markdown-body{color:#fff;background:#000;}}\n"
-                .repeat(400);
-        assert!(!q0_fast_skip_no_last_distance_probe_is_likely_safe(
-            &at_rule_css[..24 * 1024]
-        ));
-        assert!(q0_fast_skip_is_likely_safe(&at_rule_css[..24 * 1024]));
+        assert_eq!(
+            q0_collect_route(script_2k[..2048].len(), None),
+            q0_collect_route(json_2k[..2048].len(), None)
+        );
+        assert_eq!(
+            q0_collect_route(2048, None),
+            Q0CollectRoute::FastNoLastDistance
+        );
+        assert_eq!(q0_collect_route(4096, None), Q0CollectRoute::NoLastDistance);
+        assert_eq!(q0_collect_route(8192, None), Q0CollectRoute::DefaultSkip);
+        assert_eq!(
+            q0_collect_route(16 * 1024, None),
+            Q0CollectRoute::MediumNoLastDistance
+        );
+        assert_eq!(
+            q0_collect_route(32 * 1024, None),
+            Q0CollectRoute::MediumSkip
+        );
+        assert_eq!(
+            q0_collect_route(64 * 1024, Some(sparse_sample(148))),
+            Q0CollectRoute::K64MediumSkip
+        );
+        assert_eq!(
+            q0_collect_route(128 * 1024, Some(sparse_sample(237))),
+            Q0CollectRoute::K64FastSkip
+        );
+        assert_eq!(
+            q0_collect_route(64 * 1024, Some(sparse_sample(583))),
+            Q0CollectRoute::K32U16Skip
+        );
+        assert_eq!(
+            q0_collect_route(128 * 1024, Some(sparse_sample(583))),
+            Q0CollectRoute::K32DenseSkip
+        );
+        assert_eq!(
+            q0_collect_route(2 * 1024 * 1024, Some(sparse_sample(583))),
+            Q0CollectRoute::K64MediumSkip
+        );
+        assert_eq!(
+            q0_collect_route(256 * 1024, Some(sparse_sample(148))),
+            Q0CollectRoute::K32FasterSkip
+        );
+
+        assert_eq!(
+            q0_write_route(2048, None),
+            Q0WriteRoute::BalancedLiteralCommand
+        );
+        assert_eq!(q0_write_route(4096, None), Q0WriteRoute::Standard);
+        assert_eq!(q0_write_route(16 * 1024, None), Q0WriteRoute::FastCommand);
+        assert_eq!(
+            q0_write_route(128 * 1024, Some(sparse_sample(583))),
+            Q0WriteRoute::PackedLiteralBody
+        );
+        assert_eq!(
+            q0_write_route(256 * 1024, Some(sparse_sample(148))),
+            Q0WriteRoute::BalancedCommand
+        );
+        assert_eq!(
+            q0_write_route(2 * 1024 * 1024, Some(sparse_sample(583))),
+            Q0WriteRoute::Standard
+        );
+
         let sparse_binary = sparse_binary_fixture(64 * 1024);
         let zero_heavy_sparse = {
             let mut input = sparse_binary_fixture(64 * 1024);
@@ -4215,7 +3825,7 @@ mod tests {
         assert!(q1_large_markup_lazy_is_likely_safe(
             b"<a><b><c><d><e><f><g><h></h></g></f></e></d></c></b></a>"
         ));
-        assert!(!q1_large_markup_lazy_is_likely_safe(&script_4k));
+        assert!(!q1_large_markup_lazy_is_likely_safe(&script_2k));
         let prose_like =
             b"Many words in a sentence with enough spaces to look like prose. ".repeat(1200);
         let numeric_table_like = b"1 2 3 4 5 6 7 8 9 0                         \n".repeat(1600);
@@ -4247,74 +3857,6 @@ mod tests {
         assert!(!q1_no_cross_fast_writer_is_likely_safe(&numeric_table_like));
         assert!(q1_no_cross_fast_writer_is_likely_safe(&sparse_binary));
         assert!(q1_no_cross_fast_writer_is_likely_safe(&dictionary_like));
-        assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
-        assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
-        assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
-        assert!(q0_tiny_script_no_last_distance_probe_is_likely_safe(
-            &script_2k[..2048]
-        ));
-        assert!(q0_tiny_script_no_last_distance_probe_is_likely_safe(
-            &script_2k[..1025]
-        ));
-        assert!(!q0_tiny_script_no_last_distance_probe_is_likely_safe(
-            &script_1k[..1024]
-        ));
-        assert!(!q0_tiny_script_no_last_distance_probe_is_likely_safe(
-            &script_4k[..2049]
-        ));
-        assert!(!q0_tiny_script_no_last_distance_probe_is_likely_safe(
-            &css_2k[..2048]
-        ));
-        assert!(q0_medium_script_medium_skip_is_likely_safe(&module_12k));
-        assert!(q0_medium_script_medium_skip_is_likely_safe(
-            &license_module_12k
-        ));
-        assert!(q0_medium_script_medium_skip_is_likely_safe(
-            &script_4k.repeat(2)[..8 * 1024]
-        ));
-        assert!(!q0_medium_script_medium_skip_is_likely_safe(&script_4k));
-        assert!(!q0_small_json_static_distance_prefix_is_likely_safe(
-            &json_1k[..1024]
-        ));
-        assert!(q0_small_json_static_distance_prefix_is_likely_safe(
-            &json_5k[..2048]
-        ));
-        assert!(q0_small_json_static_distance_prefix_is_likely_safe(
-            &json_5k[..3073]
-        ));
-        assert!(q0_small_json_static_distance_prefix_is_likely_safe(
-            &json_5k[..4096]
-        ));
-        assert!(!q0_small_json_static_distance_prefix_is_likely_safe(
-            &json_5k[..4097]
-        ));
-        assert!(!q0_small_json_static_distance_prefix_is_likely_safe(
-            &css_2k[..2048]
-        ));
-        assert!(q0_small_css_static_distance_prefix_is_likely_safe(
-            &css_2k[..2048]
-        ));
-        assert!(!q0_small_css_static_distance_prefix_is_likely_safe(
-            &css_2k.repeat(2)[..4096]
-        ));
-        assert!(!q0_small_css_static_distance_prefix_is_likely_safe(
-            &script_2k[..2048]
-        ));
-        assert!(q0_small_script_balanced_command_prefix_is_likely_safe(
-            &script_2k[..2048]
-        ));
-        assert!(!q0_small_script_balanced_command_prefix_is_likely_safe(
-            &script_1k[..1024]
-        ));
-        assert!(q0_small_script_balanced_command_prefix_is_likely_safe(
-            &script_2k[..1025]
-        ));
-        assert!(!q0_small_script_balanced_command_prefix_is_likely_safe(
-            &script_4k[..2049]
-        ));
-        assert!(!q0_small_script_balanced_command_prefix_is_likely_safe(
-            &css_2k[..2048]
-        ));
     }
 
     #[test]

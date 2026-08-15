@@ -128,19 +128,6 @@ pub(super) fn collect_without_dictionary_one_lazy(
     )
 }
 
-pub(super) fn collect_without_dictionary_no_lazy_no_last_distance_probe(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &mut Workspace,
-) -> Vec<Token> {
-    collect_with_dictionary_lazy::<false, 0, false, false, 4>(
-        input,
-        0,
-        max_backward_distance,
-        workspace,
-    )
-}
-
 pub(super) fn collect_without_dictionary(
     input: &[u8],
     max_backward_distance: usize,
