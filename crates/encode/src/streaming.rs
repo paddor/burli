@@ -5,6 +5,11 @@ use burli_core::{
 };
 use std::io::{self, Write};
 
+/// `std::io::Write` Brotli stream encoder.
+///
+/// The encoder keeps match-finder workspace and bit-writer capacity while it
+/// accepts chunks. Call [`finish`](Self::finish) to write the final empty
+/// meta-block and recover the wrapped writer.
 pub struct StreamEncoder<W> {
     inner: W,
     options: Options,
@@ -16,10 +21,20 @@ pub struct StreamEncoder<W> {
 }
 
 impl<W: Write> StreamEncoder<W> {
+    /// Create a stream encoder for `quality`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CompressError::InvalidQuality`] outside Brotli's quality range.
     pub fn new(inner: W, quality: u8) -> Result<Self, CompressError> {
         Self::with_options(inner, Options::default().quality(quality)?)
     }
 
+    /// Create a stream encoder with explicit [`Options`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid block bits or unsupported encoder options.
     pub fn with_options(inner: W, options: Options) -> Result<Self, CompressError> {
         let block_bits = options.block_bits_value().unwrap_or(MIN_BLOCK_BITS);
         if !(MIN_BLOCK_BITS..=MAX_BLOCK_BITS).contains(&block_bits) {
@@ -43,10 +58,16 @@ impl<W: Write> StreamEncoder<W> {
         })
     }
 
+    /// Return current options.
     pub const fn options(&self) -> &Options {
         &self.options
     }
 
+    /// Finish the Brotli stream and return the wrapped writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the wrapped writer fails.
     pub fn finish(mut self) -> Result<W, CompressError> {
         self.write_buffered_chunk()
             .map_err(|_| CompressError::Format("failed to write compressed Brotli stream"))?;
@@ -56,6 +77,7 @@ impl<W: Write> StreamEncoder<W> {
         Ok(self.inner)
     }
 
+    /// Return the wrapped writer without writing stream termination.
     pub fn into_inner(self) -> W {
         self.inner
     }

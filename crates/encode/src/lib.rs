@@ -1,3 +1,5 @@
+//! Brotli encoder implementation for Bürli.
+
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(feature = "paranoid", forbid(unsafe_code))]
@@ -20,12 +22,22 @@ mod metablock;
 
 pub use burli_core::{CompressError, Options};
 
+/// Compress `input` at Brotli `quality`.
+///
+/// # Errors
+///
+/// Returns an error for invalid quality values or unsupported encoder options.
 #[cfg(feature = "alloc")]
 pub fn compress(input: &[u8], quality: u8) -> Result<alloc::vec::Vec<u8>, CompressError> {
     let options = Options::default().quality(quality)?;
     compress_with_options(input, &options)
 }
 
+/// Compress `input` with explicit [`Options`].
+///
+/// # Errors
+///
+/// Returns an error when the options are outside the implemented encoder scope.
 #[cfg(feature = "alloc")]
 pub fn compress_with_options(
     input: &[u8],
@@ -34,6 +46,11 @@ pub fn compress_with_options(
     encode::compress_with_options(input, options)
 }
 
+/// Compress `input` and append the Brotli stream to `output`.
+///
+/// # Errors
+///
+/// Returns an error for invalid quality values or unsupported encoder options.
 #[cfg(feature = "alloc")]
 pub fn compress_into(
     input: &[u8],
@@ -52,6 +69,11 @@ pub fn compress_into(
     )
 }
 
+/// Compress `input` into a caller-provided slice.
+///
+/// # Errors
+///
+/// Returns [`CompressError::OutputLimitExceeded`] if `output` is too small.
 #[cfg(feature = "alloc")]
 pub fn compress_into_slice(
     input: &[u8],

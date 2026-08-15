@@ -16,7 +16,7 @@ Default build may use unsafe for:
 - unaligned little-endian loads;
 - fixed-size copy helpers;
 - `Vec` initialization after checked writes;
-- target-specific SIMD primitives.
+- checked Huffman fast-table indexing.
 
 `paranoid` must swap those for safe equivalents.
 
@@ -35,7 +35,7 @@ Encoder is lower risk but still must:
 - avoid unchecked math overflow;
 - keep input indexing guarded;
 - keep SIMD scalar-equivalent;
-- avoid platform-dependent q10/q11 output unless documented.
+- keep unsupported q6..q11 paths explicit until implemented.
 
 ## Upstream bug classes to prevent
 

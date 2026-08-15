@@ -10,6 +10,10 @@ use crate::{
 const READ_CHUNK_SIZE: usize = 8 * 1024;
 const MIN_STREAM_WINDOW_SIZE: usize = (1 << 10) - 16;
 
+/// `std::io::Read` Brotli stream decoder.
+///
+/// The decoder emits bytes as soon as a complete meta-block is available and
+/// keeps only the decoded window history needed for future backward copies.
 pub struct StreamDecoder<R> {
     inner: R,
     max_output_size: usize,
@@ -38,10 +42,12 @@ enum DecodeStep {
 }
 
 impl<R: Read> StreamDecoder<R> {
+    /// Create a stream decoder with no practical output limit.
     pub const fn new(inner: R) -> Self {
         Self::with_limit(inner, burli_core::format::DEFAULT_MAX_OUTPUT_SIZE)
     }
 
+    /// Create a stream decoder with a hard output limit.
     pub const fn with_limit(inner: R, max_output_size: usize) -> Self {
         Self {
             inner,
@@ -57,6 +63,7 @@ impl<R: Read> StreamDecoder<R> {
         }
     }
 
+    /// Return the wrapped reader.
     pub fn into_inner(self) -> R {
         self.inner
     }

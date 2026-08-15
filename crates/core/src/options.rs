@@ -5,12 +5,23 @@ use crate::format::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+/// Brotli encoder quality level.
+///
+/// Bürli accepts the standard Brotli range at the type level. The encoder
+/// currently implements qualities 0 through 5.
 pub struct Quality(u8);
 
 impl Quality {
+    /// Bürli's default quality.
     pub const DEFAULT: Self = Self(DEFAULT_QUALITY);
+    /// Google Brotli's default quality.
     pub const GOOGLE_DEFAULT: Self = Self(GOOGLE_DEFAULT_QUALITY);
 
+    /// Build a checked quality value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BurliError::InvalidQuality`] when `value` is greater than 11.
     pub const fn new(value: u8) -> Result<Self, BurliError> {
         if value <= MAX_QUALITY {
             Ok(Self(value))
@@ -19,6 +30,7 @@ impl Quality {
         }
     }
 
+    /// Return the raw quality level.
     pub const fn get(self) -> u8 {
         self.0
     }
@@ -39,22 +51,31 @@ impl TryFrom<u8> for Quality {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+/// Brotli input mode hint.
 pub enum Mode {
+    /// Generic binary or mixed input.
     #[default]
     Generic,
+    /// Text input.
     Text,
+    /// Font input.
     Font,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+/// SIMD dispatch policy.
 pub enum SimdMode {
+    /// Use runtime dispatch when available.
     #[default]
     Auto,
+    /// Prefer SIMD paths when available.
     Enabled,
+    /// Force scalar paths.
     Disabled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Brotli encode options.
 pub struct Options {
     quality: Quality,
     window_bits: u8,
@@ -80,6 +101,7 @@ impl Default for Options {
 }
 
 impl Options {
+    /// Build options matching Google Brotli's default quality.
     pub fn google_default() -> Self {
         Self {
             quality: Quality::GOOGLE_DEFAULT,
@@ -87,15 +109,26 @@ impl Options {
         }
     }
 
+    /// Set the encoder quality.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BurliError::InvalidQuality`] for values outside 0 through 11.
     pub fn quality(mut self, value: u8) -> Result<Self, BurliError> {
         self.quality = Quality::new(value)?;
         Ok(self)
     }
 
+    /// Return the raw quality value.
     pub fn quality_value(&self) -> u8 {
         self.quality.get()
     }
 
+    /// Set the Brotli window size as log2 bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BurliError::InvalidWindowBits`] outside the standard range.
     pub fn window_bits(mut self, value: u8) -> Result<Self, BurliError> {
         if !(MIN_WINDOW_BITS..=MAX_WINDOW_BITS).contains(&value) {
             return Err(BurliError::InvalidWindowBits(value));
@@ -104,10 +137,18 @@ impl Options {
         Ok(self)
     }
 
+    /// Return the configured window size as log2 bytes.
     pub const fn window_bits_value(&self) -> u8 {
         self.window_bits
     }
 
+    /// Set the target meta-block size as log2 bytes.
+    ///
+    /// `None` lets the encoder choose a quality-specific default.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BurliError::InvalidBlockBits`] outside the standard range.
     pub fn block_bits(mut self, value: Option<u8>) -> Result<Self, BurliError> {
         if let Some(bits) = value
             && !(MIN_BLOCK_BITS..=MAX_BLOCK_BITS).contains(&bits)
@@ -118,46 +159,57 @@ impl Options {
         Ok(self)
     }
 
+    /// Return the optional block-size override.
     pub const fn block_bits_value(&self) -> Option<u8> {
         self.block_bits
     }
 
+    /// Set the input mode hint.
     #[must_use]
     pub const fn mode(mut self, value: Mode) -> Self {
         self.mode = value;
         self
     }
 
+    /// Return the input mode hint.
     pub const fn mode_value(&self) -> Mode {
         self.mode
     }
 
+    /// Set the SIMD dispatch policy.
     #[must_use]
     pub const fn simd(mut self, value: SimdMode) -> Self {
         self.simd = value;
         self
     }
 
+    /// Return the SIMD dispatch policy.
     pub const fn simd_value(&self) -> SimdMode {
         self.simd
     }
 
+    /// Set an input-size hint for callers that cannot pass the full slice yet.
     #[must_use]
     pub const fn size_hint(mut self, value: Option<usize>) -> Self {
         self.size_hint = value;
         self
     }
 
+    /// Return the optional input-size hint.
     pub const fn size_hint_value(&self) -> Option<usize> {
         self.size_hint
     }
 
+    /// Disable literal context modeling.
+    ///
+    /// This can trade ratio for speed at higher qualities.
     #[must_use]
     pub const fn disable_literal_context_modeling(mut self, value: bool) -> Self {
         self.disable_literal_context_modeling = value;
         self
     }
 
+    /// Return true when literal context modeling is disabled.
     pub const fn literal_context_modeling_disabled(&self) -> bool {
         self.disable_literal_context_modeling
     }
