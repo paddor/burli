@@ -698,12 +698,12 @@ pub(super) fn collect_with_64k_fast_skip<'a>(
     workspace.collect_with_64k_fast_skip(input, max_backward_distance)
 }
 
-pub(super) fn collect_with_32k_fast_skip<'a>(
+pub(super) fn collect_with_32k_faster_skip<'a>(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &'a mut Workspace,
 ) -> &'a Batch {
-    workspace.collect_with_32k_fast_skip(input, max_backward_distance)
+    workspace.collect_with_32k_faster_skip(input, max_backward_distance)
 }
 
 pub(super) fn collect_fast_skip<'a>(
@@ -1291,7 +1291,7 @@ impl Workspace {
         }
 
         let mut table = [NO_POSITION; 1 << 16];
-        collect_with_u32_table_m6_sparse_stride::<16>(
+        collect_with_u32_table_m6_sparse_stride::<16, 64>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1360,7 +1360,11 @@ impl Workspace {
     }
 
     #[allow(clippy::large_stack_arrays)]
-    fn collect_with_32k_fast_skip(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
+    fn collect_with_32k_faster_skip(
+        &mut self,
+        input: &[u8],
+        max_backward_distance: usize,
+    ) -> &Batch {
         self.reset(input.len());
 
         if input.len() < INPUT_MARGIN_BYTES {
@@ -1369,7 +1373,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 15];
-        collect_with_u32_table_m6::<15, FAST_U32_SKIP_START, false, true>(
+        collect_with_u32_table_m6::<15, FASTER_U32_SKIP_START, false, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1520,6 +1524,7 @@ const Q0_U32_SKIP_START: usize = 48;
 const MEDIUM_U32_SKIP_START: usize = 64;
 const JSON_U32_SKIP_START: usize = 80;
 const FAST_U32_SKIP_START: usize = 96;
+const FASTER_U32_SKIP_START: usize = 128;
 
 #[allow(clippy::large_stack_arrays)]
 #[inline(never)]
@@ -1630,15 +1635,14 @@ fn collect_with_u32_table_m6<
     }
 }
 
-fn collect_with_u32_table_m6_sparse_stride<const TABLE_BITS: usize>(
+fn collect_with_u32_table_m6_sparse_stride<const TABLE_BITS: usize, const SPARSE_STRIDE: usize>(
     batch: &mut Batch,
     input: &[u8],
     max_backward_distance: usize,
     table: &mut [u32],
 ) {
-    const SPARSE_STRIDE: usize = 64;
-
     debug_assert_eq!(table.len(), 1_usize << TABLE_BITS);
+    debug_assert!(SPARSE_STRIDE.is_power_of_two());
     let max_distance = max_backward_distance.min(MAX_DISTANCE);
     let len_limit = input
         .len()
@@ -2019,8 +2023,9 @@ fn read_u32_le_trusted(input: &[u8], pos: usize) -> u32 {
 
 #[inline(always)]
 fn is_match6(input: &[u8], candidate: usize, pos: usize) -> bool {
+    const LOW_48_BITS: u64 = 0x0000_ffff_ffff_ffff;
     let diff = read_u64_le(input, candidate) ^ read_u64_le(input, pos);
-    diff.trailing_zeros() >= 48
+    diff & LOW_48_BITS == 0
 }
 
 #[inline(always)]
@@ -2028,8 +2033,9 @@ fn is_match(input: &[u8], candidate: usize, pos: usize, min_match: usize) -> boo
     if min_match == 4 {
         read_u32_le(input, candidate) == read_u32_le(input, pos)
     } else {
+        const LOW_48_BITS: u64 = 0x0000_ffff_ffff_ffff;
         let diff = read_u64_le(input, candidate) ^ read_u64_le(input, pos);
-        diff.trailing_zeros() >= 48
+        diff & LOW_48_BITS == 0
     }
 }
 

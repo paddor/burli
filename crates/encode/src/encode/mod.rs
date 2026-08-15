@@ -32,6 +32,7 @@ const Q4_DELAYED_SYMBOLS: usize = 3840;
 const Q5_DELAYED_SYMBOLS: usize = 3584;
 const Q0_DIRECT_MAX_INPUT: usize = 384;
 const Q0_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
+const Q0_SHAPE_SAMPLE_BYTES: usize = 4 * 1024;
 const Q1_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
 const Q2_STATIC_NO_DICTIONARY_MAX_INPUT: usize = 4 * 1024;
 const Q2_MEDIUM_H3_MIN_INPUT: usize = 8 * 1024;
@@ -341,11 +342,13 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::FastOnePass {
-            if q0_small_fast_literal_meta_block_is_likely_safe(input) {
+            let q0_shape = Q0Shape::sample(input);
+
+            if q0_small_fast_literal_meta_block_is_likely_safe(&q0_shape) {
                 return write_fast_compressed_literal_meta_block(writer, input);
             }
 
-            if q0_one_k_css_q1_meta_block_is_likely_safe(input) {
+            if q0_one_k_css_q1_meta_block_is_likely_safe(&q0_shape) {
                 let has_copy = {
                     let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
                     batch.has_copy()
@@ -362,7 +365,7 @@ impl EncoderPlan {
                 );
             }
 
-            if q0_tiny_json_q1_meta_block_is_likely_safe(input) {
+            if q0_tiny_json_q1_meta_block_is_likely_safe(&q0_shape) {
                 let has_copy = {
                     let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
                     batch.has_copy()
@@ -379,7 +382,7 @@ impl EncoderPlan {
             }
 
             if input.len() <= Q0_STATIC_ENTROPY_MAX_INPUT && input.len() > Q0_DIRECT_MAX_INPUT {
-                let tokens = if q0_one_k_license_or_css_no_last_probe_is_likely_safe(input) {
+                let tokens = if q0_one_k_script_or_css_no_last_probe_is_likely_safe(&q0_shape) {
                     q2::collect_without_dictionary_no_lazy_no_last_distance_probe(
                         input,
                         local_max_backward_distance,
@@ -404,7 +407,7 @@ impl EncoderPlan {
             }
 
             if input.len() > Q0_DIRECT_MAX_INPUT {
-                if !q0_known_text_collect_route_is_likely_safe(input)
+                if !q0_known_text_collect_route_is_likely_safe(&q0_shape)
                     && sparse::should_accelerate(input)
                 {
                     if sparse::q0_store_block(input_base, allow_cross_collector_shortcuts) {
@@ -431,86 +434,94 @@ impl EncoderPlan {
                 }
 
                 let has_copy = {
-                    let batch = if q0_huge_license_comment_32k_table_is_likely_safe(input) {
-                        q1::collect_with_32k_fast_skip(
+                    let batch = if q0_large_web_text_32k_fast_skip_is_likely_safe(&q0_shape)
+                        || q0_huge_script_32k_table_is_likely_safe(&q0_shape)
+                    {
+                        q1::collect_with_32k_faster_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
-                    } else if q0_large_license_comment_64k_table_is_likely_safe(input) {
+                    } else if q0_large_script_64k_table_is_likely_safe(&q0_shape) {
                         q1::collect_with_64k_fast_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
-                    } else if q0_medium_license_comment_64k_table_is_likely_safe(input) {
+                    } else if q0_medium_script_64k_table_is_likely_safe(&q0_shape) {
                         q1::collect_with_64k_medium_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
-                    } else if q0_small_json_32k_u16_table_is_likely_safe(input) {
+                    } else if q0_small_json_32k_u16_table_is_likely_safe(&q0_shape) {
                         q1::collect_with_32k_json_u16_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
-                    } else if q0_medium_json_32k_table_is_likely_safe(input) {
+                    } else if q0_medium_json_32k_table_is_likely_safe(&q0_shape) {
                         q1::collect_with_32k_json_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
-                    } else if q0_small_license_js_u16_fast_skip_is_likely_safe(input) {
+                    } else if q0_small_script_u16_fast_skip_is_likely_safe(&q0_shape) {
                         q1::collect_fast_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )?
-                    } else if q0_small_license_js_u16_medium_skip_is_likely_safe(input) {
+                    } else if q0_small_script_u16_medium_skip_is_likely_safe(&q0_shape) {
                         q1::collect_medium_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )?
-                    } else if q0_medium_license_js_64k_medium_skip_is_likely_safe(input) {
+                    } else if q0_medium_script_64k_medium_skip_is_likely_safe(&q0_shape) {
                         q1::collect_with_64k_medium_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
-                    } else if q0_medium_css_64k_fast_skip_is_likely_safe(input) {
+                    } else if q0_medium_css_64k_fast_skip_is_likely_safe(&q0_shape) {
                         q1::collect_with_64k_fast_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )
-                    } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(input)
-                        || q0_tiny_license_js_no_last_distance_probe_is_likely_safe(input)
+                    } else if q0_fast_skip_no_last_distance_probe_is_likely_safe(&q0_shape)
+                        || q0_tiny_script_no_last_distance_probe_is_likely_safe(&q0_shape)
                     {
                         q1::collect_fast_skip_without_last_distance_probe(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )?
-                    } else if q0_no_last_distance_probe_is_likely_safe(input) {
+                    } else if q0_no_last_distance_probe_is_likely_safe(&q0_shape) {
                         q1::collect_without_last_distance_probe(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )?
-                    } else if q0_medium_minified_js_medium_skip_is_likely_safe(input) {
+                    } else if q0_medium_script_medium_skip_is_likely_safe(&q0_shape) {
                         q1::collect_medium_skip_without_last_distance_probe(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )?
-                    } else if q0_fast_skip_is_likely_safe(input) {
+                    } else if q0_fast_skip_is_likely_safe(&q0_shape) {
                         q1::collect_fast_skip(
                             input,
                             local_max_backward_distance,
                             &mut workspace.q1,
                         )?
+                    } else if input.len() > 128 * 1024 {
+                        q1::collect_with_64k_medium_skip(
+                            input,
+                            local_max_backward_distance,
+                            &mut workspace.q1,
+                        )
                     } else {
                         q1::collect_q0_default_skip(
                             input,
@@ -523,7 +534,7 @@ impl EncoderPlan {
                 if !has_copy {
                     return write_compressed_literal_meta_block(writer, input);
                 }
-                if q0_small_json_static_distance_prefix_is_likely_safe(input) {
+                if q0_small_json_static_distance_prefix_is_likely_safe(&q0_shape) {
                     return q1::write_balanced_literal_command_prefixes(
                         writer,
                         input,
@@ -531,7 +542,7 @@ impl EncoderPlan {
                         &mut workspace.q1,
                     );
                 }
-                if q0_small_css_static_distance_prefix_is_likely_safe(input) {
+                if q0_small_css_static_distance_prefix_is_likely_safe(&q0_shape) {
                     return q1::write_balanced_command_prefixes(
                         writer,
                         input,
@@ -540,7 +551,7 @@ impl EncoderPlan {
                         self.q1_fast_literal_prefix,
                     );
                 }
-                if q0_small_license_js_balanced_command_prefix_is_likely_safe(input) {
+                if q0_small_script_balanced_command_prefix_is_likely_safe(&q0_shape) {
                     return q1::write_balanced_command_prefixes(
                         writer,
                         input,
@@ -549,7 +560,7 @@ impl EncoderPlan {
                         self.q1_fast_literal_prefix,
                     );
                 }
-                if q0_medium_json_32k_table_is_likely_safe(input) {
+                if q0_medium_json_32k_table_is_likely_safe(&q0_shape) {
                     return q1::write_packed_literal_body(
                         writer,
                         input,
@@ -558,8 +569,26 @@ impl EncoderPlan {
                         self.q1_fast_literal_prefix,
                     );
                 }
-                if q0_medium_minified_js_medium_skip_is_likely_safe(input) {
+                if q0_medium_script_medium_skip_is_likely_safe(&q0_shape) {
                     return q1::write_fast_command_prefixes(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
+                }
+                if q0_large_script_balanced_command_prefix_is_likely_safe(&q0_shape) {
+                    return q1::write_balanced_command_prefixes(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
+                }
+                if q0_large_css_balanced_command_prefix_is_likely_safe(&q0_shape) {
+                    return q1::write_balanced_command_prefixes(
                         writer,
                         input,
                         input.len(),
@@ -607,15 +636,33 @@ impl EncoderPlan {
                 if !tokens.iter().any(|token| token.is_copy()) {
                     return write_compressed_literal_meta_block(writer, input);
                 }
-                return write_token_batches_with_symbol_limit(
+                return write_recomputed_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     Q1_DELAYED_SYMBOLS,
+                    &mut workspace.token_prefix,
                 );
             }
 
             if !allow_cross_collector_shortcuts {
+                if input.len() > 128 * 1024 {
+                    let has_copy = {
+                        let batch =
+                            q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
+                        batch.has_copy()
+                    };
+                    if !has_copy {
+                        return write_compressed_literal_meta_block(writer, input);
+                    }
+                    return q1::write(
+                        writer,
+                        input,
+                        input.len(),
+                        &mut workspace.q1,
+                        self.q1_fast_literal_prefix,
+                    );
+                }
                 let tokens = if q1_large_markup_lazy_is_likely_safe(input) {
                     q2::collect_without_dictionary_one_lazy(
                         input,
@@ -656,17 +703,24 @@ impl EncoderPlan {
                 if !tokens.iter().any(|token| token.is_copy()) {
                     return write_compressed_literal_meta_block(writer, input);
                 }
-                return write_recomputed_token_batches_with_symbol_limit(
+                return write_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     Q1_DELAYED_SYMBOLS,
-                    &mut workspace.token_prefix,
                 );
             }
 
             let has_copy = {
-                let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
+                let batch = if input.len() > 128 * 1024 {
+                    q1::collect_with_64k_medium_skip(
+                        input,
+                        local_max_backward_distance,
+                        &mut workspace.q1,
+                    )
+                } else {
+                    q1::collect(input, local_max_backward_distance, &mut workspace.q1)?
+                };
                 batch.has_copy()
             };
             if !has_copy {
@@ -1210,129 +1264,322 @@ const fn min_match_len(quality: u8) -> usize {
     }
 }
 
-fn q0_small_fast_literal_meta_block_is_likely_safe(input: &[u8]) -> bool {
-    let small_html = (257..=1024).contains(&input.len())
-        && (input.starts_with(b"<!") || input.starts_with(b"<html"));
+#[derive(Clone, Copy, Debug, Default)]
+struct Q0Shape {
+    len: usize,
+    sample_len: usize,
+    printable: usize,
+    whitespace: usize,
+    alpha: usize,
+    digit: usize,
+    high: usize,
+    zero: usize,
+    quote: usize,
+    colon: usize,
+    comma: usize,
+    brace: usize,
+    bracket: usize,
+    angle: usize,
+    at: usize,
+    semicolon: usize,
+    slash: usize,
+    star: usize,
+    exclamation: usize,
+    paren: usize,
+    equals: usize,
+    dash: usize,
+    underscore: usize,
+}
+
+impl Q0Shape {
+    fn sample(input: &[u8]) -> Self {
+        let sample_len = input.len().min(Q0_SHAPE_SAMPLE_BYTES);
+        let mut shape = Self {
+            len: input.len(),
+            sample_len,
+            ..Self::default()
+        };
+
+        for &byte in &input[..sample_len] {
+            shape.printable +=
+                usize::from((32..=126).contains(&byte) || matches!(byte, b'\n' | b'\r' | b'\t'));
+            shape.whitespace += usize::from(matches!(byte, b' ' | b'\n' | b'\r' | b'\t'));
+            shape.alpha += usize::from(byte.is_ascii_alphabetic());
+            shape.digit += usize::from(byte.is_ascii_digit());
+            shape.high += usize::from(byte >= 128);
+            shape.zero += usize::from(byte == 0);
+            shape.quote += usize::from(matches!(byte, b'"' | b'\''));
+            shape.colon += usize::from(byte == b':');
+            shape.comma += usize::from(byte == b',');
+            shape.brace += usize::from(matches!(byte, b'{' | b'}'));
+            shape.bracket += usize::from(matches!(byte, b'[' | b']'));
+            shape.angle += usize::from(matches!(byte, b'<' | b'>'));
+            shape.at += usize::from(byte == b'@');
+            shape.semicolon += usize::from(byte == b';');
+            shape.slash += usize::from(byte == b'/');
+            shape.star += usize::from(byte == b'*');
+            shape.exclamation += usize::from(byte == b'!');
+            shape.paren += usize::from(matches!(byte, b'(' | b')'));
+            shape.equals += usize::from(byte == b'=');
+            shape.dash += usize::from(byte == b'-');
+            shape.underscore += usize::from(byte == b'_');
+        }
+
+        shape
+    }
+
+    fn ratio_at_least(self, count: usize, pct: usize) -> bool {
+        self.sample_len != 0 && count * 100 >= self.sample_len * pct
+    }
+
+    fn ratio_below(self, count: usize, pct: usize) -> bool {
+        self.sample_len == 0 || count * 100 < self.sample_len * pct
+    }
+
+    fn text_like(self) -> bool {
+        self.sample_len != 0
+            && self.zero == 0
+            && self.ratio_at_least(self.printable, 94)
+            && self.ratio_below(self.high, 3)
+    }
+
+    fn markup_like(self) -> bool {
+        self.text_like() && self.angle >= 4 && self.alpha * 2 >= self.angle
+    }
+
+    fn css_like(self) -> bool {
+        self.text_like()
+            && self.colon >= 2
+            && self.semicolon >= 1
+            && (self.brace >= 2 || self.at >= 1 || self.dash >= 4)
+            && self.ratio_below(self.quote, 8)
+    }
+
+    fn json_like(self) -> bool {
+        self.text_like()
+            && self.quote >= 4
+            && self.colon >= 1
+            && self.comma >= 1
+            && self.brace + self.bracket >= 2
+            && self.semicolon == 0
+    }
+
+    fn script_like(self) -> bool {
+        if !self.text_like() {
+            return false;
+        }
+        if self.json_like() {
+            return false;
+        }
+        if self.css_like() && self.colon * 2 >= self.semicolon {
+            return false;
+        }
+
+        let structural_syntax = self.paren + self.brace + self.equals;
+        let minified_script = self.paren >= 8
+            && self.brace + self.equals >= 8
+            && structural_syntax >= 16
+            && self.ratio_below(self.whitespace, 28);
+        let comment_wrapped_script = self.slash >= 2
+            && self.star >= 1
+            && self.exclamation + self.at >= 1
+            && self.paren >= 8
+            && self.brace + self.equals >= 8;
+        minified_script || comment_wrapped_script
+    }
+
+    fn web_text_like(self) -> bool {
+        self.css_like() || self.script_like() || self.json_like() || self.markup_like()
+    }
+}
+
+trait Q0ShapeSource {
+    fn q0_shape(&self) -> Q0Shape;
+}
+
+impl Q0ShapeSource for Q0Shape {
+    fn q0_shape(&self) -> Q0Shape {
+        *self
+    }
+}
+
+impl Q0ShapeSource for [u8] {
+    fn q0_shape(&self) -> Q0Shape {
+        Q0Shape::sample(self)
+    }
+}
+
+impl Q0ShapeSource for Vec<u8> {
+    fn q0_shape(&self) -> Q0Shape {
+        Q0Shape::sample(self)
+    }
+}
+
+fn q0_small_fast_literal_meta_block_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    let small_html = (257..=1024).contains(&shape.len) && shape.markup_like();
     let tiny_comment_or_css =
-        (385..=512).contains(&input.len()) && (input.starts_with(b"/*") || input.starts_with(b"@"));
+        (385..=512).contains(&shape.len) && (shape.script_like() || shape.css_like());
     small_html || tiny_comment_or_css
 }
 
-fn q0_one_k_css_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
-    (513..=768).contains(&input.len())
-        && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
+fn q0_one_k_css_q1_meta_block_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    (513..=768).contains(&shape.len) && shape.css_like()
 }
 
-fn q0_one_k_license_or_css_no_last_probe_is_likely_safe(input: &[u8]) -> bool {
-    (897..=Q0_STATIC_ENTROPY_MAX_INPUT).contains(&input.len())
-        && (input.starts_with(b"/*!") || input.starts_with(b"@charset"))
+fn q0_one_k_script_or_css_no_last_probe_is_likely_safe<T: Q0ShapeSource + ?Sized>(
+    source: &T,
+) -> bool {
+    let shape = source.q0_shape();
+    (897..=Q0_STATIC_ENTROPY_MAX_INPUT).contains(&shape.len)
+        && (shape.script_like() || shape.css_like())
 }
 
-fn q0_tiny_json_q1_meta_block_is_likely_safe(input: &[u8]) -> bool {
-    (512..=Q0_STATIC_ENTROPY_MAX_INPUT).contains(&input.len()) && input.starts_with(b"{")
+fn q0_tiny_json_q1_meta_block_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    (512..=Q0_STATIC_ENTROPY_MAX_INPUT).contains(&shape.len) && shape.json_like()
 }
 
-fn q0_large_license_comment_64k_table_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > 160 * 1024 && input.starts_with(b"/*!")
+fn q0_large_script_64k_table_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len > 160 * 1024 && shape.script_like()
 }
 
-fn q0_huge_license_comment_32k_table_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > 256 * 1024 && input.starts_with(b"/*!")
+fn q0_huge_script_32k_table_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len > 256 * 1024 && shape.script_like()
 }
 
-fn q0_medium_license_comment_64k_table_is_likely_safe(input: &[u8]) -> bool {
-    (128 * 1024..=160 * 1024).contains(&input.len()) && input.starts_with(b"/*!")
+fn q0_medium_script_64k_table_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    (128 * 1024..=160 * 1024).contains(&shape.len) && shape.script_like()
 }
 
-fn q0_medium_json_32k_table_is_likely_safe(input: &[u8]) -> bool {
-    input.len() >= 32 * 1024 && input.len() <= 128 * 1024 && input.starts_with(b"{")
+fn q0_medium_json_32k_table_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len >= 32 * 1024 && shape.len <= 128 * 1024 && shape.json_like()
 }
 
-fn q0_small_json_32k_u16_table_is_likely_safe(input: &[u8]) -> bool {
-    input.len() >= 32 * 1024 && input.len() <= 64 * 1024 && input.starts_with(b"{")
+fn q0_small_json_32k_u16_table_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len >= 32 * 1024 && shape.len <= 64 * 1024 && shape.json_like()
 }
 
-fn q0_small_license_js_u16_medium_skip_is_likely_safe(input: &[u8]) -> bool {
-    input.len() >= 16 * 1024 && input.len() <= 32 * 1024 && input.starts_with(b"/*!")
+fn q0_small_script_u16_medium_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len >= 16 * 1024 && shape.len <= 32 * 1024 && shape.script_like()
 }
 
-fn q0_small_license_js_u16_fast_skip_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > 24 * 1024 && input.len() <= 32 * 1024 && input.starts_with(b"/*!")
+fn q0_small_script_u16_fast_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len > 24 * 1024 && shape.len <= 32 * 1024 && shape.script_like()
 }
 
-fn q0_medium_license_js_64k_medium_skip_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > 32 * 1024 && input.len() <= 64 * 1024 && input.starts_with(b"/*!")
+fn q0_medium_script_64k_medium_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len > 32 * 1024 && shape.len <= 64 * 1024 && shape.script_like()
 }
 
-fn q0_medium_css_64k_fast_skip_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > 32 * 1024
-        && input.len() <= 128 * 1024
-        && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
+fn q0_medium_css_64k_fast_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len > 32 * 1024 && shape.len <= 128 * 1024 && shape.css_like()
 }
 
-fn q0_known_text_collect_route_is_likely_safe(input: &[u8]) -> bool {
-    q0_large_license_comment_64k_table_is_likely_safe(input)
-        || q0_huge_license_comment_32k_table_is_likely_safe(input)
-        || q0_medium_license_comment_64k_table_is_likely_safe(input)
-        || q0_small_json_32k_u16_table_is_likely_safe(input)
-        || q0_medium_json_32k_table_is_likely_safe(input)
-        || q0_small_license_js_u16_fast_skip_is_likely_safe(input)
-        || q0_small_license_js_u16_medium_skip_is_likely_safe(input)
-        || q0_medium_license_js_64k_medium_skip_is_likely_safe(input)
-        || q0_medium_css_64k_fast_skip_is_likely_safe(input)
-        || q0_fast_skip_no_last_distance_probe_is_likely_safe(input)
-        || q0_no_last_distance_probe_is_likely_safe(input)
-        || q0_medium_minified_js_medium_skip_is_likely_safe(input)
-        || q0_fast_skip_is_likely_safe(input)
+fn q0_large_web_text_32k_fast_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len > 128 * 1024 && (shape.script_like() || shape.css_like())
 }
 
-fn q0_fast_skip_is_likely_safe(input: &[u8]) -> bool {
-    let css = input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
-        && input.len() <= 32 * 1024
-        && (input.starts_with(b"@charset") || input.starts_with(b"@media"));
-    let tiny_license_js = input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
-        && input.len() <= 2 * 1024
-        && input.starts_with(b"/*!");
-    css || tiny_license_js
+fn q0_large_css_balanced_command_prefix_is_likely_safe<T: Q0ShapeSource + ?Sized>(
+    source: &T,
+) -> bool {
+    let shape = source.q0_shape();
+    shape.len > 128 * 1024 && shape.css_like()
 }
 
-fn q0_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > 2 * 1024 && input.len() <= 4 * 1024 && input.starts_with(b"/*!")
+fn q0_large_script_balanced_command_prefix_is_likely_safe<T: Q0ShapeSource + ?Sized>(
+    source: &T,
+) -> bool {
+    let shape = source.q0_shape();
+    shape.len > 128 * 1024 && shape.script_like()
 }
 
-fn q0_tiny_license_js_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
-        && input.len() <= 2 * 1024
-        && input.starts_with(b"/*!")
+fn q0_known_text_collect_route_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.web_text_like()
+        || q0_large_script_64k_table_is_likely_safe(&shape)
+        || q0_huge_script_32k_table_is_likely_safe(&shape)
+        || q0_medium_script_64k_table_is_likely_safe(&shape)
+        || q0_small_json_32k_u16_table_is_likely_safe(&shape)
+        || q0_medium_json_32k_table_is_likely_safe(&shape)
+        || q0_small_script_u16_fast_skip_is_likely_safe(&shape)
+        || q0_small_script_u16_medium_skip_is_likely_safe(&shape)
+        || q0_medium_script_64k_medium_skip_is_likely_safe(&shape)
+        || q0_medium_css_64k_fast_skip_is_likely_safe(&shape)
+        || q0_large_web_text_32k_fast_skip_is_likely_safe(&shape)
+        || q0_fast_skip_no_last_distance_probe_is_likely_safe(&shape)
+        || q0_no_last_distance_probe_is_likely_safe(&shape)
+        || q0_medium_script_medium_skip_is_likely_safe(&shape)
+        || q0_fast_skip_is_likely_safe(&shape)
 }
 
-fn q0_small_json_static_distance_prefix_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > Q0_STATIC_ENTROPY_MAX_INPUT && input.len() <= 4 * 1024 && input.starts_with(b"{")
+fn q0_fast_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    let css = shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 32 * 1024 && shape.css_like();
+    let tiny_script =
+        shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 2 * 1024 && shape.script_like();
+    css || tiny_script
 }
 
-fn q0_small_css_static_distance_prefix_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
-        && input.len() <= 2 * 1024
-        && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
+fn q0_no_last_distance_probe_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len > 2 * 1024 && shape.len <= 4 * 1024 && shape.script_like()
 }
 
-fn q0_small_license_js_balanced_command_prefix_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > Q0_STATIC_ENTROPY_MAX_INPUT
-        && input.len() <= 2 * 1024
-        && input.starts_with(b"/*!")
+fn q0_tiny_script_no_last_distance_probe_is_likely_safe<T: Q0ShapeSource + ?Sized>(
+    source: &T,
+) -> bool {
+    let shape = source.q0_shape();
+    shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 2 * 1024 && shape.script_like()
 }
 
-fn q0_fast_skip_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
-    input.len() > 16 * 1024
-        && input.len() <= 32 * 1024
-        && (input.starts_with(b"@charset") || input.starts_with(b"@media"))
-        && !input.starts_with(b"@media (prefers-color-scheme")
+fn q0_small_json_static_distance_prefix_is_likely_safe<T: Q0ShapeSource + ?Sized>(
+    source: &T,
+) -> bool {
+    let shape = source.q0_shape();
+    shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 4 * 1024 && shape.json_like()
 }
 
-fn q0_medium_minified_js_medium_skip_is_likely_safe(input: &[u8]) -> bool {
-    input.len() >= 8 * 1024
-        && input.len() <= 16 * 1024
-        && (input.starts_with(b"var ") || input.starts_with(b"/**") || input.starts_with(b"/*!"))
+fn q0_small_css_static_distance_prefix_is_likely_safe<T: Q0ShapeSource + ?Sized>(
+    source: &T,
+) -> bool {
+    let shape = source.q0_shape();
+    shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 2 * 1024 && shape.css_like()
+}
+
+fn q0_small_script_balanced_command_prefix_is_likely_safe<T: Q0ShapeSource + ?Sized>(
+    source: &T,
+) -> bool {
+    let shape = source.q0_shape();
+    shape.len > Q0_STATIC_ENTROPY_MAX_INPUT && shape.len <= 2 * 1024 && shape.script_like()
+}
+
+fn q0_fast_skip_no_last_distance_probe_is_likely_safe<T: Q0ShapeSource + ?Sized>(
+    source: &T,
+) -> bool {
+    let shape = source.q0_shape();
+    shape.len > 16 * 1024
+        && shape.len <= 32 * 1024
+        && shape.css_like()
+        && shape.at <= 1
+        && shape.brace <= 4
+        && !shape.ratio_at_least(shape.paren, 3)
+}
+
+fn q0_medium_script_medium_skip_is_likely_safe<T: Q0ShapeSource + ?Sized>(source: &T) -> bool {
+    let shape = source.q0_shape();
+    shape.len >= 8 * 1024 && shape.len <= 16 * 1024 && shape.script_like()
 }
 
 fn q1_large_markup_lazy_is_likely_safe(input: &[u8]) -> bool {
@@ -3849,40 +4096,32 @@ mod tests {
             &script_1k[..1024]
         ));
         assert!(!q0_one_k_css_q1_meta_block_is_likely_safe(&json_1k[..1024]));
-        assert!(q0_one_k_license_or_css_no_last_probe_is_likely_safe(
+        assert!(q0_one_k_script_or_css_no_last_probe_is_likely_safe(
             &script_1k[..1024]
         ));
-        assert!(q0_one_k_license_or_css_no_last_probe_is_likely_safe(
+        assert!(q0_one_k_script_or_css_no_last_probe_is_likely_safe(
             &css_1k[..1024]
         ));
-        assert!(!q0_one_k_license_or_css_no_last_probe_is_likely_safe(
+        assert!(!q0_one_k_script_or_css_no_last_probe_is_likely_safe(
             &script
         ));
-        assert!(!q0_one_k_license_or_css_no_last_probe_is_likely_safe(
+        assert!(!q0_one_k_script_or_css_no_last_probe_is_likely_safe(
             &json_1k[..1024]
         ));
         assert!(q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..1024]));
         assert!(q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..512]));
         assert!(!q0_tiny_json_q1_meta_block_is_likely_safe(&json_1k[..384]));
         assert!(!q0_tiny_json_q1_meta_block_is_likely_safe(&css_1k[..1024]));
-        assert!(q0_medium_license_comment_64k_table_is_likely_safe(
+        assert!(q0_medium_script_64k_table_is_likely_safe(
             &medium_license_js
         ));
-        assert!(!q0_large_license_comment_64k_table_is_likely_safe(
+        assert!(!q0_large_script_64k_table_is_likely_safe(
             &medium_license_js
         ));
-        assert!(q0_large_license_comment_64k_table_is_likely_safe(
-            &large_license_js
-        ));
-        assert!(!q0_huge_license_comment_32k_table_is_likely_safe(
-            &large_license_js
-        ));
-        assert!(q0_huge_license_comment_32k_table_is_likely_safe(
-            &huge_license_js
-        ));
-        assert!(!q0_large_license_comment_64k_table_is_likely_safe(
-            &large_plain_js
-        ));
+        assert!(q0_large_script_64k_table_is_likely_safe(&large_license_js));
+        assert!(!q0_huge_script_32k_table_is_likely_safe(&large_license_js));
+        assert!(q0_huge_script_32k_table_is_likely_safe(&huge_license_js));
+        assert!(!q0_large_script_64k_table_is_likely_safe(&large_plain_js));
         assert!(q0_medium_json_32k_table_is_likely_safe(
             &json_5k.repeat(16)[..64 * 1024]
         ));
@@ -3897,19 +4136,19 @@ mod tests {
             q0_known_text_collect_route_is_likely_safe(repeated_json)
                 || !sparse::should_accelerate(repeated_json)
         );
-        assert!(q0_small_license_js_u16_medium_skip_is_likely_safe(
+        assert!(q0_small_script_u16_medium_skip_is_likely_safe(
             &script_4k.repeat(8)[..32 * 1024]
         ));
-        assert!(q0_small_license_js_u16_medium_skip_is_likely_safe(
+        assert!(q0_small_script_u16_medium_skip_is_likely_safe(
             &script_4k.repeat(4)[..16 * 1024]
         ));
-        assert!(q0_small_license_js_u16_fast_skip_is_likely_safe(
+        assert!(q0_small_script_u16_fast_skip_is_likely_safe(
             &script_4k.repeat(8)[..32 * 1024]
         ));
-        assert!(!q0_small_license_js_u16_fast_skip_is_likely_safe(
+        assert!(!q0_small_script_u16_fast_skip_is_likely_safe(
             &script_4k.repeat(4)[..16 * 1024]
         ));
-        assert!(q0_medium_license_js_64k_medium_skip_is_likely_safe(
+        assert!(q0_medium_script_64k_medium_skip_is_likely_safe(
             &script_4k.repeat(16)[..64 * 1024]
         ));
         assert!(q0_medium_css_64k_fast_skip_is_likely_safe(
@@ -3918,6 +4157,13 @@ mod tests {
         assert!(!q0_medium_css_64k_fast_skip_is_likely_safe(
             &css_2k.repeat(65)[..130 * 1024]
         ));
+        let at_rule_css =
+            b"@media (prefers-color-scheme:dark){.markdown-body{color:#fff;background:#000;}}\n"
+                .repeat(400);
+        assert!(!q0_fast_skip_no_last_distance_probe_is_likely_safe(
+            &at_rule_css[..24 * 1024]
+        ));
+        assert!(q0_fast_skip_is_likely_safe(&at_rule_css[..24 * 1024]));
         let sparse_binary = sparse_binary_fixture(64 * 1024);
         let zero_heavy_sparse = {
             let mut input = sparse_binary_fixture(64 * 1024);
@@ -4004,33 +4250,29 @@ mod tests {
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
-        assert!(q0_tiny_license_js_no_last_distance_probe_is_likely_safe(
+        assert!(q0_tiny_script_no_last_distance_probe_is_likely_safe(
             &script_2k[..2048]
         ));
-        assert!(q0_tiny_license_js_no_last_distance_probe_is_likely_safe(
+        assert!(q0_tiny_script_no_last_distance_probe_is_likely_safe(
             &script_2k[..1025]
         ));
-        assert!(!q0_tiny_license_js_no_last_distance_probe_is_likely_safe(
+        assert!(!q0_tiny_script_no_last_distance_probe_is_likely_safe(
             &script_1k[..1024]
         ));
-        assert!(!q0_tiny_license_js_no_last_distance_probe_is_likely_safe(
+        assert!(!q0_tiny_script_no_last_distance_probe_is_likely_safe(
             &script_4k[..2049]
         ));
-        assert!(!q0_tiny_license_js_no_last_distance_probe_is_likely_safe(
+        assert!(!q0_tiny_script_no_last_distance_probe_is_likely_safe(
             &css_2k[..2048]
         ));
-        assert!(q0_medium_minified_js_medium_skip_is_likely_safe(
-            &module_12k
-        ));
-        assert!(q0_medium_minified_js_medium_skip_is_likely_safe(
+        assert!(q0_medium_script_medium_skip_is_likely_safe(&module_12k));
+        assert!(q0_medium_script_medium_skip_is_likely_safe(
             &license_module_12k
         ));
-        assert!(q0_medium_minified_js_medium_skip_is_likely_safe(
+        assert!(q0_medium_script_medium_skip_is_likely_safe(
             &script_4k.repeat(2)[..8 * 1024]
         ));
-        assert!(!q0_medium_minified_js_medium_skip_is_likely_safe(
-            &script_4k
-        ));
+        assert!(!q0_medium_script_medium_skip_is_likely_safe(&script_4k));
         assert!(!q0_small_json_static_distance_prefix_is_likely_safe(
             &json_1k[..1024]
         ));
@@ -4058,19 +4300,19 @@ mod tests {
         assert!(!q0_small_css_static_distance_prefix_is_likely_safe(
             &script_2k[..2048]
         ));
-        assert!(q0_small_license_js_balanced_command_prefix_is_likely_safe(
+        assert!(q0_small_script_balanced_command_prefix_is_likely_safe(
             &script_2k[..2048]
         ));
-        assert!(!q0_small_license_js_balanced_command_prefix_is_likely_safe(
+        assert!(!q0_small_script_balanced_command_prefix_is_likely_safe(
             &script_1k[..1024]
         ));
-        assert!(q0_small_license_js_balanced_command_prefix_is_likely_safe(
+        assert!(q0_small_script_balanced_command_prefix_is_likely_safe(
             &script_2k[..1025]
         ));
-        assert!(!q0_small_license_js_balanced_command_prefix_is_likely_safe(
+        assert!(!q0_small_script_balanced_command_prefix_is_likely_safe(
             &script_4k[..2049]
         ));
-        assert!(!q0_small_license_js_balanced_command_prefix_is_likely_safe(
+        assert!(!q0_small_script_balanced_command_prefix_is_likely_safe(
             &css_2k[..2048]
         ));
     }

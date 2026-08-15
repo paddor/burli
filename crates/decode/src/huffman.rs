@@ -226,8 +226,8 @@ impl PrefixCode {
         debug_assert!(self.single_symbol.is_none());
 
         if reader.has_bits(self.fast_bits) {
-            let lookup = self.fast
-                [reader.peek_bits_trusted_with_mask(self.fast_bits, self.fast_mask) as usize];
+            let index = reader.peek_bits_trusted_with_mask(self.fast_bits, self.fast_mask) as usize;
+            let lookup = self.fast_lookup(index);
             let (symbol, len) = lookup.parts();
             debug_assert!(len != 0);
             reader.drop_bits_trusted(len);
@@ -242,12 +242,34 @@ impl PrefixCode {
         debug_assert!(self.single_symbol.is_none());
         debug_assert!(reader.has_bits(self.fast_bits));
 
-        let lookup =
-            self.fast[reader.peek_bits_trusted_with_mask(self.fast_bits, self.fast_mask) as usize];
+        let index = reader.peek_bits_trusted_with_mask(self.fast_bits, self.fast_mask) as usize;
+        let lookup = self.fast_lookup(index);
         let (symbol, len) = lookup.parts();
         debug_assert!(len != 0);
         reader.drop_bits_trusted(len);
         symbol
+    }
+
+    #[inline(always)]
+    fn fast_lookup(&self, index: usize) -> Lookup {
+        debug_assert!(fast_lookup_index_contract(
+            self.fast.len(),
+            self.fast_bits,
+            index,
+        ));
+
+        #[cfg(not(feature = "paranoid"))]
+        {
+            // SAFETY: every non-single PrefixCode builds `fast` with exactly
+            // `1 << fast_bits` slots. Callers derive `index` from a mask no
+            // wider than `fast_bits`, or from fewer padded bits at stream end.
+            unsafe { *self.fast.get_unchecked(index) }
+        }
+
+        #[cfg(feature = "paranoid")]
+        {
+            self.fast[index]
+        }
     }
 
     #[cold]
@@ -263,7 +285,7 @@ impl PrefixCode {
 
         let available = remaining.min(usize::from(self.fast_bits));
         let index = reader.peek_bits(available as u8)? as usize;
-        let lookup = self.fast[index];
+        let lookup = self.fast_lookup(index);
         let (symbol, len) = lookup.parts();
         if len == 0 {
             return Err(BurliError::Format("invalid Brotli Huffman code"));
@@ -275,6 +297,11 @@ impl PrefixCode {
         reader.drop_bits(len)?;
         Ok(symbol)
     }
+}
+
+#[inline(always)]
+fn fast_lookup_index_contract(fast_len: usize, fast_bits: u8, index: usize) -> bool {
+    fast_bits <= FAST_LOOKUP_BITS && fast_len == (1_usize << fast_bits) && index < fast_len
 }
 
 fn validate_complete_counts(
@@ -740,5 +767,18 @@ mod verification {
 
         assert_eq!(code.decode(&mut reader).unwrap(), u16::from(symbol));
         assert_eq!(reader.consumed_bits(), 0);
+    }
+
+    #[kani::proof]
+    fn masked_fast_lookup_index_stays_in_bounds() {
+        let fast_bits = kani::any::<u8>();
+        let bits = kani::any::<u16>();
+        kani::assume(fast_bits <= FAST_LOOKUP_BITS);
+
+        let fast_len = 1_usize << fast_bits;
+        let mask = fast_len - 1;
+        let index = usize::from(bits) & mask;
+
+        assert!(fast_lookup_index_contract(fast_len, fast_bits, index));
     }
 }
