@@ -10,10 +10,15 @@ FUZZ_JOBS="${FUZZ_JOBS:-12}"
 FUZZ_MAX_LEN="${FUZZ_MAX_LEN:-65536}"
 FUZZ_TIMEOUT="${FUZZ_TIMEOUT:-30}"
 FUZZ_SANITIZER="${FUZZ_SANITIZER:-address}"
+FUZZ_DETECT_LEAKS="${FUZZ_DETECT_LEAKS:-1}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 LOG_DIR="${LOG_DIR:-$ROOT/tmp/overnight-fuzz/$RUN_ID}"
 STATUS_LOG="$LOG_DIR/status.log"
 SUMMARY_LOG="$LOG_DIR/summary.tsv"
+
+if [ "$FUZZ_SANITIZER" = "none" ] && [ "${FUZZ_DETECT_LEAKS:-1}" = "1" ]; then
+  FUZZ_DETECT_LEAKS=0
+fi
 
 targets=("$@")
 if [ "${#targets[@]}" -eq 0 ]; then
@@ -61,7 +66,7 @@ run_target() {
       -workers="$FUZZ_JOBS" \
       -max_len="$FUZZ_MAX_LEN" \
       -timeout="$FUZZ_TIMEOUT" \
-      -detect_leaks=1 \
+      -detect_leaks="$FUZZ_DETECT_LEAKS" \
       -print_final_stats=1 \
       -artifact_prefix="$artifact_dir"
   ) >"$log" 2>&1
