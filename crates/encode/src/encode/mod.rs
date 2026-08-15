@@ -6,6 +6,7 @@ use burli_core::{
     format::MIN_BLOCK_BITS,
 };
 
+mod load;
 mod q0;
 mod q1;
 mod q2;
@@ -1323,18 +1324,12 @@ fn next_hash_word(word: u64, next_byte: u8) -> u64 {
 
 #[inline(always)]
 fn read_u64_le(input: &[u8], pos: usize) -> u64 {
-    let bytes = input[pos..]
-        .first_chunk::<8>()
-        .expect("read_u64_le range checked by caller");
-    u64::from_le_bytes(*bytes)
+    load::read_u64_le_trusted(input, pos)
 }
 
 #[inline(always)]
 fn read_u32_le(input: &[u8], pos: usize) -> u32 {
-    let bytes = input[pos..]
-        .first_chunk::<4>()
-        .expect("read_u32_le range checked by caller");
-    u32::from_le_bytes(*bytes)
+    load::read_u32_le_trusted(input, pos)
 }
 
 #[inline(always)]
@@ -3170,7 +3165,7 @@ fn append_pending_bits(
     debug_assert!(width != 0 || bits == 0);
     debug_assert!(width == 0 || bits < (1_u64 << width));
     if *pending_width + width > MAX_BITS_PER_OP {
-        writer.write_bits_trusted_fits(*pending_width, *pending_bits);
+        writer.write_bits_trusted_nonzero_fits(*pending_width, *pending_bits);
         *pending_bits = 0;
         *pending_width = 0;
     }

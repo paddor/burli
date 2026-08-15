@@ -226,7 +226,7 @@ impl Batch {
             }
         }
         if pending_width != 0 {
-            writer.write_bits_trusted_fits(pending_width, pending_bits);
+            writer.write_bits_trusted_nonzero_fits(pending_width, pending_bits);
         }
 
         Ok(())

@@ -294,6 +294,20 @@ impl BitWriter {
         self.flush_full_bytes();
     }
 
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn write_bits_trusted_nonzero_fits(&mut self, width: u8, value: u64) {
+        debug_assert!(width != 0);
+        debug_assert!(width <= MAX_BITS_PER_OP);
+        debug_assert!(value < (1_u64 << width));
+        debug_assert!(self.bit_len.checked_add(usize::from(width)).is_some());
+
+        self.bit_len = self.bit_len.wrapping_add(usize::from(width));
+        self.bit_buffer |= value << self.bit_count;
+        self.bit_count += width;
+        self.flush_full_bytes();
+    }
+
     #[inline(always)]
     fn flush_full_bytes(&mut self) {
         let byte_count = self.bit_count / 8;

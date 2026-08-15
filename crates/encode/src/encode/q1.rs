@@ -40,7 +40,7 @@ const INTERNAL_INSERT_OFFSET: [usize; 24] = [
 pub(super) struct Batch {
     commands: Vec<u32>,
     literal_spans: Vec<LiteralSpan>,
-    literal_frequencies: [u32; LITERAL_ALPHABET_SIZE],
+    literal_frequencies: [usize; LITERAL_ALPHABET_SIZE],
     command_frequencies: [usize; INTERNAL_COMMAND_ALPHABET_SIZE],
     has_copy: bool,
 }
@@ -416,13 +416,13 @@ impl Batch {
         if fast_literal_prefix {
             return write_fast_dense_prefix_code_array_from_frequencies_with_scratch(
                 writer,
-                &literal_frequencies_as_usize(&self.literal_frequencies),
+                &self.literal_frequencies,
                 prefix,
             );
         }
         super::write_dense_prefix_code_array_from_frequencies_with_scratch_max_bits(
             writer,
-            &literal_frequencies_as_usize(&self.literal_frequencies),
+            &self.literal_frequencies,
             prefix,
             15,
         )
@@ -436,7 +436,7 @@ impl Batch {
         prefix.reserve_for(LITERAL_ALPHABET_SIZE, COMMAND_ALPHABET_SIZE);
         super::write_balanced_fast_dense_prefix_code_array_from_frequencies_with_scratch(
             writer,
-            &literal_frequencies_as_usize(&self.literal_frequencies),
+            &self.literal_frequencies,
             prefix,
         )
     }
@@ -448,16 +448,6 @@ fn add_q0_command_guards(command_frequencies: &mut [usize; INTERNAL_COMMAND_ALPH
     command_frequencies[2] += 1;
     command_frequencies[64] += 1;
     command_frequencies[84] += 1;
-}
-
-fn literal_frequencies_as_usize(
-    frequencies: &[u32; LITERAL_ALPHABET_SIZE],
-) -> [usize; LITERAL_ALPHABET_SIZE] {
-    let mut converted = [0_usize; LITERAL_ALPHABET_SIZE];
-    for (dst, &src) in converted.iter_mut().zip(frequencies.iter()) {
-        *dst = src as usize;
-    }
-    converted
 }
 
 #[inline(never)]
@@ -510,7 +500,7 @@ fn write_batch_body<const PACK_LITERALS: bool>(
         }
     }
     if pending_width != 0 {
-        writer.write_bits_trusted_fits(pending_width, pending_bits);
+        writer.write_bits_trusted_nonzero_fits(pending_width, pending_bits);
     }
 
     if literal_span_index != batch.literal_spans.len() {
@@ -565,7 +555,7 @@ fn write_q0_batch_body<const PACK_LITERALS: bool>(
     }
     debug_assert_eq!(literal_span_index, batch.literal_spans.len());
     if pending_width != 0 {
-        writer.write_bits_trusted_fits(pending_width, pending_bits);
+        writer.write_bits_trusted_nonzero_fits(pending_width, pending_bits);
     }
 }
 
@@ -2032,10 +2022,7 @@ fn read_u32_le(input: &[u8], pos: usize) -> u32 {
 
 #[inline(always)]
 fn read_u32_le_trusted(input: &[u8], pos: usize) -> u32 {
-    let bytes = input[pos..]
-        .first_chunk::<4>()
-        .expect("read_u32_le range checked by caller");
-    u32::from_le_bytes(*bytes)
+    super::load::read_u32_le_trusted(input, pos)
 }
 
 #[inline(always)]
