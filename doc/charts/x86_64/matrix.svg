@@ -121,8 +121,8 @@ CSS
 <rect x="84" y="536" width="31" height="11" opacity="1" fill="#1D4ED8" stroke="none"/>
 <rect x="84" y="524" width="31" height="12" opacity="1" fill="#2563EB" stroke="none"/>
 <rect x="118" y="540" width="31" height="21" opacity="1" fill="#F87171" stroke="none"/>
-<rect x="118" y="529" width="31" height="11" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="118" y="511" width="31" height="18" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="118" y="530" width="31" height="10" opacity="1" fill="#C45050" stroke="none"/>
+<rect x="118" y="511" width="31" height="19" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="152" y="495" width="31" height="66" opacity="1" fill="#4ADE80" stroke="none"/>
 <rect x="152" y="480" width="31" height="15" opacity="1" fill="#3AAF60" stroke="none"/>
 <rect x="152" y="433" width="31" height="47" opacity="1" fill="#4ADE80" stroke="none"/>

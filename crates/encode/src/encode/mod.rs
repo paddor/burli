@@ -1089,7 +1089,7 @@ fn q0_fast_skip_no_last_distance_probe_is_likely_safe(input: &[u8]) -> bool {
 fn q0_medium_minified_js_medium_skip_is_likely_safe(input: &[u8]) -> bool {
     input.len() >= 8 * 1024
         && input.len() <= 16 * 1024
-        && (input.starts_with(b"var ") || input.starts_with(b"/**"))
+        && (input.starts_with(b"var ") || input.starts_with(b"/**") || input.starts_with(b"/*!"))
 }
 
 fn q0_sparse_sample(input: &[u8]) -> Q0SparseSample {
@@ -3600,6 +3600,9 @@ mod tests {
         ));
         assert!(q0_medium_minified_js_medium_skip_is_likely_safe(
             &license_module_12k
+        ));
+        assert!(q0_medium_minified_js_medium_skip_is_likely_safe(
+            &script_4k.repeat(2)[..8 * 1024]
         ));
         assert!(!q0_medium_minified_js_medium_skip_is_likely_safe(
             &script_4k
