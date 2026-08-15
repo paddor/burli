@@ -666,6 +666,14 @@ pub(super) fn collect_with_64k_medium_skip<'a>(
     workspace.collect_with_64k_medium_skip(input, max_backward_distance)
 }
 
+pub(super) fn collect_with_64k_sparse_skip<'a>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &'a mut Workspace,
+) -> &'a Batch {
+    workspace.collect_with_64k_sparse_skip(input, max_backward_distance)
+}
+
 pub(super) fn collect_with_32k_json_skip<'a>(
     input: &[u8],
     max_backward_distance: usize,
@@ -1225,6 +1233,29 @@ impl Workspace {
     }
 
     #[allow(clippy::large_stack_arrays)]
+    fn collect_with_64k_sparse_skip(
+        &mut self,
+        input: &[u8],
+        max_backward_distance: usize,
+    ) -> &Batch {
+        self.reset(input.len());
+
+        if input.len() < INPUT_MARGIN_BYTES {
+            self.push_literals(input, 0, input.len());
+            return &self.batch;
+        }
+
+        let mut table = [0_u32; 1 << 16];
+        collect_with_u32_table_m6::<16, SPARSE_U32_SKIP_START, true, true>(
+            &mut self.batch,
+            input,
+            max_backward_distance,
+            &mut table,
+        );
+        &self.batch
+    }
+
+    #[allow(clippy::large_stack_arrays)]
     fn collect_with_32k_json_skip(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
         self.reset(input.len());
 
@@ -1419,6 +1450,7 @@ const MEDIUM_U16_SKIP_START: usize = 72;
 const FAST_U16_SKIP_START: usize = 96;
 const FASTER_U16_SKIP_START: usize = 128;
 const DEFAULT_U32_SKIP_START: usize = 32;
+const SPARSE_U32_SKIP_START: usize = 40;
 const MEDIUM_U32_SKIP_START: usize = 64;
 const JSON_U32_SKIP_START: usize = 80;
 const FAST_U32_SKIP_START: usize = 96;

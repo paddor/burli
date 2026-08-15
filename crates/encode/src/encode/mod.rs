@@ -552,14 +552,22 @@ impl EncoderPlan {
             }
 
             let has_copy = {
-                let batch = if q1_medium_64k_table_is_likely_safe(input) {
-                    q1::collect_with_64k_table(
+                let batch = match q1_sparse_skip(input) {
+                    Q1SparseSkip::Moderate => q1::collect_with_64k_sparse_skip(
                         input,
                         local_max_backward_distance,
                         &mut workspace.q1,
-                    )
-                } else {
-                    q1::collect(input, local_max_backward_distance, &mut workspace.q1)?
+                    ),
+                    Q1SparseSkip::None if q1_medium_64k_table_is_likely_safe(input) => {
+                        q1::collect_with_64k_table(
+                            input,
+                            local_max_backward_distance,
+                            &mut workspace.q1,
+                        )
+                    }
+                    Q1SparseSkip::None => {
+                        q1::collect(input, local_max_backward_distance, &mut workspace.q1)?
+                    }
                 };
                 batch.has_copy()
             };
@@ -1112,6 +1120,27 @@ fn q0_is_match6(input: &[u8], previous: usize, pos: usize) -> bool {
 
 fn q1_medium_64k_table_is_likely_safe(input: &[u8]) -> bool {
     input.len() >= 64 * 1024 && input.len() <= 320 * 1024
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Q1SparseSkip {
+    None,
+    Moderate,
+}
+
+fn q1_sparse_skip(input: &[u8]) -> Q1SparseSkip {
+    let decision = q0_sparse_incompressible_decision(input);
+    if !decision.store_uncompressed {
+        return Q1SparseSkip::None;
+    }
+    let Some(sample) = decision.sample else {
+        return Q1SparseSkip::None;
+    };
+    if sample.duplicate_6_count > 2 {
+        Q1SparseSkip::Moderate
+    } else {
+        Q1SparseSkip::None
+    }
 }
 
 fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
@@ -3479,6 +3508,17 @@ mod tests {
         assert!(!q0_sparse_incompressible_skip_is_likely_safe(
             &printable_sparse
         ));
+        let sao_like = {
+            let mut input = sparse_binary_fixture(64 * 1024);
+            for offset in (0..input.len().saturating_sub(72)).step_by(4096) {
+                let copy: [u8; 8] = input[offset..offset + 8].try_into().unwrap();
+                input[offset + 64..offset + 72].copy_from_slice(&copy);
+            }
+            input
+        };
+        assert_eq!(q1_sparse_skip(&sparse_binary), Q1SparseSkip::None);
+        assert_eq!(q1_sparse_skip(&sao_like), Q1SparseSkip::Moderate);
+        assert_eq!(q1_sparse_skip(&printable_sparse), Q1SparseSkip::None);
         assert!(q0_fast_skip_is_likely_safe(&css_2k[..2048]));
         assert!(q0_fast_skip_is_likely_safe(&script_2k[..2048]));
         assert!(!q0_fast_skip_is_likely_safe(&script_4k[..4096]));
@@ -3642,6 +3682,19 @@ mod tests {
             compress_with_options(&input, &Options::default().quality(1).unwrap()).unwrap();
 
         assert!(encoded.len() < input.len());
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn q1_sparse_binary_round_trips() {
+        let mut input = sparse_binary_fixture(320 * 1024 + 17);
+        for offset in (0..input.len().saturating_sub(72)).step_by(4096) {
+            let copy: [u8; 8] = input[offset..offset + 8].try_into().unwrap();
+            input[offset + 64..offset + 72].copy_from_slice(&copy);
+        }
+        let encoded =
+            compress_with_options(&input, &Options::default().quality(1).unwrap()).unwrap();
+
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 
