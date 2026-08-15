@@ -268,6 +268,7 @@ fn literal_only(input_len: usize) -> Vec<Token> {
     }]
 }
 
+#[inline(always)]
 fn find_match<
     const BUCKET_BITS: usize,
     const BLOCK_BITS: usize,
@@ -291,10 +292,6 @@ fn find_match<
     let mut best_score = params.min_score;
     let mut best_len = best_check;
     let mut out = None;
-    let dictionary_base = params
-        .input_base
-        .saturating_add(pos)
-        .min(params.max_backward_distance);
 
     for (index, &distance) in dist_cache.iter().enumerate() {
         if distance == 0 || distance > params.max_backward_distance || pos < distance {
@@ -381,6 +378,10 @@ fn find_match<
     if SKIP_DICT_AFTER_MATCH && out.is_some() {
         out
     } else {
+        let dictionary_base = params
+            .input_base
+            .saturating_add(pos)
+            .min(params.max_backward_distance);
         find_static_dictionary_identity(input, pos, max_len, dictionary_base, best_score).or(out)
     }
 }

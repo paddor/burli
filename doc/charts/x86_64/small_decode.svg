@@ -73,16 +73,16 @@ bootstrap-js
 <circle cx="605" cy="115" r="3" opacity="1" fill="#2563EB" stroke="none" stroke-width="1"/>
 <circle cx="686" cy="106" r="3" opacity="1" fill="#2563EB" stroke="none" stroke-width="1"/>
 <circle cx="767" cy="95" r="3" opacity="1" fill="#2563EB" stroke="none" stroke-width="1"/>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,248 200,226 281,208 362,197 443,193 524,188 605,180 686,173 767,168 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,248 200,226 281,208 362,196 443,193 524,187 605,179 686,171 767,167 "/>
 <circle cx="119" cy="248" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="200" cy="226" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="281" cy="208" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="362" cy="197" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="362" cy="196" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="443" cy="193" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="524" cy="188" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="605" cy="180" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="686" cy="173" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="767" cy="168" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="524" cy="187" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="605" cy="179" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="686" cy="171" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="767" cy="167" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <polyline fill="none" opacity="1" stroke="#4ADE80" stroke-width="2" points="119,273 200,262 281,249 362,234 443,222 524,214 605,198 686,188 767,178 "/>
 <circle cx="119" cy="273" r="3" opacity="1" fill="#4ADE80" stroke="none" stroke-width="1"/>
 <circle cx="200" cy="262" r="3" opacity="1" fill="#4ADE80" stroke="none" stroke-width="1"/>
@@ -156,16 +156,16 @@ bootstrap-css
 <circle cx="605" cy="395" r="3" opacity="1" fill="#2563EB" stroke="none" stroke-width="1"/>
 <circle cx="686" cy="384" r="3" opacity="1" fill="#2563EB" stroke="none" stroke-width="1"/>
 <circle cx="767" cy="365" r="3" opacity="1" fill="#2563EB" stroke="none" stroke-width="1"/>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,531 200,516 281,500 362,491 443,479 524,479 605,453 686,437 767,423 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,531 200,516 281,500 362,490 443,480 524,478 605,452 686,435 767,421 "/>
 <circle cx="119" cy="531" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="200" cy="516" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="281" cy="500" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="362" cy="491" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="443" cy="479" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="524" cy="479" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="605" cy="453" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="686" cy="437" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="767" cy="423" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="362" cy="490" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="443" cy="480" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="524" cy="478" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="605" cy="452" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="686" cy="435" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="767" cy="421" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <polyline fill="none" opacity="1" stroke="#4ADE80" stroke-width="2" points="119,547 200,540 281,529 362,518 443,506 524,499 605,482 686,465 767,447 "/>
 <circle cx="119" cy="547" r="3" opacity="1" fill="#4ADE80" stroke="none" stroke-width="1"/>
 <circle cx="200" cy="540" r="3" opacity="1" fill="#4ADE80" stroke="none" stroke-width="1"/>
@@ -247,15 +247,15 @@ json-citm
 <circle cx="605" cy="673" r="3" opacity="1" fill="#2563EB" stroke="none" stroke-width="1"/>
 <circle cx="686" cy="646" r="3" opacity="1" fill="#2563EB" stroke="none" stroke-width="1"/>
 <circle cx="767" cy="635" r="3" opacity="1" fill="#2563EB" stroke="none" stroke-width="1"/>
-<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,817 200,813 281,807 362,794 443,776 524,749 605,716 686,700 767,663 "/>
+<polyline fill="none" opacity="1" stroke="#F87171" stroke-width="2" points="119,817 200,813 281,807 362,793 443,775 524,749 605,717 686,701 767,663 "/>
 <circle cx="119" cy="817" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="200" cy="813" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="281" cy="807" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="362" cy="794" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="443" cy="776" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="362" cy="793" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="443" cy="775" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="524" cy="749" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="605" cy="716" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
-<circle cx="686" cy="700" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="605" cy="717" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
+<circle cx="686" cy="701" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <circle cx="767" cy="663" r="3" opacity="1" fill="#F87171" stroke="none" stroke-width="1"/>
 <polyline fill="none" opacity="1" stroke="#4ADE80" stroke-width="2" points="119,823 200,821 281,818 362,811 443,801 524,787 605,771 686,762 767,746 "/>
 <circle cx="119" cy="823" r="3" opacity="1" fill="#4ADE80" stroke="none" stroke-width="1"/>
