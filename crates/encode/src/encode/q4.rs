@@ -7,7 +7,7 @@ use burli_core::dictionary::{
 
 use super::{
     INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, distance_code, match_len, read_u32_le,
-    read_u64_le, static_dictionary_hash::kStaticDictionaryHash, token_supports_last_distance,
+    read_u64_le, static_dictionary_hash::kStaticDictionaryHash, token_supports_last_distance, tune,
 };
 
 const HASH_TYPE_LEN: usize = 8;
@@ -21,8 +21,6 @@ const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
 const BUCKET_SWEEP: usize = 2;
 const BUCKET_SWEEP_MASK: usize = (BUCKET_SWEEP - 1) << 3;
-const SMALL_MEDIUM_INPUT_THRESHOLD: usize = 320 * 1024;
-const LARGE_INPUT_THRESHOLD: usize = 1 << 20;
 const LONG_MATCH_STORE_THRESHOLD: usize = 64;
 const CUTOFF_TRANSFORMS_COUNT: usize = 10;
 const CUTOFF_TRANSFORMS: u64 = 0x071b_520a_da2d_3200;
@@ -69,11 +67,11 @@ pub(super) fn collect(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
-    if input.len() <= 1024 {
+    if input.len() <= tune::Q4_TINY_INPUT_MAX {
         collect_with_params::<12, 5, true>(input, input_base, max_backward_distance, workspace)
-    } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
+    } else if input.len() <= tune::Q4_SMALL_MEDIUM_INPUT_MAX {
         collect_with_params::<16, 5, true>(input, input_base, max_backward_distance, workspace)
-    } else if input.len() >= LARGE_INPUT_THRESHOLD {
+    } else if input.len() >= tune::Q4_LARGE_INPUT_MIN {
         collect_with_params::<20, 7, true>(input, input_base, max_backward_distance, workspace)
     } else {
         collect_with_params::<17, 5, false>(input, input_base, max_backward_distance, workspace)

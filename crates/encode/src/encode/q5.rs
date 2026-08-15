@@ -7,7 +7,7 @@ use burli_core::dictionary::{
 
 use super::{
     INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, distance_code, match_len, read_u32_le,
-    read_u64_le, static_dictionary_hash::kStaticDictionaryHash, token_supports_last_distance,
+    read_u64_le, static_dictionary_hash::kStaticDictionaryHash, token_supports_last_distance, tune,
 };
 
 const HASH_MUL: u64 = 0x1e35_a7bd_1e35_a7bd;
@@ -19,8 +19,6 @@ const SCORE_BASE: usize = DISTANCE_BIT_PENALTY * 8 * core::mem::size_of::<usize>
 const MIN_SCORE: usize = SCORE_BASE + 100;
 const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
-const SMALL_MEDIUM_INPUT_THRESHOLD: usize = 320 * 1024;
-const LARGE_INPUT_THRESHOLD: usize = 1 << 20;
 const CUTOFF_TRANSFORMS_COUNT: usize = 10;
 const CUTOFF_TRANSFORMS: u64 = 0x071b_520a_da2d_3200;
 
@@ -65,35 +63,35 @@ pub(super) fn collect(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
-    if input.len() <= 1024 {
+    if input.len() <= tune::Q5_TINY_INPUT_MAX {
         collect_with_params::<8, 4, 4, 4, false, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
         )
-    } else if input.len() <= 96 * 1024 {
+    } else if input.len() <= tune::Q5_SMALL_INPUT_MAX {
         collect_with_params::<13, 3, 4, 4, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
         )
-    } else if input.len() <= 160 * 1024 {
+    } else if input.len() <= tune::Q5_MEDIUM_INPUT_MAX {
         collect_with_params::<15, 3, 4, 4, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
         )
-    } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
+    } else if input.len() <= tune::Q5_SMALL_MEDIUM_INPUT_MAX {
         collect_with_params::<13, 3, 4, 4, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
         )
-    } else if input.len() >= LARGE_INPUT_THRESHOLD {
+    } else if input.len() >= tune::Q5_LARGE_INPUT_MIN {
         collect_with_params::<15, 4, 5, 8, true, 1>(
             input,
             input_base,
@@ -102,57 +100,6 @@ pub(super) fn collect(
         )
     } else {
         collect_with_params::<14, 3, 4, 4, false, 1>(
-            input,
-            input_base,
-            max_backward_distance,
-            workspace,
-        )
-    }
-}
-
-pub(super) fn collect_sparse(
-    input: &[u8],
-    input_base: usize,
-    max_backward_distance: usize,
-    workspace: &mut Workspace,
-) -> Vec<Token> {
-    if input.len() <= 1024 {
-        collect_with_params::<8, 4, 4, 4, false, 4>(
-            input,
-            input_base,
-            max_backward_distance,
-            workspace,
-        )
-    } else if input.len() <= 96 * 1024 {
-        collect_with_params::<13, 3, 4, 4, true, 4>(
-            input,
-            input_base,
-            max_backward_distance,
-            workspace,
-        )
-    } else if input.len() <= 160 * 1024 {
-        collect_with_params::<15, 3, 4, 4, true, 4>(
-            input,
-            input_base,
-            max_backward_distance,
-            workspace,
-        )
-    } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
-        collect_with_params::<13, 3, 4, 4, true, 4>(
-            input,
-            input_base,
-            max_backward_distance,
-            workspace,
-        )
-    } else if input.len() >= LARGE_INPUT_THRESHOLD {
-        collect_with_params::<15, 4, 5, 8, true, 4>(
-            input,
-            input_base,
-            max_backward_distance,
-            workspace,
-        )
-    } else {
-        collect_with_params::<14, 3, 4, 4, false, 4>(
             input,
             input_base,
             max_backward_distance,

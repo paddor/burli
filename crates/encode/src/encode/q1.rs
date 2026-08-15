@@ -7,7 +7,8 @@ use burli_core::{
 
 use super::{
     COMMAND_ALPHABET_SIZE, DenseSymbolCode, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE,
-    PrefixCodeScratch, append_pending_bits, match_len, read_u64_le, write_block_and_context_header,
+    PrefixCodeScratch, append_pending_bits, match_len, read_u64_le, tune,
+    write_block_and_context_header,
     write_fast_dense_prefix_code_array_from_frequencies_with_scratch, write_meta_block_len,
     write_q1_internal_balanced_command_static_distance_prefix_codes,
     write_q1_internal_command_prefix_codes, write_q1_internal_fast_command_prefix_codes,
@@ -968,7 +969,7 @@ impl Workspace {
         }
 
         let table_size = table_size(input.len());
-        if self.collect_stack_u16_for_size::<DEFAULT_U16_SKIP_START>(
+        if self.collect_stack_u16_for_size::<{ tune::Q1_DEFAULT_U16_SKIP_START }>(
             input,
             max_backward_distance,
             table_size,
@@ -1002,7 +1003,7 @@ impl Workspace {
         let min_match = if table_bits <= 15 { 4 } else { 6 };
         match table_bits {
             16 => {
-                collect_with_u32_table_m6::<16, DEFAULT_U32_SKIP_START, true, true>(
+                collect_with_u32_table_m6::<16, { tune::Q1_DEFAULT_U32_SKIP_START }, true, true>(
                     &mut self.batch,
                     input,
                     max_backward_distance,
@@ -1011,7 +1012,7 @@ impl Workspace {
                 return Ok(&self.batch);
             }
             17 => {
-                collect_with_u32_table_m6::<17, DEFAULT_U32_SKIP_START, true, true>(
+                collect_with_u32_table_m6::<17, { tune::Q1_DEFAULT_U32_SKIP_START }, true, true>(
                     &mut self.batch,
                     input,
                     max_backward_distance,
@@ -1106,7 +1107,7 @@ impl Workspace {
 
     fn collect_q0_2k_fast_no_last(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
         self.reset(input.len());
-        collect_with_stack_u16_table::<11, 2048, DEFAULT_U16_SKIP_START, false>(
+        collect_with_stack_u16_table::<11, 2048, { tune::Q1_DEFAULT_U16_SKIP_START }, false>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1116,7 +1117,7 @@ impl Workspace {
 
     fn collect_q0_4k_no_last(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
         self.reset(input.len());
-        collect_with_stack_u16_table::<12, 4096, DEFAULT_U16_SKIP_START, false>(
+        collect_with_stack_u16_table::<12, 4096, { tune::Q1_DEFAULT_U16_SKIP_START }, false>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1126,7 +1127,7 @@ impl Workspace {
 
     fn collect_q0_8k_default(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
         self.reset(input.len());
-        collect_with_stack_u16_table::<13, 8192, DEFAULT_U16_SKIP_START, true>(
+        collect_with_stack_u16_table::<13, 8192, { tune::Q1_DEFAULT_U16_SKIP_START }, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1140,7 +1141,7 @@ impl Workspace {
         max_backward_distance: usize,
     ) -> &Batch {
         self.reset(input.len());
-        collect_with_stack_u16_table::<14, 16384, MEDIUM_U16_SKIP_START, false>(
+        collect_with_stack_u16_table::<14, 16384, { tune::Q1_MEDIUM_U16_SKIP_START }, false>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1150,7 +1151,7 @@ impl Workspace {
 
     fn collect_q0_32k_medium(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
         self.reset(input.len());
-        collect_with_stack_u16_table::<15, 32768, MEDIUM_U16_SKIP_START, true>(
+        collect_with_stack_u16_table::<15, 32768, { tune::Q1_MEDIUM_U16_SKIP_START }, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1224,7 +1225,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 16];
-        collect_with_u32_table_m6::<16, MEDIUM_U32_SKIP_START, true, true>(
+        collect_with_u32_table_m6::<16, { tune::Q1_MEDIUM_U32_SKIP_START }, true, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1243,7 +1244,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 16];
-        collect_with_u32_table_m6::<16, FAST_U32_SKIP_START, false, true>(
+        collect_with_u32_table_m6::<16, { tune::Q1_FAST_U32_SKIP_START }, false, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1289,7 +1290,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 15];
-        collect_with_u32_table_m6::<15, DENSE_U32_SKIP_START, true, false>(
+        collect_with_u32_table_m6::<15, { tune::Q1_DENSE_U32_SKIP_START }, true, false>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1307,7 +1308,7 @@ impl Workspace {
             return &self.batch;
         }
 
-        collect_with_stack_u16_table::<15, 32768, FASTER_U16_SKIP_START, true>(
+        collect_with_stack_u16_table::<15, 32768, { tune::Q1_FASTER_U16_SKIP_START }, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1329,7 +1330,7 @@ impl Workspace {
         }
 
         let mut table = [0_u32; 1 << 15];
-        collect_with_u32_table_m6::<15, FASTER_U32_SKIP_START, false, true>(
+        collect_with_u32_table_m6::<15, { tune::Q1_FASTER_U32_SKIP_START }, false, true>(
             &mut self.batch,
             input,
             max_backward_distance,
@@ -1447,7 +1448,7 @@ fn collect_with_u16_table(
             let table: &mut [u16; 16384] = table
                 .try_into()
                 .map_err(|_| BurliError::Format("invalid Brotli q1 table size"))?;
-            collect_with_u16_table_m4::<14, 16384, DEFAULT_U16_SKIP_START, true>(
+            collect_with_u16_table_m4::<14, 16384, { tune::Q1_DEFAULT_U16_SKIP_START }, true>(
                 batch,
                 input,
                 max_backward_distance,
@@ -1459,7 +1460,7 @@ fn collect_with_u16_table(
             let table: &mut [u16; 32768] = table
                 .try_into()
                 .map_err(|_| BurliError::Format("invalid Brotli q1 table size"))?;
-            collect_with_u16_table_m4::<15, 32768, DEFAULT_U16_SKIP_START, true>(
+            collect_with_u16_table_m4::<15, 32768, { tune::Q1_DEFAULT_U16_SKIP_START }, true>(
                 batch,
                 input,
                 max_backward_distance,
@@ -1470,15 +1471,6 @@ fn collect_with_u16_table(
         _ => Err(BurliError::Format("invalid Brotli q1 table size")),
     }
 }
-
-const DEFAULT_U16_SKIP_START: usize = 61;
-const MEDIUM_U16_SKIP_START: usize = 72;
-const FASTER_U16_SKIP_START: usize = 128;
-const DEFAULT_U32_SKIP_START: usize = 32;
-const MEDIUM_U32_SKIP_START: usize = 64;
-const DENSE_U32_SKIP_START: usize = 80;
-const FAST_U32_SKIP_START: usize = 96;
-const FASTER_U32_SKIP_START: usize = 128;
 
 #[allow(clippy::large_stack_arrays)]
 #[inline(never)]

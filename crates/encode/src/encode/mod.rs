@@ -15,6 +15,7 @@ mod q4;
 mod q5;
 mod sparse;
 mod static_dictionary_hash;
+mod tune;
 
 const MAX_LITERAL_ONLY_QUALITY: u8 = 5;
 const MAX_META_BLOCK_SIZE: usize = 1 << 24;
@@ -27,22 +28,6 @@ const FAST_CODE_BITS: u8 = 14;
 const CODE_LENGTH_ORDER: [u8; 18] = [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const MAX_SIMPLE_PREFIX_SYMBOLS: usize = 4;
 const INITIAL_LAST_DISTANCE: usize = 4;
-const MAX_DELAYED_SYMBOLS: usize = 0x2fff;
-const Q1_DELAYED_SYMBOLS: usize = 0x9fff;
-const Q4_DELAYED_SYMBOLS: usize = 3840;
-const Q5_DELAYED_SYMBOLS: usize = 3584;
-const Q0_DIRECT_MAX_INPUT: usize = 384;
-const Q0_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
-const Q1_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
-const Q2_STATIC_NO_DICTIONARY_MAX_INPUT: usize = 4 * 1024;
-const Q2_MEDIUM_H3_MIN_INPUT: usize = 8 * 1024;
-const Q2_MEDIUM_H3_MAX_INPUT: usize = 128 * 1024;
-const Q2_FAST_H3_MAX_INPUT: usize = 16 * 1024;
-const Q2_SWEEP1_H3_MAX_INPUT: usize = 128 * 1024;
-const Q3_FAST_SWEEP_MAX_INPUT: usize = 16 * 1024;
-const Q3_MEDIUM_SWEEP1_MIN_INPUT: usize = 144 * 1024;
-const Q3_MEDIUM_SWEEP1_MAX_INPUT: usize = 160 * 1024;
-const Q4_TINY_CONTEXT_MAX_INPUT: usize = 768;
 const STATIC_CODE_LENGTH_DEPTH: [u8; CODE_LENGTH_ALPHABET_SIZE] =
     [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 0, 4, 4];
 const STATIC_CODE_LENGTH_BITS: [u16; CODE_LENGTH_ALPHABET_SIZE] =
@@ -342,7 +327,9 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::FastOnePass {
-            if input.len() <= Q0_STATIC_ENTROPY_MAX_INPUT && input.len() > Q0_DIRECT_MAX_INPUT {
+            if input.len() <= tune::Q0_STATIC_ENTROPY_MAX_INPUT
+                && input.len() > tune::Q0_DIRECT_MAX_INPUT
+            {
                 let tokens = q2::collect_without_dictionary_no_lazy(
                     input,
                     local_max_backward_distance,
@@ -358,11 +345,11 @@ impl EncoderPlan {
                     writer,
                     input,
                     &tokens,
-                    MAX_DELAYED_SYMBOLS,
+                    tune::MAX_DELAYED_SYMBOLS,
                 );
             }
 
-            if input.len() > Q0_DIRECT_MAX_INPUT {
+            if input.len() > tune::Q0_DIRECT_MAX_INPUT {
                 let sparse_decision = sparse::decision(input);
                 if sparse_decision.store_uncompressed {
                     if sparse::q0_store_block(input_base, allow_cross_collector_shortcuts) {
@@ -379,12 +366,12 @@ impl EncoderPlan {
                     if !has_copy {
                         return write_compressed_literal_meta_block(writer, input);
                     }
-                    return q1::write(
+                    return q0_write_collected(
                         writer,
                         input,
-                        input.len(),
                         &mut workspace.q1,
                         self.q1_fast_literal_prefix,
+                        q0_write_route(input.len(), sparse_decision.sample),
                     );
                 }
 
@@ -400,52 +387,13 @@ impl EncoderPlan {
                 if !has_copy {
                     return write_compressed_literal_meta_block(writer, input);
                 }
-                match q0_write_route(input.len(), sparse_decision.sample) {
-                    Q0WriteRoute::Standard => {
-                        return q1::write_q0(
-                            writer,
-                            input,
-                            input.len(),
-                            &mut workspace.q1,
-                            self.q1_fast_literal_prefix,
-                        );
-                    }
-                    Q0WriteRoute::BalancedCommand => {
-                        return q1::write_q0_balanced_command_prefixes(
-                            writer,
-                            input,
-                            input.len(),
-                            &mut workspace.q1,
-                            self.q1_fast_literal_prefix,
-                        );
-                    }
-                    Q0WriteRoute::FastCommand => {
-                        return q1::write_q0_fast_command_prefixes(
-                            writer,
-                            input,
-                            input.len(),
-                            &mut workspace.q1,
-                            self.q1_fast_literal_prefix,
-                        );
-                    }
-                    Q0WriteRoute::BalancedLiteralCommand => {
-                        return q1::write_q0_balanced_literal_command_prefixes(
-                            writer,
-                            input,
-                            input.len(),
-                            &mut workspace.q1,
-                        );
-                    }
-                    Q0WriteRoute::PackedLiteralBody => {
-                        return q1::write_q0_packed_literal_body(
-                            writer,
-                            input,
-                            input.len(),
-                            &mut workspace.q1,
-                            self.q1_fast_literal_prefix,
-                        );
-                    }
-                }
+                return q0_write_collected(
+                    writer,
+                    input,
+                    &mut workspace.q1,
+                    self.q1_fast_literal_prefix,
+                    q0_write_route(input.len(), sparse_decision.sample),
+                );
             }
 
             let has_copy = {
@@ -470,7 +418,7 @@ impl EncoderPlan {
         }
 
         if self.path == EncoderPath::FastTwoPass {
-            if input.len() <= Q1_STATIC_ENTROPY_MAX_INPUT {
+            if input.len() <= tune::Q1_STATIC_ENTROPY_MAX_INPUT {
                 let tokens = q2::collect_without_dictionary_no_lazy(
                     input,
                     local_max_backward_distance,
@@ -483,13 +431,13 @@ impl EncoderPlan {
                     writer,
                     input,
                     &tokens,
-                    Q1_DELAYED_SYMBOLS,
+                    tune::Q1_DELAYED_SYMBOLS,
                     &mut workspace.token_prefix,
                 );
             }
 
             if !allow_cross_collector_shortcuts {
-                if input.len() > 128 * 1024 {
+                if input.len() >= tune::Q1_LONG_INPUT_MIN {
                     let has_copy = {
                         let batch =
                             q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
@@ -550,12 +498,12 @@ impl EncoderPlan {
                     writer,
                     input,
                     &tokens,
-                    Q1_DELAYED_SYMBOLS,
+                    tune::Q1_DELAYED_SYMBOLS,
                 );
             }
 
             let has_copy = {
-                let batch = if input.len() > 128 * 1024 {
+                let batch = if input.len() >= tune::Q1_LONG_INPUT_MIN {
                     q1::collect_with_64k_medium_skip(
                         input,
                         local_max_backward_distance,
@@ -580,15 +528,16 @@ impl EncoderPlan {
 
         if self.path == EncoderPath::StaticEntropy {
             if allow_cross_collector_shortcuts
-                && (Q2_MEDIUM_H3_MIN_INPUT..=Q2_MEDIUM_H3_MAX_INPUT).contains(&input.len())
+                && (tune::Q2_MEDIUM_H3_MIN_INPUT..=tune::Q2_MEDIUM_H3_MAX_INPUT)
+                    .contains(&input.len())
             {
-                let tokens = if input.len() <= Q2_FAST_H3_MAX_INPUT {
+                let tokens = if input.len() <= tune::Q2_FAST_H3_MAX_INPUT {
                     q3::collect_fast_sweep_no_lazy(
                         input,
                         local_max_backward_distance,
                         &mut workspace.q3,
                     )
-                } else if input.len() <= Q2_SWEEP1_H3_MAX_INPUT {
+                } else if input.len() <= tune::Q2_SWEEP1_H3_MAX_INPUT {
                     q3::collect_fast_sweep(input, local_max_backward_distance, &mut workspace.q3)
                 } else {
                     q3::collect(input, local_max_backward_distance, &mut workspace.q3)
@@ -600,11 +549,11 @@ impl EncoderPlan {
                     writer,
                     input,
                     &tokens,
-                    MAX_DELAYED_SYMBOLS,
+                    tune::MAX_DELAYED_SYMBOLS,
                 );
             }
 
-            let tokens = if input.len() < Q2_STATIC_NO_DICTIONARY_MAX_INPUT {
+            let tokens = if input.len() < tune::Q2_STATIC_NO_DICTIONARY_MAX_INPUT {
                 q2::collect_without_dictionary(
                     input,
                     local_max_backward_distance,
@@ -625,14 +574,15 @@ impl EncoderPlan {
                 writer,
                 input,
                 &tokens,
-                MAX_DELAYED_SYMBOLS,
+                tune::MAX_DELAYED_SYMBOLS,
             );
         }
 
         if self.path == EncoderPath::RegularNoSplit {
-            let use_medium_sweep1 =
-                (Q3_MEDIUM_SWEEP1_MIN_INPUT..=Q3_MEDIUM_SWEEP1_MAX_INPUT).contains(&input.len());
-            let tokens = if input.len() <= Q3_FAST_SWEEP_MAX_INPUT || use_medium_sweep1 {
+            let use_medium_sweep1 = (tune::Q3_MEDIUM_SWEEP1_MIN_INPUT
+                ..=tune::Q3_MEDIUM_SWEEP1_MAX_INPUT)
+                .contains(&input.len());
+            let tokens = if input.len() <= tune::Q3_FAST_SWEEP_MAX_INPUT || use_medium_sweep1 {
                 q3::collect_fast_sweep(input, local_max_backward_distance, &mut workspace.q3)
             } else {
                 q3::collect(input, local_max_backward_distance, &mut workspace.q3)
@@ -644,12 +594,12 @@ impl EncoderPlan {
                 writer,
                 input,
                 &tokens,
-                MAX_DELAYED_SYMBOLS,
+                tune::MAX_DELAYED_SYMBOLS,
             );
         }
 
         if self.path == EncoderPath::RegularSplit {
-            if allow_cross_collector_shortcuts && input.len() <= Q4_TINY_CONTEXT_MAX_INPUT {
+            if allow_cross_collector_shortcuts && input.len() <= tune::Q4_TINY_CONTEXT_MAX_INPUT {
                 let tokens = q5::collect(
                     input,
                     input_base,
@@ -663,7 +613,7 @@ impl EncoderPlan {
                     writer,
                     input,
                     &tokens,
-                    Q5_DELAYED_SYMBOLS,
+                    tune::Q5_DELAYED_SYMBOLS,
                 );
             }
             let tokens = q4::collect(
@@ -679,7 +629,7 @@ impl EncoderPlan {
                 writer,
                 input,
                 &tokens,
-                Q4_DELAYED_SYMBOLS,
+                tune::Q4_DELAYED_SYMBOLS,
             );
         }
 
@@ -697,7 +647,7 @@ impl EncoderPlan {
                 writer,
                 input,
                 &tokens,
-                Q5_DELAYED_SYMBOLS,
+                tune::Q5_DELAYED_SYMBOLS,
             );
         }
 
@@ -708,12 +658,13 @@ impl EncoderPlan {
         self,
         writer: &mut BitWriter,
         input: &[u8],
-        input_base: usize,
+        _input_base: usize,
         local_max_backward_distance: usize,
-        global_max_backward_distance: usize,
+        _global_max_backward_distance: usize,
         workspace: &mut Workspace,
     ) -> Result<bool, CompressError> {
-        if !sparse::should_accelerate(input) {
+        let sparse_decision = sparse::decision(input);
+        if !sparse_decision.store_uncompressed {
             return Ok(false);
         }
 
@@ -740,15 +691,28 @@ impl EncoderPlan {
                 )?;
             }
             EncoderPath::StaticEntropy => {
-                let tokens = sparse::collect_tokens(input, local_max_backward_distance, 64);
+                let tokens = sparse::collect_tokens(
+                    input,
+                    local_max_backward_distance,
+                    tune::Q2_LOW_COMPRESS_SPARSE_STRIDE,
+                );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
                     return Ok(true);
                 }
-                write_token_batches_with_symbol_limit(writer, input, &tokens, MAX_DELAYED_SYMBOLS)?;
+                write_token_batches_with_symbol_limit(
+                    writer,
+                    input,
+                    &tokens,
+                    tune::MAX_DELAYED_SYMBOLS,
+                )?;
             }
             EncoderPath::RegularNoSplit => {
-                let tokens = sparse::collect_tokens(input, local_max_backward_distance, 32);
+                let tokens = sparse::collect_tokens(
+                    input,
+                    local_max_backward_distance,
+                    tune::Q3_LOW_COMPRESS_SPARSE_STRIDE,
+                );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
                     return Ok(true);
@@ -757,11 +721,42 @@ impl EncoderPlan {
                     writer,
                     input,
                     &tokens,
-                    MAX_DELAYED_SYMBOLS,
+                    tune::MAX_DELAYED_SYMBOLS,
                 )?;
             }
             EncoderPath::RegularSplit => {
-                let tokens = sparse::collect_tokens(input, local_max_backward_distance, 16);
+                if q4_low_compress_split_sample(sparse_decision.sample) {
+                    write_split_q4_sparse_binary_meta_blocks(
+                        writer,
+                        input,
+                        local_max_backward_distance,
+                        tune::Q4_LOW_COMPRESS_BLOCK_SIZE,
+                        tune::Q4_LOW_COMPRESS_STORE_BLOCKS,
+                    )?;
+                } else {
+                    let tokens = sparse::collect_tokens(
+                        input,
+                        local_max_backward_distance,
+                        tune::Q4_LOW_COMPRESS_SPARSE_STRIDE,
+                    );
+                    if !tokens.iter().any(|token| token.is_copy()) {
+                        write_compressed_literal_meta_block(writer, input)?;
+                        return Ok(true);
+                    }
+                    write_regular_token_batches_with_symbol_limit(
+                        writer,
+                        input,
+                        &tokens,
+                        tune::Q4_DELAYED_SYMBOLS,
+                    )?;
+                }
+            }
+            EncoderPath::ContextModeled => {
+                let tokens = sparse::collect_tokens(
+                    input,
+                    local_max_backward_distance,
+                    tune::Q5_LOW_COMPRESS_SPARSE_STRIDE,
+                );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
                     return Ok(true);
@@ -770,17 +765,7 @@ impl EncoderPlan {
                     writer,
                     input,
                     &tokens,
-                    Q4_DELAYED_SYMBOLS,
-                )?;
-            }
-            EncoderPath::ContextModeled => {
-                write_mixed_q5_sparse_binary_meta_blocks(
-                    writer,
-                    input,
-                    input_base,
-                    local_max_backward_distance,
-                    global_max_backward_distance,
-                    workspace,
+                    tune::Q5_DELAYED_SYMBOLS,
                 )?;
             }
             EncoderPath::FastOnePass => unreachable!("q0 sparse path is handled separately"),
@@ -789,41 +774,36 @@ impl EncoderPlan {
     }
 }
 
-fn write_mixed_q5_sparse_binary_meta_blocks(
+fn write_split_q4_sparse_binary_meta_blocks(
     writer: &mut BitWriter,
     input: &[u8],
-    input_base: usize,
     local_max_backward_distance: usize,
-    global_max_backward_distance: usize,
-    workspace: &mut Workspace,
+    block_size: usize,
+    store_blocks: u16,
 ) -> Result<(), CompressError> {
-    const BLOCK_SIZE: usize = 256 * 1024;
-    let normal_prefix_len = input.len() * 7 / 10;
+    debug_assert!(block_size != 0);
+    for (block_index, chunk) in input.chunks(block_size).enumerate() {
+        let block_in_group = block_index & tune::Q4_LOW_COMPRESS_STORE_BLOCK_MASK;
+        if (store_blocks & (1 << block_in_group)) != 0 {
+            crate::metablock::write_uncompressed_meta_block(writer, chunk)?;
+            continue;
+        }
 
-    let mut offset = 0_usize;
-    for chunk in input.chunks(BLOCK_SIZE) {
-        let use_sparse_tokens = offset >= normal_prefix_len;
-        let tokens = if use_sparse_tokens {
-            sparse::collect_tokens(chunk, local_max_backward_distance.min(chunk.len()), 1)
-        } else {
-            q5::collect_sparse(
-                chunk,
-                input_base + offset,
-                global_max_backward_distance,
-                &mut workspace.q5,
-            )
-        };
+        let tokens = sparse::collect_tokens(
+            chunk,
+            local_max_backward_distance.min(chunk.len()),
+            tune::Q4_LOW_COMPRESS_SPARSE_STRIDE,
+        );
         if !tokens.iter().any(|token| token.is_copy()) {
             write_compressed_literal_meta_block(writer, chunk)?;
-        } else {
-            write_regular_token_batches_with_symbol_limit(
-                writer,
-                chunk,
-                &tokens,
-                Q5_DELAYED_SYMBOLS,
-            )?;
+            continue;
         }
-        offset += chunk.len();
+        write_regular_token_batches_with_symbol_limit(
+            writer,
+            chunk,
+            &tokens,
+            tune::Q4_DELAYED_SYMBOLS,
+        )?;
     }
     Ok(())
 }
@@ -1132,37 +1112,60 @@ enum Q0WriteRoute {
 
 fn q0_collect_route(input_len: usize, sample: Option<sparse::Sample>) -> Q0CollectRoute {
     match input_len {
-        0..=2048 => Q0CollectRoute::FastNoLastDistance,
-        2049..=4096 => Q0CollectRoute::NoLastDistance,
-        4097..=8192 => Q0CollectRoute::DefaultSkip,
-        8193..=16_384 => Q0CollectRoute::MediumNoLastDistance,
-        16_385..=32_768 => Q0CollectRoute::MediumSkip,
-        32_769..=65_536 if q0_dense_sample(sample) => Q0CollectRoute::K32U16Skip,
-        65_537..=131_072 if q0_dense_sample(sample) => Q0CollectRoute::K32DenseSkip,
-        32_769..=131_072 if q0_low_dup_sample(sample) => Q0CollectRoute::K64MediumSkip,
-        32_769..=131_072 => Q0CollectRoute::K64FastSkip,
-        1_048_577.. => Q0CollectRoute::K64MediumSkip,
+        0..=tune::Q0_COLLECT_FAST_NO_LAST_MAX_INPUT => Q0CollectRoute::FastNoLastDistance,
+        _ if input_len <= tune::Q0_COLLECT_NO_LAST_MAX_INPUT => Q0CollectRoute::NoLastDistance,
+        _ if input_len <= tune::Q0_COLLECT_DEFAULT_MAX_INPUT => Q0CollectRoute::DefaultSkip,
+        _ if input_len <= tune::Q0_COLLECT_MEDIUM_NO_LAST_MAX_INPUT => {
+            Q0CollectRoute::MediumNoLastDistance
+        }
+        _ if input_len <= tune::Q0_COLLECT_MEDIUM_MAX_INPUT => Q0CollectRoute::MediumSkip,
+        _ if input_len <= 64 * 1024 && q0_dense_sample(sample) => Q0CollectRoute::K32U16Skip,
+        _ if input_len <= tune::Q0_COLLECT_SAMPLED_MAX_INPUT && q0_dense_sample(sample) => {
+            Q0CollectRoute::K32DenseSkip
+        }
+        _ if input_len <= tune::Q0_COLLECT_SAMPLED_MAX_INPUT && q0_low_dup_sample(sample) => {
+            Q0CollectRoute::K64MediumSkip
+        }
+        _ if input_len <= tune::Q0_COLLECT_SAMPLED_MAX_INPUT => Q0CollectRoute::K64FastSkip,
+        tune::Q0_COLLECT_HUGE_MIN_INPUT.. => Q0CollectRoute::K64MediumSkip,
         _ => Q0CollectRoute::K32FasterSkip,
     }
 }
 
 fn q0_write_route(input_len: usize, sample: Option<sparse::Sample>) -> Q0WriteRoute {
     match input_len {
-        1025..=2048 => Q0WriteRoute::BalancedLiteralCommand,
-        2049..=8192 => Q0WriteRoute::PackedLiteralBody,
-        8193..=16_384 => Q0WriteRoute::FastCommand,
-        32_769..=131_072 if q0_dense_sample(sample) => Q0WriteRoute::PackedLiteralBody,
-        131_073.. if !q0_dense_sample(sample) => Q0WriteRoute::BalancedCommand,
+        _ if input_len > tune::Q0_STATIC_ENTROPY_MAX_INPUT
+            && input_len <= tune::Q0_WRITE_BALANCED_LITERAL_MAX_INPUT =>
+        {
+            Q0WriteRoute::BalancedLiteralCommand
+        }
+        _ if input_len <= tune::Q0_WRITE_PACKED_LITERAL_MAX_INPUT => {
+            Q0WriteRoute::PackedLiteralBody
+        }
+        _ if input_len <= tune::Q0_WRITE_FAST_COMMAND_MAX_INPUT => Q0WriteRoute::FastCommand,
+        _ if input_len > tune::Q0_COLLECT_MEDIUM_MAX_INPUT
+            && input_len <= tune::Q0_WRITE_SAMPLED_MAX_INPUT
+            && q0_dense_sample(sample) =>
+        {
+            Q0WriteRoute::PackedLiteralBody
+        }
+        _ if input_len > tune::Q0_WRITE_SAMPLED_MAX_INPUT && !q0_dense_sample(sample) => {
+            Q0WriteRoute::BalancedCommand
+        }
         _ => Q0WriteRoute::Standard,
     }
 }
 
 fn q0_dense_sample(sample: Option<sparse::Sample>) -> bool {
-    sample.is_some_and(|sample| sample.duplicate_6_count >= 512)
+    sample.is_some_and(|sample| sample.duplicate_6_count >= tune::Q0_DENSE_DUP6_MIN)
 }
 
 fn q0_low_dup_sample(sample: Option<sparse::Sample>) -> bool {
-    sample.is_some_and(|sample| sample.duplicate_6_count < 200)
+    sample.is_some_and(|sample| sample.duplicate_6_count <= tune::Q0_LOW_DUP6_MAX)
+}
+
+fn q4_low_compress_split_sample(sample: Option<sparse::Sample>) -> bool {
+    sample.is_some_and(|sample| sample.duplicate_6_count >= tune::Q4_LOW_COMPRESS_SPLIT_DUP6_MIN)
 }
 
 fn q0_collect_by_size<'a>(
@@ -1205,18 +1208,56 @@ fn q0_collect_by_size<'a>(
     }
 }
 
+fn q0_write_collected(
+    writer: &mut BitWriter,
+    input: &[u8],
+    workspace: &mut q1::Workspace,
+    fast_literal_prefix: bool,
+    route: Q0WriteRoute,
+) -> Result<(), CompressError> {
+    match route {
+        Q0WriteRoute::Standard => {
+            q1::write_q0(writer, input, input.len(), workspace, fast_literal_prefix)
+        }
+        Q0WriteRoute::BalancedCommand => q1::write_q0_balanced_command_prefixes(
+            writer,
+            input,
+            input.len(),
+            workspace,
+            fast_literal_prefix,
+        ),
+        Q0WriteRoute::FastCommand => q1::write_q0_fast_command_prefixes(
+            writer,
+            input,
+            input.len(),
+            workspace,
+            fast_literal_prefix,
+        ),
+        Q0WriteRoute::BalancedLiteralCommand => {
+            q1::write_q0_balanced_literal_command_prefixes(writer, input, input.len(), workspace)
+        }
+        Q0WriteRoute::PackedLiteralBody => q1::write_q0_packed_literal_body(
+            writer,
+            input,
+            input.len(),
+            workspace,
+            fast_literal_prefix,
+        ),
+    }
+}
+
 fn q1_large_markup_lazy_is_likely_safe(input: &[u8]) -> bool {
     let mut lt_count = 0_usize;
     let mut gt_count = 0_usize;
-    for &byte in input.iter().take(1024) {
+    for &byte in input.iter().take(tune::Q1_LARGE_MARKUP_SAMPLE_BYTES) {
         lt_count += usize::from(byte == b'<');
         gt_count += usize::from(byte == b'>');
     }
-    lt_count >= 8 && gt_count >= 8
+    lt_count >= tune::Q1_LARGE_MARKUP_MIN_LT && gt_count >= tune::Q1_LARGE_MARKUP_MIN_GT
 }
 
 fn q1_no_cross_one_lazy_is_likely_safe(input: &[u8]) -> bool {
-    let sample = &input[..input.len().min(64 * 1024)];
+    let sample = &input[..input.len().min(tune::Q1_CONTENT_SAMPLE_BYTES)];
     if sample.is_empty() {
         return false;
     }
@@ -1236,14 +1277,16 @@ fn q1_no_cross_one_lazy_is_likely_safe(input: &[u8]) -> bool {
     }
 
     let len = sample.len();
-    let tabular_text =
-        ascii_printable * 100 >= len * 98 && whitespace * 100 >= len * 40 && alpha * 100 < len * 20;
-    let zero_high_mixed = zero * 100 >= len * 25 && high * 100 >= len * 2;
+    let tabular_text = ascii_printable * 100 >= len * tune::Q1_TABULAR_PRINTABLE_PCT
+        && whitespace * 100 >= len * tune::Q1_TABULAR_WHITESPACE_PCT
+        && alpha * 100 < len * tune::Q1_TABULAR_ALPHA_MAX_PCT;
+    let zero_high_mixed = zero * 100 >= len * tune::Q1_ZERO_HIGH_ZERO_PCT
+        && high * 100 >= len * tune::Q1_ZERO_HIGH_HIGH_PCT;
     tabular_text || zero_high_mixed
 }
 
 fn q1_no_cross_sparse_tail_no_last_is_likely_safe(input: &[u8]) -> bool {
-    let sample = &input[..input.len().min(64 * 1024)];
+    let sample = &input[..input.len().min(tune::Q1_CONTENT_SAMPLE_BYTES)];
     if sample.is_empty() {
         return false;
     }
@@ -1256,11 +1299,12 @@ fn q1_no_cross_sparse_tail_no_last_is_likely_safe(input: &[u8]) -> bool {
     }
 
     let len = sample.len();
-    zero * 100 >= len * 25 && high * 100 < len * 2
+    zero * 100 >= len * tune::Q1_ZERO_HIGH_ZERO_PCT
+        && high * 100 < len * tune::Q1_ZERO_HIGH_HIGH_PCT
 }
 
 fn q1_no_cross_fast_writer_is_likely_safe(input: &[u8]) -> bool {
-    let sample = &input[..input.len().min(64 * 1024)];
+    let sample = &input[..input.len().min(tune::Q1_CONTENT_SAMPLE_BYTES)];
     if sample.is_empty() {
         return false;
     }
@@ -1282,17 +1326,19 @@ fn q1_no_cross_fast_writer_is_likely_safe(input: &[u8]) -> bool {
     }
 
     let len = sample.len();
-    if zero * 100 >= len * 25 {
+    if zero * 100 >= len * tune::Q1_ZERO_HIGH_ZERO_PCT {
         return false;
     }
-    if ascii_printable * 100 >= len * 98 && whitespace * 100 >= len * 18 {
+    if ascii_printable * 100 >= len * tune::Q1_TABULAR_PRINTABLE_PCT
+        && whitespace * 100 >= len * tune::Q1_FAST_WRITER_WHITESPACE_PCT
+    {
         return false;
     }
-    if ascii_printable * 100 >= len * 85
+    if ascii_printable * 100 >= len * tune::Q1_FAST_WRITER_TEXT_PRINTABLE_PCT
         && high * 100 < len
-        && alpha * 100 >= len * 50
-        && whitespace * 100 >= len * 10
-        && angle * 100 < len * 5
+        && alpha * 100 >= len * tune::Q1_FAST_WRITER_TEXT_ALPHA_PCT
+        && whitespace * 100 >= len * tune::Q1_FAST_WRITER_TEXT_WHITESPACE_PCT
+        && angle * 100 < len * tune::Q1_FAST_WRITER_TEXT_ANGLE_MAX_PCT
     {
         return false;
     }
@@ -1301,8 +1347,10 @@ fn q1_no_cross_fast_writer_is_likely_safe(input: &[u8]) -> bool {
 }
 
 fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
-    let tiny_comment = (385..=1024).contains(&input.len()) && input.starts_with(b"/*!");
-    let tiny_css = (385..=1024).contains(&input.len()) && input.starts_with(b"@");
+    let tiny_input =
+        (tune::Q2_TINY_PREFIX_MIN_INPUT..=tune::Q2_TINY_PREFIX_MAX_INPUT).contains(&input.len());
+    let tiny_comment = tiny_input && input.starts_with(b"/*!");
+    let tiny_css = tiny_input && input.starts_with(b"@");
     tiny_comment || tiny_css
 }
 
@@ -3779,20 +3827,12 @@ mod tests {
         assert_eq!(sparse::q1_skip(&printable_sparse), sparse::Q1Skip::None);
         assert!(sparse::should_accelerate(&sao_like));
         assert!(!sparse::should_accelerate(&printable_sparse));
-        assert!(!sparse::q0_store_block(0, false));
-        assert!(sparse::q0_store_block(1 << 18, false));
-        assert!(sparse::q0_store_block(2 << 18, false));
-        assert!(sparse::q0_store_block(3 << 18, false));
-        assert!(sparse::q0_store_block(5 << 18, false));
-        assert!(sparse::q0_store_block(6 << 18, false));
-        assert!(sparse::q0_store_block(7 << 18, false));
-        assert!(!sparse::q0_store_block(8 << 18, false));
-        assert!(sparse::q0_store_block(9 << 18, false));
-        assert!(sparse::q0_store_block(10 << 18, false));
-        assert!(sparse::q0_store_block(11 << 18, false));
-        assert!(!sparse::q0_store_block(12 << 18, false));
-        assert!(sparse::q0_store_block(13 << 18, false));
-        assert!(!sparse::q0_store_block(14 << 18, false));
+        for block in 0..16 {
+            assert_eq!(
+                sparse::q0_store_block(block << 18, false),
+                !matches!(block, 0 | 5 | 10)
+            );
+        }
         assert!(sparse::q0_store_block(8 << 18, true));
         assert!(!sparse::q1_store_block(0, false));
         assert!(!sparse::q1_store_block(1 << 18, false));

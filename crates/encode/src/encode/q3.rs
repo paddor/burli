@@ -2,7 +2,7 @@ use alloc::{vec, vec::Vec};
 
 use super::{
     INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, match_len, read_u64_le,
-    token_supports_last_distance,
+    token_supports_last_distance, tune,
 };
 
 const HASH_LEN: usize = 5;
@@ -16,10 +16,6 @@ const MIN_SCORE: usize = SCORE_BASE + 100;
 const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
 const LONG_MATCH_STORE_THRESHOLD: usize = 64;
-const TINY_INPUT_THRESHOLD: usize = 1024;
-const SMALL_MEDIUM_INPUT_THRESHOLD: usize = 320 * 1024;
-const STACK_TABLE_INPUT_THRESHOLD: usize = SMALL_MEDIUM_INPUT_THRESHOLD;
-
 #[derive(Clone, Copy, Debug)]
 struct Match {
     len: usize,
@@ -59,11 +55,11 @@ pub(super) fn collect(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
-    if input.len() <= TINY_INPUT_THRESHOLD {
+    if input.len() <= tune::Q3_TINY_INPUT_MAX {
         collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace)
-    } else if input.len() <= STACK_TABLE_INPUT_THRESHOLD {
+    } else if input.len() <= tune::Q3_STACK_TABLE_INPUT_MAX {
         collect_with_stack_table_15::<1, 2>(input, max_backward_distance, workspace)
-    } else if input.len() <= SMALL_MEDIUM_INPUT_THRESHOLD {
+    } else if input.len() <= tune::Q3_SMALL_MEDIUM_INPUT_MAX {
         collect_with_params::<15, 1, 2>(input, max_backward_distance, workspace)
     } else {
         collect_with_params::<16, 4, 2>(input, max_backward_distance, workspace)
@@ -75,7 +71,7 @@ pub(super) fn collect_fast_sweep(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
-    if input.len() <= TINY_INPUT_THRESHOLD {
+    if input.len() <= tune::Q3_TINY_INPUT_MAX {
         collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace)
     } else {
         collect_with_stack_table_15::<1, 1>(input, max_backward_distance, workspace)
@@ -87,7 +83,7 @@ pub(super) fn collect_fast_sweep_no_lazy(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
-    if input.len() <= TINY_INPUT_THRESHOLD {
+    if input.len() <= tune::Q3_TINY_INPUT_MAX {
         collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace)
     } else {
         collect_with_stack_table_15::<0, 1>(input, max_backward_distance, workspace)

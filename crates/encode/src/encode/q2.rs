@@ -7,7 +7,7 @@ use burli_core::dictionary::{
 
 use super::{
     INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, distance_code, match_len, read_u32_le,
-    read_u64_le, static_dictionary_hash::kStaticDictionaryHash, token_supports_last_distance,
+    read_u64_le, static_dictionary_hash::kStaticDictionaryHash, token_supports_last_distance, tune,
 };
 
 const TABLE_BITS: usize = 16;
@@ -69,7 +69,7 @@ pub(super) fn collect(
     max_backward_distance: usize,
     workspace: &mut Workspace,
 ) -> Vec<Token> {
-    if input.len() > 128 * 1024 {
+    if input.len() > tune::Q2_USE_DICTIONARY_MAX_INPUT {
         collect_with_dictionary::<false>(input, input_base, max_backward_distance, workspace)
     } else {
         collect_with_dictionary::<true>(input, input_base, max_backward_distance, workspace)
@@ -671,10 +671,10 @@ fn table_key<const TABLE_BITS_FOR_INPUT: usize>(input: &[u8], pos: usize) -> usi
 }
 
 fn table_bits_for_input(input_len: usize) -> usize {
-    if input_len <= 1024 {
+    if input_len <= tune::Q2_TINY_TABLE_MAX_INPUT {
         return 10;
     }
-    if input_len <= 8 * 1024 {
+    if input_len <= tune::Q2_SMALL_TABLE_MAX_INPUT {
         12
     } else {
         TABLE_BITS

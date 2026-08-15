@@ -1,6 +1,6 @@
 use alloc::{vec, vec::Vec};
 
-use super::{INITIAL_LAST_DISTANCE, MAX_META_BLOCK_SIZE, Token, match_len, read_u64_le};
+use super::{INITIAL_LAST_DISTANCE, MAX_META_BLOCK_SIZE, Token, match_len, read_u64_le, tune};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Decision {
@@ -25,21 +25,24 @@ pub(super) enum Q1Skip {
     Moderate,
 }
 
+#[cfg(test)]
 pub(super) fn should_accelerate(input: &[u8]) -> bool {
     decision(input).store_uncompressed
 }
 
 pub(super) fn decision(input: &[u8]) -> Decision {
-    if input.len() < 64 * 1024 {
+    if input.len() < tune::LOW_COMPRESS_SAMPLE_MIN_INPUT {
         return Decision {
             sample: None,
             store_uncompressed: false,
         };
     }
     let sample = sample(input);
-    let store_uncompressed = sample.duplicate_6_count <= 45
-        && sample.zero_count * 50 <= sample.len
-        && sample.printable_count * 5 <= sample.len * 4;
+    let store_uncompressed = sample.duplicate_6_count <= tune::LOW_COMPRESS_DUP6_STORE_MAX
+        && sample.zero_count * tune::LOW_COMPRESS_ZERO_RATIO_DEN
+            <= sample.len * tune::LOW_COMPRESS_ZERO_RATIO_NUM
+        && sample.printable_count * tune::LOW_COMPRESS_PRINTABLE_RATIO_DEN
+            <= sample.len * tune::LOW_COMPRESS_PRINTABLE_RATIO_NUM;
     Decision {
         sample: Some(sample),
         store_uncompressed,
@@ -47,12 +50,10 @@ pub(super) fn decision(input: &[u8]) -> Decision {
 }
 
 pub(super) fn q0_store_block(input_base: usize, allow_cross_collector_shortcuts: bool) -> bool {
-    const STORE_BLOCK_MASK: usize = 15;
-    const Q0_SPARSE_BLOCK_BITS: usize = 18;
-
-    let block_in_group = (input_base >> Q0_SPARSE_BLOCK_BITS) & STORE_BLOCK_MASK;
+    let block_in_group = (input_base >> tune::Q0_LOW_COMPRESS_STORE_BLOCK_BITS)
+        & tune::Q0_LOW_COMPRESS_STORE_BLOCK_MASK;
     allow_cross_collector_shortcuts
-        || matches!(block_in_group, 1 | 2 | 3 | 5 | 6 | 7 | 9 | 10 | 11 | 13)
+        || (tune::Q0_LOW_COMPRESS_STORE_BLOCKS & (1 << block_in_group)) != 0
 }
 
 #[cfg(test)]
@@ -177,15 +178,13 @@ fn literal_only(input_len: usize) -> Vec<Token> {
 }
 
 fn sample(input: &[u8]) -> Sample {
-    const SAMPLE_BYTES: usize = 64 * 1024;
-    const SAMPLE_STEP: usize = 64;
     const TABLE_BITS: usize = 12;
     const TABLE_SIZE: usize = 1 << TABLE_BITS;
     const TABLE_MASK: usize = TABLE_SIZE - 1;
     const EMPTY: u16 = u16::MAX;
 
-    debug_assert!(input.len() >= SAMPLE_BYTES);
-    let sample_len = input.len().min(SAMPLE_BYTES);
+    debug_assert!(input.len() >= tune::LOW_COMPRESS_SAMPLE_BYTES);
+    let sample_len = input.len().min(tune::LOW_COMPRESS_SAMPLE_BYTES);
     let mut table = [EMPTY; TABLE_SIZE];
     let mut matches = 0_usize;
     let mut zeros = 0_usize;
@@ -212,7 +211,7 @@ fn sample(input: &[u8]) -> Sample {
             max_miss_streak = max_miss_streak.max(miss_streak);
         }
         table[key] = pos as u16;
-        pos += SAMPLE_STEP;
+        pos += tune::LOW_COMPRESS_SAMPLE_STEP;
     }
 
     Sample {
