@@ -199,6 +199,7 @@ const fn mode_wire_value(mode: Mode) -> u8 {
         Mode::Generic => 0,
         Mode::Text => 1,
         Mode::Font => 2,
+        _ => 0,
     }
 }
 

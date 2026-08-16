@@ -51,6 +51,7 @@ impl TryFrom<u8> for Quality {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 /// Brotli input mode hint.
 pub enum Mode {
     /// Generic binary or mixed input.
@@ -63,6 +64,7 @@ pub enum Mode {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 /// SIMD dispatch policy.
 pub enum SimdMode {
     /// Use runtime dispatch when available.
