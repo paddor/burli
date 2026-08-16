@@ -440,8 +440,8 @@ impl ConcatAssembler {
     /// # Errors
     ///
     /// Returns an error if the fragment does not match this assembler.
-    pub fn push(&mut self, fragment: &ConcatFragment) -> Result<&mut Self> {
-        validate_fragment_for_spec(&self.spec, fragment, &self.options)?;
+    pub fn push(&mut self, fragment: ConcatFragment) -> Result<&mut Self> {
+        validate_fragment_for_spec(&self.spec, &fragment, &self.options)?;
         validate_assembled_input_len(
             self.fragments
                 .iter()
@@ -449,7 +449,7 @@ impl ConcatAssembler {
                 .chain(core::iter::once(fragment.metadata.input_len)),
             self.options.assembled_cap,
         )?;
-        self.fragments.push(fragment.clone());
+        self.fragments.push(fragment);
         Ok(self)
     }
 
@@ -458,9 +458,9 @@ impl ConcatAssembler {
     /// # Errors
     ///
     /// Returns an error if any fragment does not match this assembler.
-    pub fn push_all<'a, I>(&mut self, fragments: I) -> Result<&mut Self>
+    pub fn push_all<I>(&mut self, fragments: I) -> Result<&mut Self>
     where
-        I: IntoIterator<Item = &'a ConcatFragment>,
+        I: IntoIterator<Item = ConcatFragment>,
     {
         for fragment in fragments {
             self.push(fragment)?;
@@ -949,7 +949,7 @@ mod tests {
 
         let mut encoded = Vec::new();
         ConcatAssembler::new(&spec, &Options::new())
-            .push_all(&fragments)
+            .push_all(fragments)
             .unwrap()
             .finish(&mut encoded)
             .unwrap();
