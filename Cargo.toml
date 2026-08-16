@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/encode", "crates/decode"]
+members = ["crates/core", "crates/encode", "crates/decode", "crates/cat"]
 exclude = ["bench", "fuzz"]
 
 [package]

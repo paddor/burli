@@ -70,7 +70,8 @@ dec.read_to_end(&mut decoded)?;
 Raw LZ77 prefix dictionaries are decode-only for now:
 
 ```rust
-let original = burli::decompress_with_raw_dictionary(&compressed, dictionary)?;
+let dictionary = burli::decode::RawDictionary::new(bytes);
+let original = burli::decompress_with_raw_dictionary(&compressed, &dictionary)?;
 ```
 
 ## Safety
@@ -78,8 +79,8 @@ let original = burli::decompress_with_raw_dictionary(&compressed, dictionary)?;
 [SAFETY.md](SAFETY.md) documents the unsafe boundary and Brotli bug classes
 that Bürli is designed to prevent.
 
-Bounded decompression is first-class: use `decompress_with_limit`,
-`Decompressor::with_limit`, `StreamDecoder::with_limit`, or
+Bounded decompression is first-class: use `decompress_with_options`,
+`Decompressor::with_options`, `StreamDecoder::with_options`, or
 `decompress_into_slice` for untrusted input. Plain `decompress()` has no
 practical output cap.
 
@@ -91,6 +92,9 @@ corruption cases, streaming, and C Brotli cross-checks.
 
 [DESIGN.md](DESIGN.md) covers the implemented encode/decode pipeline, bit I/O,
 Huffman tables, backward copies, dictionaries, streaming, and quality policy.
+
+[DEVELOPMENT.md](DEVELOPMENT.md) is the contributor workflow reference for
+builds, tests, releases, fuzzing, benchmarks, and chart regeneration.
 
 ## Levels
 

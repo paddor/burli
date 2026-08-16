@@ -168,6 +168,7 @@ fn c_brotli_raw_dictionary_decodes_through_burli() {
     let dictionary =
         b"raw-dictionary-entry:function renderTemplate(item){return item.label + item.value;}|"
             .repeat(1024);
+    let raw_dictionary = burli::decode::RawDictionary::new(&dictionary);
     let input = dictionary[128..dictionary.len() - 128].to_vec();
     let encoded = c_brotli_compress_with_raw_dictionary(&input, &dictionary, 11);
 
@@ -182,29 +183,41 @@ fn c_brotli_raw_dictionary_decodes_through_burli() {
         "dictionary-backed stream decoded without raw dictionary"
     );
     assert_eq!(
-        burli::decompress_with_raw_dictionary(&encoded, &dictionary).unwrap(),
+        burli::decompress_with_raw_dictionary(&encoded, &raw_dictionary).unwrap(),
         input
     );
     assert_eq!(
-        burli::decompress_with_raw_dictionary_and_limit(&encoded, &dictionary, input.len())
+        burli::decompress_with_raw_dictionary_and_limit(&encoded, &raw_dictionary, input.len())
+            .unwrap(),
+        input
+    );
+    let options = burli::decode::Options::new().max_output_size(input.len());
+    assert_eq!(
+        burli::decompress_with_raw_dictionary_and_options(&encoded, &raw_dictionary, &options)
             .unwrap(),
         input
     );
     assert_eq!(
-        burli::decompress_with_raw_dictionary_and_limit(&encoded, &dictionary, input.len() - 1),
+        burli::decompress_with_raw_dictionary_and_limit(&encoded, &raw_dictionary, input.len() - 1),
         Err(burli::BurliError::OutputLimitExceeded {
             limit: input.len() - 1,
             needed: input.len(),
         })
     );
 
-    let mut decompressor = burli::Decompressor::new();
-    assert!(decompressor.decompress(&encoded).is_err());
-    decompressor.set_raw_dictionary(&dictionary);
+    let mut decompressor =
+        burli::Decompressor::with_raw_dictionary_and_options(raw_dictionary.clone(), &options);
     assert_eq!(decompressor.decompress(&encoded).unwrap(), input);
     decompressor.clear_raw_dictionary();
     assert!(decompressor.decompress(&encoded).is_err());
-    decompressor.set_raw_dictionary(&dictionary);
+    decompressor.set_raw_dictionary(&raw_dictionary);
+    assert_eq!(decompressor.decompress(&encoded).unwrap(), input);
+    decompressor.clear_raw_dictionary();
+    assert!(decompressor.decompress(&encoded).is_err());
+    decompressor.set_raw_dictionary(&raw_dictionary);
+    decompressor.reset_options(&options);
+    assert_eq!(decompressor.options(), options);
+    assert_eq!(decompressor.raw_dictionary(), &raw_dictionary);
 
     let mut appended = b"decoded:".to_vec();
     let written = decompressor
@@ -224,13 +237,14 @@ fn c_brotli_raw_dictionary_decodes_through_burli() {
         .expect("C Brotli failed to decode its raw-dictionary stream");
     assert_eq!(decoded_by_c, input);
 
-    let mut stream = burli::StreamDecoder::with_raw_dictionary(encoded.as_slice(), &dictionary);
+    let mut stream =
+        burli::StreamDecoder::with_raw_dictionary(encoded.as_slice(), raw_dictionary.clone());
     let mut streamed = Vec::new();
     stream.read_to_end(&mut streamed).unwrap();
     assert_eq!(streamed, input);
 
     let mut limited =
-        burli::StreamDecoder::with_raw_dictionary_and_limit(encoded.as_slice(), &dictionary, 4);
+        burli::StreamDecoder::with_raw_dictionary_and_limit(encoded.as_slice(), raw_dictionary, 4);
     let mut streamed = Vec::new();
     assert_eq!(
         limited.read_to_end(&mut streamed).unwrap_err().kind(),

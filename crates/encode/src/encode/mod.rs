@@ -240,6 +240,79 @@ pub(crate) fn write_stream_chunk_with_workspace(
     )
 }
 
+pub(crate) fn encode_literal_fragment_with_options(
+    input: &[u8],
+    options: &Options,
+) -> Result<(Vec<u8>, usize), CompressError> {
+    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+        return Err(BurliError::Unsupported(
+            "only q0..q5 Brotli concat fragments are implemented yet",
+        ));
+    }
+
+    let mut writer = BitWriter::with_capacity(max_literal_only_size(input.len()));
+    let block_size = options
+        .block_bits_value()
+        .map_or(MAX_META_BLOCK_SIZE, |bits| 1_usize << bits)
+        .min(MAX_META_BLOCK_SIZE);
+    for chunk in input.chunks(block_size) {
+        write_compressed_literal_meta_block(&mut writer, chunk)?;
+    }
+    let bit_len = writer.written_bits();
+    Ok((writer.into_bytes(), bit_len))
+}
+
+pub(crate) fn encode_concat_fragment_with_options(
+    input: &[u8],
+    options: &Options,
+) -> Result<(Vec<u8>, usize, bool), CompressError> {
+    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+        return Err(BurliError::Unsupported(
+            "only q0..q5 Brotli concat fragments are implemented yet",
+        ));
+    }
+    if input.is_empty() {
+        return Ok((Vec::new(), 0, false));
+    }
+
+    let mut writer = BitWriter::with_capacity(max_literal_only_size(input.len()));
+    let mut workspace = Workspace::default();
+    workspace.reset_stream();
+    let plan = EncoderPlan::from_options(input.len(), options)?;
+    let mut has_copy = false;
+
+    for chunk in input.chunks(plan.block_size) {
+        has_copy |= write_concat_meta_block(
+            &mut writer,
+            chunk,
+            plan.max_backward_distance.min(chunk.len()),
+            options.quality_value(),
+            &mut workspace,
+        )?;
+    }
+
+    let bit_len = writer.written_bits();
+    Ok((writer.into_bytes(), bit_len, has_copy))
+}
+
+pub(crate) fn write_stream_header_to_writer(
+    writer: &mut BitWriter,
+    options: &Options,
+) -> Result<(), CompressError> {
+    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+        return Err(BurliError::Unsupported(
+            "only q0..q5 Brotli concat streams are implemented yet",
+        ));
+    }
+    crate::metablock::write_window_bits(writer, options.window_bits_value())
+}
+
+pub(crate) fn write_last_empty_meta_block_to_writer(
+    writer: &mut BitWriter,
+) -> Result<(), CompressError> {
+    crate::metablock::write_last_empty_meta_block(writer)
+}
+
 fn max_literal_only_size(input_len: usize) -> usize {
     input_len
         .saturating_add(input_len / 1024)
@@ -269,6 +342,74 @@ fn write_compressed_meta_blocks(
             .ok_or(BurliError::Format("Brotli input position overflow"))?;
     }
 
+    Ok(())
+}
+
+fn write_concat_meta_block(
+    writer: &mut BitWriter,
+    input: &[u8],
+    max_backward_distance: usize,
+    quality: u8,
+    workspace: &mut Workspace,
+) -> Result<bool, CompressError> {
+    if input.len() < MIN_MATCH_BYTES {
+        write_compressed_literal_meta_block(writer, input)?;
+        return Ok(false);
+    }
+
+    let mut tokens = match quality {
+        0 => q2::collect_without_dictionary_no_lazy_sparse_tail_no_last_distance_probe(
+            input,
+            max_backward_distance,
+            &mut workspace.q2,
+        ),
+        1 => q2::collect_without_dictionary_no_lazy_sparse_tail(
+            input,
+            max_backward_distance,
+            &mut workspace.q2,
+        ),
+        2 => {
+            q2::collect_without_dictionary_no_lazy(input, max_backward_distance, &mut workspace.q2)
+        }
+        3 => {
+            q2::collect_without_dictionary_one_lazy(input, max_backward_distance, &mut workspace.q2)
+        }
+        _ => q2::collect_without_dictionary(input, max_backward_distance, &mut workspace.q2),
+    };
+
+    sanitize_concat_tokens(&mut tokens)?;
+    if !tokens.iter().any(|token| token.is_copy()) {
+        write_compressed_literal_meta_block(writer, input)?;
+        return Ok(false);
+    }
+
+    let symbol_limit = if quality <= 1 {
+        tune::Q1_DELAYED_SYMBOLS
+    } else {
+        tune::MAX_DELAYED_SYMBOLS
+    };
+    write_token_batches_with_symbol_limit(writer, input, &tokens, symbol_limit)?;
+    Ok(true)
+}
+
+fn sanitize_concat_tokens(tokens: &mut [Token]) -> Result<(), CompressError> {
+    for token in tokens {
+        if !token.is_copy() {
+            continue;
+        }
+
+        let copy_position = token
+            .insert_start
+            .checked_add(token.insert_len)
+            .ok_or(BurliError::Format("Brotli concat token position overflow"))?;
+        if token.distance == 0 || token.distance > copy_position {
+            return Err(BurliError::Format(
+                "Brotli concat token uses non-local distance",
+            ));
+        }
+        token.distance_code = None;
+        token.use_last_distance = false;
+    }
     Ok(())
 }
 

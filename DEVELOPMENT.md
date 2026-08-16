@@ -1,5 +1,8 @@
 # Development
 
+Contributor workflow lives here so README can stay user-facing. Use this file
+for build, test, release, fuzz, benchmark, and chart-generation commands.
+
 ## Build
 
 ```bash
@@ -84,33 +87,63 @@ cargo fuzz run burli-decode
 cargo fuzz run burli-roundtrip
 ```
 
-## Bench
+## Benchmarks And Charts
 
-Bench crate is excluded from the workspace:
+Benchmarks are deliberate measurement work, not routine verification. The bench
+crate is excluded from the workspace. Use `cargo run --manifest-path
+bench/Cargo.toml`; `cargo bench` is not the supported path.
+
+Before publishing new numbers or regenerating checked-in charts:
+
+- run format, tests, and clippy first
+- do not run two benchmarks or profilers at the same time
+- stop on warnings, timeouts, or suspicious output
+- record CPU, compiler flags, target features, corpus list, command, and ratio
+- keep benchmark cache files append-only
+
+### Smoke Check
+
+Use short runs only to verify the harness and chart input path:
 
 ```bash
-cargo run --manifest-path bench/Cargo.toml --example burli_bench --release
 cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
-  --impl all --qualities 5
+  --impl burli --qualities 0,1,2,3,4,5 --chart-small-only --quick
+cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
+  --corpus silesia --impl burli --qualities 0,3,5 --quick
+```
+
+### Refresh Burli Chart Inputs
+
+Routine chart refresh after Bürli code changes should only re-run `burli`:
+
+```bash
+cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
+  --impl burli --qualities 0,1,2,3,4,5
+cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
+  --impl burli --qualities 0,1,2,3,4,5 --chart-small-only
+cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
+  --corpus silesia --impl burli --qualities 0,1,2,3,4,5
+```
+
+Re-run external baselines only when asked or when corpus or bench harness
+changes:
+
+```bash
 cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
   --impl all --qualities 0,1,2,3,4,5
 cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
-  --impl all --qualities 0,3,5
-cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
-  --impl all --qualities 0,1,2,3,4,5 \
-  --files bootstrap-js,bootstrap-css,json-citm --small-only
-cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
-  --impl burli --qualities 0,1,2,3,4,5 --chart-small-only --quick
+  --impl all --qualities 0,1,2,3,4,5 --chart-small-only
 cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
   --corpus silesia --impl all --qualities 0,1,2,3,4,5
 ```
 
 The harness lazily downloads pinned corpus files into `bench/corpus/`.
-JSONL results append under `~/.cache/burli/`. Treat cache files as append-only.
+JSONL results append under `~/.cache/burli/`, or under `BURLI_CACHE_DIR` when
+set. Treat cache files as local, append-only data. Do not commit them.
+
 Default timing is 30 ms per round, 3 rounds, 1 warmup. `--quick` uses one
-30 ms round and no warmup for smoke checks. Use `--target-ms`, `--target-ns`,
-`--rounds`, `--warmup`, or matching `BURLI_BENCH_*` env vars for focused
-work.
+30 ms round and no warmup. Use `--target-ms`, `--target-ns`, `--rounds`,
+`--warmup`, or matching `BURLI_BENCH_*` env vars for focused work.
 
 `--chart-small-only` restricts small-input runs to the files and sizes used by
 the checked-in small charts. It avoids benchmarking every small slice of every
@@ -124,7 +157,7 @@ Default implementation set:
 `--impl all` also includes Google Brotli C through system `libbrotli`.
 No CLI baseline.
 
-## Charts
+### Render Charts
 
 ```bash
 cargo run --manifest-path bench/Cargo.toml --bin burli_charts --release -- all
@@ -132,7 +165,21 @@ cargo run --manifest-path bench/Cargo.toml --bin burli_charts --release -- \
   scatter-silesia
 ```
 
-With no output dir, charts go under `doc/charts/<arch>/`.
+`all` renders the web charts. `scatter-silesia` is separate. With no output
+dir, charts go under `doc/charts/<arch>/`.
+
+Generated chart set:
+
+- `summary.svg`
+- `scatter.svg`
+- `pipeline.svg`
+- `matrix.svg`
+- `small_encode.svg`
+- `small_decode.svg`
+- `scatter_silesia.svg`
+
+Review SVG diffs before committing. Only commit chart files that were
+intentionally refreshed.
 
 Optional local hardware labels can live in ignored `.chart_hw`:
 
@@ -146,25 +193,11 @@ The chart tool reads `.chart_hw` from the current dir or parent dir. Env vars
 `BURLI_HW_PREFIX`, `BURLI_HW_CORES`, `BURLI_HW_POSTFIX`, and
 `BURLI_HW_EXTRAS` override or extend local detection.
 
-Generated chart set:
-
-- `scatter.svg`
-- `summary.svg`
-- `pipeline.svg`
-- `matrix.svg`
-- `scatter_silesia.svg`
-- `small_encode.svg`
-- `small_decode.svg`
-
 Pipeline and matrix charts use stacked seconds/GB:
 
 - compression CPU
 - transfer at 100 MB/s
 - decompression CPU
-
-Routine chart refresh after burli code changes should only re-run `burli`.
-Re-run external baselines only when asked or when corpus or bench harness
-changes.
 
 Benchmark corpus:
 
@@ -179,7 +212,5 @@ Benchmark corpus:
 Measurement rules:
 
 - profile before optimizing
-- record CPU, compiler flags, target features, corpus list, command, and ratio
-- keep cache append-only
 - compare scalar and SIMD paths separately
 - compare `paranoid` builds separately when the default build gains unsafe code
