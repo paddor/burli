@@ -29,7 +29,7 @@ impl Decompressor {
     /// Create a decompressor with explicit [`Options`].
     pub fn with_options(options: &Options) -> Self {
         Self {
-            max_output_size: options.max_output_size_value(),
+            max_output_size: options.max_output_size(),
             raw_dictionary: RawDictionary::empty(),
             scratch: Vec::new(),
         }
@@ -37,7 +37,7 @@ impl Decompressor {
 
     /// Create a decompressor with a hard output limit.
     pub fn with_limit(max_output_size: usize) -> Self {
-        Self::with_options(&Options::new().max_output_size(max_output_size))
+        Self::with_options(&Options::new().with_max_output_size(max_output_size))
     }
 
     /// Create a decompressor with a raw LZ77 prefix dictionary.
@@ -53,7 +53,7 @@ impl Decompressor {
     ) -> Self {
         Self::with_raw_dictionary_and_options(
             dictionary,
-            &Options::new().max_output_size(max_output_size),
+            &Options::new().with_max_output_size(max_output_size),
         )
     }
 
@@ -61,7 +61,7 @@ impl Decompressor {
     /// [`Options`].
     pub fn with_raw_dictionary_and_options(dictionary: RawDictionary, options: &Options) -> Self {
         Self {
-            max_output_size: options.max_output_size_value(),
+            max_output_size: options.max_output_size(),
             raw_dictionary: dictionary,
             scratch: Vec::new(),
         }
@@ -69,13 +69,13 @@ impl Decompressor {
 
     /// Return current decode options.
     pub fn options(&self) -> Options {
-        Options::new().max_output_size(self.max_output_size)
+        Options::new().with_max_output_size(self.max_output_size)
     }
 
     /// Replace decode options without releasing reusable buffers or changing
     /// the dictionary.
     pub fn reset_options(&mut self, options: &Options) {
-        self.max_output_size = options.max_output_size_value();
+        self.max_output_size = options.max_output_size();
     }
 
     /// Return the configured raw LZ77 prefix dictionary.

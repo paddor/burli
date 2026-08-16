@@ -177,7 +177,7 @@ fn c_brotli_raw_dictionary_decodes_through_burli() {
             .unwrap(),
         input
     );
-    let options = burli::decode::Options::new().max_output_size(input.len());
+    let options = burli::decode::Options::new().with_max_output_size(input.len());
     assert_eq!(
         burli::decompress_with_raw_dictionary_and_options(&encoded, &raw_dictionary, &options)
             .unwrap(),

@@ -10,11 +10,11 @@ pub(crate) fn compress_uncompressed_with_options(
     input: &[u8],
     options: &Options,
 ) -> Result<Vec<u8>, CompressError> {
-    let block_bits = options.block_bits_value().unwrap_or(MIN_BLOCK_BITS);
+    let block_bits = options.block_bits().unwrap_or(MIN_BLOCK_BITS);
     let block_size = 1_usize << block_bits;
     let mut writer = BitWriter::with_capacity(max_uncompressed_size(input.len(), block_size));
 
-    write_window_bits(&mut writer, options.window_bits_value())?;
+    write_window_bits(&mut writer, options.window_bits())?;
     if input.is_empty() {
         write_last_empty_meta_block(&mut writer)?;
         return Ok(writer.into_bytes());
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn encodes_empty_stream_with_default_window() {
         assert_eq!(
-            compress_uncompressed_with_options(b"", &Options::default().quality(0).unwrap())
+            compress_uncompressed_with_options(b"", &Options::default().with_quality(0).unwrap())
                 .unwrap(),
             [0x3b]
         );
@@ -84,7 +84,7 @@ mod tests {
     fn q0_round_trips_through_burli_decoder() {
         let input = b"hello uncompressed brotli";
         let encoded =
-            compress_uncompressed_with_options(input, &Options::default().quality(0).unwrap())
+            compress_uncompressed_with_options(input, &Options::default().with_quality(0).unwrap())
                 .unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
@@ -93,11 +93,11 @@ mod tests {
     #[test]
     fn q0_splits_blocks_on_block_bits() {
         let options = Options::default()
-            .quality(0)
+            .with_quality(0)
             .unwrap()
-            .window_bits(10)
+            .with_window_bits(10)
             .unwrap()
-            .block_bits(Some(16))
+            .with_block_bits(Some(16))
             .unwrap();
         let input = vec![42; (1 << 16) + 3];
         let encoded = compress_uncompressed_with_options(&input, &options).unwrap();
@@ -110,7 +110,7 @@ mod tests {
         for quality in 1..=5 {
             let encoded = crate::encode::compress_with_options(
                 b"uncompressed fallback",
-                &Options::default().quality(quality).unwrap(),
+                &Options::default().with_quality(quality).unwrap(),
             )
             .unwrap();
 
@@ -124,7 +124,10 @@ mod tests {
     #[test]
     fn q6_returns_unsupported() {
         assert!(matches!(
-            crate::encode::compress_with_options(b"hello", &Options::default().quality(6).unwrap()),
+            crate::encode::compress_with_options(
+                b"hello",
+                &Options::default().with_quality(6).unwrap()
+            ),
             Err(BurliError::Unsupported(_))
         ));
     }

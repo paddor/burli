@@ -114,13 +114,13 @@ impl Options {
     /// # Errors
     ///
     /// Returns [`BurliError::InvalidQuality`] for values outside 0 through 11.
-    pub fn quality(mut self, value: u8) -> Result<Self, BurliError> {
+    pub fn with_quality(mut self, value: u8) -> Result<Self, BurliError> {
         self.quality = Quality::new(value)?;
         Ok(self)
     }
 
     /// Return the raw quality value.
-    pub fn quality_value(&self) -> u8 {
+    pub fn quality(&self) -> u8 {
         self.quality.get()
     }
 
@@ -129,7 +129,7 @@ impl Options {
     /// # Errors
     ///
     /// Returns [`BurliError::InvalidWindowBits`] outside the standard range.
-    pub fn window_bits(mut self, value: u8) -> Result<Self, BurliError> {
+    pub fn with_window_bits(mut self, value: u8) -> Result<Self, BurliError> {
         if !(MIN_WINDOW_BITS..=MAX_WINDOW_BITS).contains(&value) {
             return Err(BurliError::InvalidWindowBits(value));
         }
@@ -138,7 +138,7 @@ impl Options {
     }
 
     /// Return the configured window size as log2 bytes.
-    pub const fn window_bits_value(&self) -> u8 {
+    pub const fn window_bits(&self) -> u8 {
         self.window_bits
     }
 
@@ -149,7 +149,7 @@ impl Options {
     /// # Errors
     ///
     /// Returns [`BurliError::InvalidBlockBits`] outside the standard range.
-    pub fn block_bits(mut self, value: Option<u8>) -> Result<Self, BurliError> {
+    pub fn with_block_bits(mut self, value: Option<u8>) -> Result<Self, BurliError> {
         if let Some(bits) = value
             && !(MIN_BLOCK_BITS..=MAX_BLOCK_BITS).contains(&bits)
         {
@@ -160,43 +160,43 @@ impl Options {
     }
 
     /// Return the optional block-size override.
-    pub const fn block_bits_value(&self) -> Option<u8> {
+    pub const fn block_bits(&self) -> Option<u8> {
         self.block_bits
     }
 
     /// Set the input mode hint.
     #[must_use]
-    pub const fn mode(mut self, value: Mode) -> Self {
+    pub const fn with_mode(mut self, value: Mode) -> Self {
         self.mode = value;
         self
     }
 
     /// Return the input mode hint.
-    pub const fn mode_value(&self) -> Mode {
+    pub const fn mode(&self) -> Mode {
         self.mode
     }
 
     /// Set the SIMD dispatch policy.
     #[must_use]
-    pub const fn simd(mut self, value: SimdMode) -> Self {
+    pub const fn with_simd(mut self, value: SimdMode) -> Self {
         self.simd = value;
         self
     }
 
     /// Return the SIMD dispatch policy.
-    pub const fn simd_value(&self) -> SimdMode {
+    pub const fn simd(&self) -> SimdMode {
         self.simd
     }
 
     /// Set an input-size hint for callers that cannot pass the full slice yet.
     #[must_use]
-    pub const fn size_hint(mut self, value: Option<usize>) -> Self {
+    pub const fn with_size_hint(mut self, value: Option<usize>) -> Self {
         self.size_hint = value;
         self
     }
 
     /// Return the optional input-size hint.
-    pub const fn size_hint_value(&self) -> Option<usize> {
+    pub const fn size_hint(&self) -> Option<usize> {
         self.size_hint
     }
 
@@ -204,7 +204,7 @@ impl Options {
     ///
     /// This can trade ratio for speed at higher qualities.
     #[must_use]
-    pub const fn disable_literal_context_modeling(mut self, value: bool) -> Self {
+    pub const fn with_literal_context_modeling_disabled(mut self, value: bool) -> Self {
         self.disable_literal_context_modeling = value;
         self
     }

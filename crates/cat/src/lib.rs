@@ -51,37 +51,37 @@ impl Options {
 
     /// Set maximum decoded bytes allowed for one fragment.
     #[must_use]
-    pub const fn max_fragment_input_len(mut self, limit: usize) -> Self {
+    pub const fn with_max_fragment_input_len(mut self, limit: usize) -> Self {
         self.input_ceiling = limit;
         self
     }
 
     /// Set maximum encoded payload bytes allowed for one fragment.
     #[must_use]
-    pub const fn max_fragment_payload_len(mut self, limit: usize) -> Self {
+    pub const fn with_max_fragment_payload_len(mut self, limit: usize) -> Self {
         self.payload_budget = limit;
         self
     }
 
     /// Set maximum decoded bytes allowed across an assembled stream.
     #[must_use]
-    pub const fn max_assembled_input_len(mut self, limit: usize) -> Self {
+    pub const fn with_max_assembled_input_len(mut self, limit: usize) -> Self {
         self.assembled_cap = limit;
         self
     }
 
     /// Return maximum decoded bytes allowed for one fragment.
-    pub const fn max_fragment_input_len_value(&self) -> usize {
+    pub const fn max_fragment_input_len(&self) -> usize {
         self.input_ceiling
     }
 
     /// Return maximum encoded payload bytes allowed for one fragment.
-    pub const fn max_fragment_payload_len_value(&self) -> usize {
+    pub const fn max_fragment_payload_len(&self) -> usize {
         self.payload_budget
     }
 
     /// Return maximum decoded bytes allowed across an assembled stream.
-    pub const fn max_assembled_input_len_value(&self) -> usize {
+    pub const fn max_assembled_input_len(&self) -> usize {
         self.assembled_cap
     }
 }
@@ -133,7 +133,7 @@ impl ConcatSpec {
 
     /// Set input mode hint.
     #[must_use]
-    pub const fn mode(mut self, mode: Mode) -> Self {
+    pub const fn with_mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
         self
     }
@@ -143,8 +143,8 @@ impl ConcatSpec {
     /// # Errors
     ///
     /// Returns an error when `block_bits` is outside the Brotli range.
-    pub fn block_bits(mut self, block_bits: Option<u8>) -> Result<Self> {
-        self.options()?.block_bits(block_bits)?;
+    pub fn with_block_bits(mut self, block_bits: Option<u8>) -> Result<Self> {
+        self.options()?.with_block_bits(block_bits)?;
         self.block_bits = block_bits;
         Ok(self)
     }
@@ -155,7 +155,7 @@ impl ConcatSpec {
     }
 
     /// Return configured input mode.
-    pub const fn mode_value(&self) -> Mode {
+    pub const fn mode(&self) -> Mode {
         self.mode
     }
 
@@ -165,7 +165,7 @@ impl ConcatSpec {
     }
 
     /// Return configured meta-block bits.
-    pub const fn block_bits_value(&self) -> Option<u8> {
+    pub const fn block_bits(&self) -> Option<u8> {
         self.block_bits
     }
 
@@ -186,10 +186,10 @@ impl ConcatSpec {
             ));
         }
         let options = BrotliOptions::default()
-            .quality(self.quality.get())?
-            .window_bits(self.window_bits)?
-            .block_bits(self.block_bits)?
-            .mode(self.mode);
+            .with_quality(self.quality.get())?
+            .with_window_bits(self.window_bits)?
+            .with_block_bits(self.block_bits)?
+            .with_mode(self.mode);
         Ok(options)
     }
 }
@@ -1065,7 +1065,7 @@ mod tests {
 
     #[test]
     fn options_limit_encoded_fragment_input() {
-        let options = Options::new().max_fragment_input_len(3);
+        let options = Options::new().with_max_fragment_input_len(3);
 
         assert!(matches!(
             encode_fragment(b"four", &spec(1), &options),
@@ -1081,7 +1081,7 @@ mod tests {
         let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let bytes = fragment.to_bytes(&Options::new()).unwrap();
         let options =
-            Options::new().max_fragment_payload_len(fragment.metadata().payload_len() - 1);
+            Options::new().with_max_fragment_payload_len(fragment.metadata().payload_len() - 1);
 
         assert!(matches!(
             ConcatFragment::from_bytes(&bytes, &options),
@@ -1095,7 +1095,8 @@ mod tests {
     fn options_limit_parsed_fragment_decoded_len_before_decode() {
         let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let bytes = fragment.to_bytes(&Options::new()).unwrap();
-        let options = Options::new().max_fragment_input_len(fragment.metadata().input_len() - 1);
+        let options =
+            Options::new().with_max_fragment_input_len(fragment.metadata().input_len() - 1);
 
         assert!(matches!(
             ConcatFragment::from_bytes(&bytes, &options),
@@ -1111,7 +1112,7 @@ mod tests {
         let spec = spec(2);
         let first = encode_fragment(b"first", &spec, &Options::new()).unwrap();
         let second = encode_fragment(b"second", &spec, &Options::new()).unwrap();
-        let options = Options::new().max_assembled_input_len(10);
+        let options = Options::new().with_max_assembled_input_len(10);
         let mut output = b"prefix".to_vec();
 
         assert!(matches!(

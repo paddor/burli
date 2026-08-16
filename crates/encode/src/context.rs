@@ -23,7 +23,7 @@ impl Compressor {
     /// Returns [`CompressError::InvalidQuality`] outside Brotli's quality range.
     pub fn new(quality: u8) -> Result<Self, CompressError> {
         Ok(Self {
-            options: Options::default().quality(quality)?,
+            options: Options::default().with_quality(quality)?,
             workspace: crate::encode::Workspace::default(),
             writer: BitWriter::new(),
             scratch: Vec::new(),

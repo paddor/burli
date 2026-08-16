@@ -69,7 +69,7 @@ impl<R: Read> StreamDecoder<R> {
     pub fn with_options(inner: R, options: &crate::Options) -> Self {
         Self {
             inner,
-            max_output_size: options.max_output_size_value(),
+            max_output_size: options.max_output_size(),
             encoded: Vec::new(),
             bit_pos: 0,
             window_bits: None,
@@ -109,7 +109,7 @@ impl<R: Read> StreamDecoder<R> {
         Self::with_raw_dictionary_and_options(
             inner,
             dictionary,
-            &crate::Options::new().max_output_size(max_output_size),
+            &crate::Options::new().with_max_output_size(max_output_size),
         )
     }
 
@@ -132,7 +132,7 @@ impl<R: Read> StreamDecoder<R> {
 
     /// Return current decode options.
     pub fn options(&self) -> crate::Options {
-        crate::Options::new().max_output_size(self.max_output_size)
+        crate::Options::new().with_max_output_size(self.max_output_size)
     }
 
     /// Return the configured raw LZ77 prefix dictionary.
@@ -336,11 +336,11 @@ mod tests {
     fn decoder_retains_only_window_history_after_drain() {
         let input = vec![7_u8; (1 << 16) * 4 + 123];
         let options = Options::default()
-            .quality(0)
+            .with_quality(0)
             .unwrap()
-            .window_bits(16)
+            .with_window_bits(16)
             .unwrap()
-            .block_bits(Some(16))
+            .with_block_bits(Some(16))
             .unwrap();
         let encoded = burli::compress_with_options(&input, &options).unwrap();
         let mut decoder = StreamDecoder::new(encoded.as_slice());

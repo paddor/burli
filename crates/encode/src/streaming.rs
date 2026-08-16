@@ -27,7 +27,7 @@ impl<W: Write> StreamEncoder<W> {
     ///
     /// Returns [`CompressError::InvalidQuality`] outside Brotli's quality range.
     pub fn new(inner: W, quality: u8) -> Result<Self, CompressError> {
-        Self::with_options(inner, Options::default().quality(quality)?)
+        Self::with_options(inner, Options::default().with_quality(quality)?)
     }
 
     /// Create a stream encoder with explicit [`Options`].
@@ -36,13 +36,13 @@ impl<W: Write> StreamEncoder<W> {
     ///
     /// Returns an error for invalid block bits or unsupported encoder options.
     pub fn with_options(inner: W, options: Options) -> Result<Self, CompressError> {
-        let block_bits = options.block_bits_value().unwrap_or(MIN_BLOCK_BITS);
+        let block_bits = options.block_bits().unwrap_or(MIN_BLOCK_BITS);
         if !(MIN_BLOCK_BITS..=MAX_BLOCK_BITS).contains(&block_bits) {
             return Err(CompressError::InvalidBlockBits(block_bits));
         }
         let mut writer = BitWriter::new();
-        if options.quality_value() == 0 {
-            crate::metablock::write_window_bits(&mut writer, options.window_bits_value())?;
+        if options.quality() == 0 {
+            crate::metablock::write_window_bits(&mut writer, options.window_bits())?;
         } else {
             crate::encode::write_stream_header(&mut writer, &options)?;
         }
@@ -90,7 +90,7 @@ impl<W: Write> StreamEncoder<W> {
         if input.is_empty() {
             return Ok(());
         }
-        let result = if self.options.quality_value() == 0 {
+        let result = if self.options.quality() == 0 {
             crate::metablock::write_uncompressed_meta_block(&mut self.writer, input)
         } else {
             crate::encode::write_stream_chunk_with_workspace(

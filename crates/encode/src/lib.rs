@@ -29,7 +29,7 @@ pub use burli_core::{CompressError, Options};
 /// Returns an error for invalid quality values or unsupported encoder options.
 #[cfg(feature = "alloc")]
 pub fn compress(input: &[u8], quality: u8) -> Result<alloc::vec::Vec<u8>, CompressError> {
-    let options = Options::default().quality(quality)?;
+    let options = Options::default().with_quality(quality)?;
     compress_with_options(input, &options)
 }
 
@@ -57,7 +57,7 @@ pub fn compress_into(
     output: &mut alloc::vec::Vec<u8>,
     quality: u8,
 ) -> Result<usize, CompressError> {
-    let options = Options::default().quality(quality)?;
+    let options = Options::default().with_quality(quality)?;
     let mut workspace = encode::Workspace::default();
     let mut writer = burli_core::bits::BitWriter::new();
     encode::compress_into_with_options_workspace(
