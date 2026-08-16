@@ -93,6 +93,9 @@ corruption cases, streaming, and C Brotli cross-checks.
 [DESIGN.md](DESIGN.md) covers the implemented encode/decode pipeline, bit I/O,
 Huffman tables, backward copies, dictionaries, streaming, and quality policy.
 
+[DEVELOPMENT.md](DEVELOPMENT.md) is the contributor workflow reference for
+builds, tests, releases, fuzzing, benchmarks, and chart regeneration.
+
 ## Levels
 
 Bürli's encoder covers the fast end of Brotli. q0 favors throughput and may
