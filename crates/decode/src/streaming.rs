@@ -21,7 +21,7 @@ pub struct StreamDecoder<R> {
     bit_pos: usize,
     window_bits: Option<u8>,
     distances: DistanceRing,
-    raw_dictionary: Vec<u8>,
+    raw_dictionary: crate::RawDictionary,
     output: Vec<u8>,
     output_pos: usize,
     output_base: usize,
@@ -57,7 +57,7 @@ impl<R: Read> StreamDecoder<R> {
             bit_pos: 0,
             window_bits: None,
             distances: DistanceRing::new(),
-            raw_dictionary: Vec::new(),
+            raw_dictionary: crate::RawDictionary::empty(),
             output: Vec::new(),
             output_pos: 0,
             output_base: 0,
@@ -74,7 +74,7 @@ impl<R: Read> StreamDecoder<R> {
             bit_pos: 0,
             window_bits: None,
             distances: DistanceRing::new(),
-            raw_dictionary: Vec::new(),
+            raw_dictionary: crate::RawDictionary::empty(),
             output: Vec::new(),
             output_pos: 0,
             output_base: 0,
@@ -83,30 +83,46 @@ impl<R: Read> StreamDecoder<R> {
     }
 
     /// Create a stream decoder with a raw LZ77 prefix dictionary.
-    pub fn with_raw_dictionary(inner: R, dictionary: &[u8]) -> Self {
-        Self::with_raw_dictionary_and_limit(inner, dictionary, DEFAULT_MAX_OUTPUT_SIZE)
+    pub fn with_raw_dictionary(inner: R, dictionary: crate::RawDictionary) -> Self {
+        Self {
+            inner,
+            max_output_size: DEFAULT_MAX_OUTPUT_SIZE,
+            encoded: Vec::new(),
+            bit_pos: 0,
+            window_bits: None,
+            distances: DistanceRing::new(),
+            raw_dictionary: dictionary,
+            output: Vec::new(),
+            output_pos: 0,
+            output_base: 0,
+            state: State::Reading,
+        }
     }
 
     /// Create a stream decoder with a raw LZ77 prefix dictionary and hard
     /// output limit.
     pub fn with_raw_dictionary_and_limit(
         inner: R,
-        dictionary: &[u8],
+        dictionary: crate::RawDictionary,
         max_output_size: usize,
     ) -> Self {
-        Self {
+        Self::with_raw_dictionary_and_options(
             inner,
-            max_output_size,
-            encoded: Vec::new(),
-            bit_pos: 0,
-            window_bits: None,
-            distances: DistanceRing::new(),
-            raw_dictionary: dictionary.to_vec(),
-            output: Vec::new(),
-            output_pos: 0,
-            output_base: 0,
-            state: State::Reading,
-        }
+            dictionary,
+            &crate::Options::new().max_output_size(max_output_size),
+        )
+    }
+
+    /// Create a stream decoder with a raw LZ77 prefix dictionary and explicit
+    /// [`crate::Options`].
+    pub fn with_raw_dictionary_and_options(
+        inner: R,
+        dictionary: crate::RawDictionary,
+        options: &crate::Options,
+    ) -> Self {
+        let mut decoder = Self::with_options(inner, options);
+        decoder.raw_dictionary = dictionary;
+        decoder
     }
 
     /// Return the wrapped reader.
@@ -117,6 +133,11 @@ impl<R: Read> StreamDecoder<R> {
     /// Return current decode options.
     pub fn options(&self) -> crate::Options {
         crate::Options::new().max_output_size(self.max_output_size)
+    }
+
+    /// Return the configured raw LZ77 prefix dictionary.
+    pub const fn raw_dictionary(&self) -> &crate::RawDictionary {
+        &self.raw_dictionary
     }
 
     fn read_more_encoded(&mut self) -> io::Result<bool> {
@@ -240,7 +261,9 @@ impl<R: Read> StreamDecoder<R> {
                         len,
                         max_output_size: self.max_output_size,
                         window_bits,
-                        raw_dictionary: crate::dictionary::RawDictionary::new(&self.raw_dictionary),
+                        raw_dictionary: crate::dictionary::RawDictionary::new(
+                            self.raw_dictionary.as_bytes(),
+                        ),
                     },
                     &mut distances,
                 )?;

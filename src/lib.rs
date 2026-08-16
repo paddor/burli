@@ -24,6 +24,8 @@ pub use burli_encode as encode;
 /// Decode-specific API surface.
 pub mod decode {
     pub use burli_decode::Options;
+    #[cfg(feature = "alloc")]
+    pub use burli_decode::RawDictionary;
 }
 
 /// Compress `input` at Brotli `quality`.
@@ -123,9 +125,25 @@ pub fn decompress_with_limit(input: &[u8], max_output_size: usize) -> Result<all
 #[cfg(feature = "alloc")]
 pub fn decompress_with_raw_dictionary(
     input: &[u8],
-    dictionary: &[u8],
+    dictionary: &decode::RawDictionary,
 ) -> Result<alloc::vec::Vec<u8>> {
     burli_decode::decompress_with_raw_dictionary(input, dictionary)
+}
+
+/// Decompress a complete Brotli stream with a raw LZ77 prefix dictionary and
+/// explicit [`decode::Options`].
+///
+/// # Errors
+///
+/// Returns an error for malformed streams, unsupported large-window streams, or
+/// output-limit violations.
+#[cfg(feature = "alloc")]
+pub fn decompress_with_raw_dictionary_and_options(
+    input: &[u8],
+    dictionary: &decode::RawDictionary,
+    options: &decode::Options,
+) -> Result<alloc::vec::Vec<u8>> {
+    burli_decode::decompress_with_raw_dictionary_and_options(input, dictionary, options)
 }
 
 /// Decompress a complete Brotli stream with a raw LZ77 prefix dictionary and
@@ -138,10 +156,14 @@ pub fn decompress_with_raw_dictionary(
 #[cfg(feature = "alloc")]
 pub fn decompress_with_raw_dictionary_and_limit(
     input: &[u8],
-    dictionary: &[u8],
+    dictionary: &decode::RawDictionary,
     max_output_size: usize,
 ) -> Result<alloc::vec::Vec<u8>> {
-    burli_decode::decompress_with_raw_dictionary_and_limit(input, dictionary, max_output_size)
+    decompress_with_raw_dictionary_and_options(
+        input,
+        dictionary,
+        &decode::Options::new().max_output_size(max_output_size),
+    )
 }
 
 /// Decompress `input` and append bytes to `output`.

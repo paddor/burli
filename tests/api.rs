@@ -128,6 +128,17 @@ fn decode_into_slice_writes_existing_buffer() {
 }
 
 #[test]
+fn raw_dictionary_owns_and_exposes_bytes() {
+    let dictionary = burli::decode::RawDictionary::from_vec(b"prefix bytes".to_vec());
+
+    assert_eq!(dictionary.len(), 12);
+    assert_eq!(dictionary.as_bytes(), b"prefix bytes");
+    assert_eq!(dictionary.as_ref(), b"prefix bytes");
+    assert!(!dictionary.is_empty());
+    assert!(burli::decode::RawDictionary::empty().is_empty());
+}
+
+#[test]
 fn decode_options_limit_output_without_mutating_vec() {
     let input = b"too large";
     let encoded = burli::compress(input, 0).unwrap();

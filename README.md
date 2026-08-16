@@ -70,7 +70,8 @@ dec.read_to_end(&mut decoded)?;
 Raw LZ77 prefix dictionaries are decode-only for now:
 
 ```rust
-let original = burli::decompress_with_raw_dictionary(&compressed, dictionary)?;
+let dictionary = burli::decode::RawDictionary::new(bytes);
+let original = burli::decompress_with_raw_dictionary(&compressed, &dictionary)?;
 ```
 
 ## Safety
