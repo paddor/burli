@@ -45,7 +45,7 @@ BURLI_GOOGLE_BROTLI_FRAGMENTED_EXHAUSTIVE=1 \
 ## Releasing
 
 `release-plz` runs on every push to `main`
-(`.github/workflows/release-plz.yml`). It opens or updates a release PR,
+(`.github/workflows/release.yml`). It opens or updates a release PR,
 creates annotated tags after merge, publishes to crates.io, and creates
 GitHub releases. Configuration lives in `release-plz.toml`.
 
