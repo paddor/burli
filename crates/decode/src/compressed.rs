@@ -70,12 +70,35 @@ pub(crate) struct MetaBlockDecodeParams<'a> {
     pub(crate) raw_dictionary: RawDictionary<'a>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DistancePolicy {
+    Standard,
+    LocalOnly,
+}
+
 pub(crate) fn decode_meta_block_with_base(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
     params: MetaBlockDecodeParams<'_>,
     distances: &mut DistanceRing,
 ) -> Result<(), DecompressError> {
+    decode_meta_block_with_base_and_policy(
+        reader,
+        output,
+        params,
+        distances,
+        DistancePolicy::Standard,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn decode_meta_block_with_base_and_policy(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    params: MetaBlockDecodeParams<'_>,
+    distances: &mut DistanceRing,
+    distance_policy: DistancePolicy,
+) -> Result<bool, DecompressError> {
     let start = output.len();
     let needed = start
         .checked_add(params.len)
@@ -102,6 +125,11 @@ pub(crate) fn decode_meta_block_with_base(
         header.distance_tree_count(),
         header.distance_alphabet_size,
     )?;
+    if distance_policy == DistancePolicy::LocalOnly && literal_codes.len() != 1 {
+        return Err(BurliError::Format(
+            "concat fragment uses literal context state",
+        ));
+    }
     let window_size = (1_usize << params.window_bits) - 16;
     decode_meta_block_body(
         reader,
@@ -115,6 +143,7 @@ pub(crate) fn decode_meta_block_with_base(
         &distance_codes,
         distances,
         params.raw_dictionary,
+        distance_policy,
     )
 }
 
@@ -132,7 +161,8 @@ fn decode_meta_block_body(
     distance_codes: &[PrefixCode],
     distances: &mut DistanceRing,
     raw_dictionary: RawDictionary<'_>,
-) -> Result<(), DecompressError> {
+    distance_policy: DistancePolicy,
+) -> Result<bool, DecompressError> {
     let single_command_block = header.commands.types() == 1;
     let single_distance_block = header.distances.types() == 1;
     let single_distance_tree = distance_codes.len() == 1;
@@ -164,6 +194,7 @@ fn decode_meta_block_body(
         uniform_context_mode: uniform_literal_context_mode(header),
     };
     let no_postfix_distances = header.npostfix == 0 && header.ndirect == 0;
+    let mut has_copy = false;
 
     while output.len() < needed {
         let command_block_type = if single_command_block {
@@ -207,6 +238,13 @@ fn decode_meta_block_body(
             return Err(BurliError::Format("Brotli command exceeds meta-block size"));
         }
 
+        has_copy = true;
+        if distance_policy == DistancePolicy::LocalOnly && command.reuse_last_distance {
+            return Err(BurliError::Format(
+                "concat fragment uses distance-ring state",
+            ));
+        }
+
         let distance_symbol = if command.reuse_last_distance {
             0
         } else {
@@ -229,6 +267,11 @@ fn decode_meta_block_body(
                 distance_codes_all_non_single,
             )? as usize
         };
+        if distance_policy == DistancePolicy::LocalOnly && distance_symbol < 16 {
+            return Err(BurliError::Format(
+                "concat fragment uses short distance code",
+            ));
+        }
         let distance = if no_postfix_distances {
             read_distance_no_postfix_with_ring(reader, distance_symbol, distances)?
         } else {
@@ -252,10 +295,11 @@ fn decode_meta_block_body(
             },
             distances,
             raw_dictionary,
+            distance_policy,
         )?;
     }
 
-    Ok(())
+    Ok(has_copy)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -279,6 +323,7 @@ fn copy_from_distance(
     request: CopyRequest,
     distances: &mut DistanceRing,
     raw_dictionary: RawDictionary<'_>,
+    distance_policy: DistancePolicy,
 ) -> Result<(), DecompressError> {
     let produced = output.len();
     let global_produced = request
@@ -286,6 +331,13 @@ fn copy_from_distance(
         .checked_add(produced)
         .ok_or(BurliError::Format("Brotli output length overflow"))?;
     let max_allowed_distance = request.window_size.min(global_produced);
+    if distance_policy == DistancePolicy::LocalOnly
+        && (request.distance == 0 || request.distance > produced)
+    {
+        return Err(BurliError::Format(
+            "concat fragment uses non-local backward distance",
+        ));
+    }
     let mut static_dictionary_distance_base = max_allowed_distance;
     if !raw_dictionary.is_empty() {
         let raw_dictionary_distance_end = max_allowed_distance
@@ -1478,6 +1530,7 @@ mod tests {
             },
             &mut distances,
             RawDictionary::empty(),
+            DistancePolicy::Standard,
         )
         .unwrap();
 
@@ -1502,6 +1555,7 @@ mod tests {
             },
             &mut distances,
             RawDictionary::empty(),
+            DistancePolicy::Standard,
         )
         .unwrap();
 
@@ -1527,6 +1581,7 @@ mod tests {
             },
             &mut distances,
             RawDictionary::empty(),
+            DistancePolicy::Standard,
         )
         .unwrap();
 
@@ -1552,6 +1607,7 @@ mod tests {
             },
             &mut distances,
             RawDictionary::empty(),
+            DistancePolicy::Standard,
         )
         .unwrap();
 
@@ -1605,6 +1661,7 @@ mod tests {
             },
             &mut distances,
             RawDictionary::empty(),
+            DistancePolicy::Standard,
         )
         .unwrap();
 

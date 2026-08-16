@@ -50,6 +50,22 @@ pub fn decompress_with_limit(
     stored::decompress_with_limit(input, max_output_size)
 }
 
+#[doc(hidden)]
+#[cfg(feature = "alloc")]
+pub fn decompress_concat_payload_with_limit(
+    input: &[u8],
+    payload_bit_len: usize,
+    window_bits: u8,
+    max_output_size: usize,
+) -> Result<(alloc::vec::Vec<u8>, bool), DecompressError> {
+    stored::decompress_concat_payload_with_limit(
+        input,
+        payload_bit_len,
+        window_bits,
+        max_output_size,
+    )
+}
+
 /// Decompress a complete Brotli stream with a raw LZ77 prefix dictionary.
 ///
 /// The dictionary must match the dictionary used by the encoder. This does not

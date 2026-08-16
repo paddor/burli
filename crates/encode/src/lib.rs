@@ -90,3 +90,38 @@ pub fn compress_into_slice(
     output[..compressed.len()].copy_from_slice(&compressed);
     Ok(compressed.len())
 }
+
+#[doc(hidden)]
+#[cfg(feature = "alloc")]
+pub fn encode_literal_fragment_with_options(
+    input: &[u8],
+    options: &Options,
+) -> Result<(alloc::vec::Vec<u8>, usize), CompressError> {
+    encode::encode_literal_fragment_with_options(input, options)
+}
+
+#[doc(hidden)]
+#[cfg(feature = "alloc")]
+pub fn encode_concat_fragment_with_options(
+    input: &[u8],
+    options: &Options,
+) -> Result<(alloc::vec::Vec<u8>, usize, bool), CompressError> {
+    encode::encode_concat_fragment_with_options(input, options)
+}
+
+#[doc(hidden)]
+#[cfg(feature = "alloc")]
+pub fn write_concat_stream_header(
+    writer: &mut burli_core::bits::BitWriter,
+    options: &Options,
+) -> Result<(), CompressError> {
+    encode::write_stream_header_to_writer(writer, options)
+}
+
+#[doc(hidden)]
+#[cfg(feature = "alloc")]
+pub fn write_concat_stream_trailer(
+    writer: &mut burli_core::bits::BitWriter,
+) -> Result<(), CompressError> {
+    encode::write_last_empty_meta_block_to_writer(writer)
+}
