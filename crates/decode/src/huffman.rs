@@ -408,7 +408,7 @@ fn read_complex_prefix_code(
     alphabet_size: usize,
     hskip: u8,
 ) -> Result<PrefixCode, DecompressError> {
-    if hskip == 1 || hskip > 3 {
+    if hskip > 3 {
         return Err(BurliError::Format("invalid Brotli Huffman hskip"));
     }
 
