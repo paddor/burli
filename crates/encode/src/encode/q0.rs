@@ -241,8 +241,8 @@ fn append_literal_bits(
     literals: &[u8],
     literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
 ) {
-    let mut pairs = literals.chunks_exact(2);
-    for pair in &mut pairs {
+    let (pairs, remainder) = literals.as_chunks::<2>();
+    for pair in pairs {
         let first = literal_code_map[usize::from(pair[0])];
         let second = literal_code_map[usize::from(pair[1])];
         debug_assert!(first.len != u8::MAX);
@@ -252,7 +252,8 @@ fn append_literal_bits(
         append_pending_bits(writer, pending_bits, pending_width, width, bits);
     }
 
-    if let &[literal] = pairs.remainder() {
+    if remainder.len() == 1 {
+        let literal = remainder[0];
         let literal_code = literal_code_map[usize::from(literal)];
         debug_assert!(literal_code.len != u8::MAX);
         append_pending_bits(

@@ -835,9 +835,9 @@ mod tests {
 
     #[test]
     fn uppercase_one_handles_complete_words() {
-        let mut ascii = [b'a'];
+        let mut ascii = *b"a";
         assert_eq!(uppercase_one(&mut ascii), Some(1));
-        assert_eq!(ascii, [b'A']);
+        assert_eq!(ascii, *b"A");
 
         let mut two_byte = [0xc3, 0xa0];
         assert_eq!(uppercase_one(&mut two_byte), Some(2));
