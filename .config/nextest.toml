@@ -17,9 +17,9 @@ inherits = "conformance"
 slow-timeout = { period = "30m", terminate-after = 6, grace-period = "10s" }
 
 [[profile.conformance.overrides]]
-filter = 'binary(google_conformance) or binary(c_brotli)'
+filter = 'binary(=burli-google-conformance) or binary(=burli-c-brotli)'
 threads-required = "num-test-threads"
 
 [[profile.soak.overrides]]
-filter = 'binary(google_conformance) or binary(c_brotli)'
+filter = 'binary(=burli-google-conformance) or binary(=burli-c-brotli)'
 threads-required = "num-test-threads"

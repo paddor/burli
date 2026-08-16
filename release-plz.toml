@@ -1,3 +1,10 @@
 [workspace]
 changelog_update = false
 git_tag_name = "{{ package }}-v{{ version }}"
+release_always = false
+
+[[package]]
+name = "burli-cat"
+# New crates cannot be first-published through crates.io trusted publishing.
+# Publish this crate manually once, then remove this override.
+publish = false

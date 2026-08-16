@@ -2,6 +2,8 @@ use alloc::vec::Vec;
 
 use burli_core::{DecompressError, format::DEFAULT_MAX_OUTPUT_SIZE};
 
+use crate::{Options, RawDictionary};
+
 #[derive(Clone, Debug)]
 /// Reusable one-shot Brotli decompressor.
 ///
@@ -10,7 +12,7 @@ use burli_core::{DecompressError, format::DEFAULT_MAX_OUTPUT_SIZE};
 /// [`decompress_into_slice`](Self::decompress_into_slice) calls.
 pub struct Decompressor {
     max_output_size: usize,
-    raw_dictionary: Vec<u8>,
+    raw_dictionary: RawDictionary,
     scratch: Vec<u8>,
 }
 
@@ -19,37 +21,66 @@ impl Decompressor {
     pub const fn new() -> Self {
         Self {
             max_output_size: DEFAULT_MAX_OUTPUT_SIZE,
-            raw_dictionary: Vec::new(),
+            raw_dictionary: RawDictionary::empty(),
+            scratch: Vec::new(),
+        }
+    }
+
+    /// Create a decompressor with explicit [`Options`].
+    pub fn with_options(options: &Options) -> Self {
+        Self {
+            max_output_size: options.max_output_size_value(),
+            raw_dictionary: RawDictionary::empty(),
             scratch: Vec::new(),
         }
     }
 
     /// Create a decompressor with a hard output limit.
     pub fn with_limit(max_output_size: usize) -> Self {
-        Self {
-            max_output_size,
-            raw_dictionary: Vec::new(),
-            scratch: Vec::new(),
-        }
+        Self::with_options(&Options::new().max_output_size(max_output_size))
     }
 
     /// Create a decompressor with a raw LZ77 prefix dictionary.
-    pub fn with_raw_dictionary(dictionary: &[u8]) -> Self {
-        Self {
-            max_output_size: DEFAULT_MAX_OUTPUT_SIZE,
-            raw_dictionary: dictionary.to_vec(),
-            scratch: Vec::new(),
-        }
+    pub fn with_raw_dictionary(dictionary: RawDictionary) -> Self {
+        Self::with_raw_dictionary_and_options(dictionary, &Options::new())
     }
 
     /// Create a decompressor with a raw LZ77 prefix dictionary and hard output
     /// limit.
-    pub fn with_raw_dictionary_and_limit(dictionary: &[u8], max_output_size: usize) -> Self {
+    pub fn with_raw_dictionary_and_limit(
+        dictionary: RawDictionary,
+        max_output_size: usize,
+    ) -> Self {
+        Self::with_raw_dictionary_and_options(
+            dictionary,
+            &Options::new().max_output_size(max_output_size),
+        )
+    }
+
+    /// Create a decompressor with a raw LZ77 prefix dictionary and explicit
+    /// [`Options`].
+    pub fn with_raw_dictionary_and_options(dictionary: RawDictionary, options: &Options) -> Self {
         Self {
-            max_output_size,
-            raw_dictionary: dictionary.to_vec(),
+            max_output_size: options.max_output_size_value(),
+            raw_dictionary: dictionary,
             scratch: Vec::new(),
         }
+    }
+
+    /// Return current decode options.
+    pub fn options(&self) -> Options {
+        Options::new().max_output_size(self.max_output_size)
+    }
+
+    /// Replace decode options without releasing reusable buffers or changing
+    /// the dictionary.
+    pub fn reset_options(&mut self, options: &Options) {
+        self.max_output_size = options.max_output_size_value();
+    }
+
+    /// Return the configured raw LZ77 prefix dictionary.
+    pub const fn raw_dictionary(&self) -> &RawDictionary {
+        &self.raw_dictionary
     }
 
     /// Return the configured maximum output size.
@@ -63,14 +94,13 @@ impl Decompressor {
     }
 
     /// Replace the raw LZ77 prefix dictionary.
-    pub fn set_raw_dictionary(&mut self, dictionary: &[u8]) {
-        self.raw_dictionary.clear();
-        self.raw_dictionary.extend_from_slice(dictionary);
+    pub fn set_raw_dictionary(&mut self, dictionary: &RawDictionary) {
+        self.raw_dictionary = dictionary.clone();
     }
 
     /// Remove the raw LZ77 prefix dictionary.
     pub fn clear_raw_dictionary(&mut self) {
-        self.raw_dictionary.clear();
+        self.raw_dictionary = RawDictionary::empty();
     }
 
     /// Decompress `input` into a new `Vec`.
@@ -81,7 +111,7 @@ impl Decompressor {
     pub fn decompress(&mut self, input: &[u8]) -> Result<Vec<u8>, DecompressError> {
         crate::stored::decompress_with_raw_dictionary_and_limit(
             input,
-            crate::dictionary::RawDictionary::new(&self.raw_dictionary),
+            crate::dictionary::RawDictionary::new(self.raw_dictionary.as_bytes()),
             self.max_output_size,
         )
     }
@@ -105,7 +135,7 @@ impl Decompressor {
             input,
             self.max_output_size,
             &mut self.scratch,
-            crate::dictionary::RawDictionary::new(&self.raw_dictionary),
+            crate::dictionary::RawDictionary::new(self.raw_dictionary.as_bytes()),
         )?;
         output.extend_from_slice(&self.scratch);
         Ok(output.len() - before)
@@ -131,7 +161,7 @@ impl Decompressor {
             input,
             limit,
             &mut self.scratch,
-            crate::dictionary::RawDictionary::new(&self.raw_dictionary),
+            crate::dictionary::RawDictionary::new(self.raw_dictionary.as_bytes()),
         )?;
         output[..self.scratch.len()].copy_from_slice(&self.scratch);
         Ok(self.scratch.len())
@@ -157,6 +187,13 @@ impl DecompressContext {
         }
     }
 
+    /// Create a context with explicit [`Options`].
+    pub fn with_options(options: &Options) -> Self {
+        Self {
+            inner: Decompressor::with_options(options),
+        }
+    }
+
     /// Create a context with a hard output limit.
     pub fn with_limit(max_output_size: usize) -> Self {
         Self {
@@ -165,7 +202,7 @@ impl DecompressContext {
     }
 
     /// Create a context with a raw LZ77 prefix dictionary.
-    pub fn with_raw_dictionary(dictionary: &[u8]) -> Self {
+    pub fn with_raw_dictionary(dictionary: RawDictionary) -> Self {
         Self {
             inner: Decompressor::with_raw_dictionary(dictionary),
         }
@@ -173,10 +210,37 @@ impl DecompressContext {
 
     /// Create a context with a raw LZ77 prefix dictionary and hard output
     /// limit.
-    pub fn with_raw_dictionary_and_limit(dictionary: &[u8], max_output_size: usize) -> Self {
+    pub fn with_raw_dictionary_and_limit(
+        dictionary: RawDictionary,
+        max_output_size: usize,
+    ) -> Self {
         Self {
             inner: Decompressor::with_raw_dictionary_and_limit(dictionary, max_output_size),
         }
+    }
+
+    /// Create a context with a raw LZ77 prefix dictionary and explicit
+    /// [`Options`].
+    pub fn with_raw_dictionary_and_options(dictionary: RawDictionary, options: &Options) -> Self {
+        Self {
+            inner: Decompressor::with_raw_dictionary_and_options(dictionary, options),
+        }
+    }
+
+    /// Return current decode options.
+    pub fn options(&self) -> Options {
+        self.inner.options()
+    }
+
+    /// Replace decode options without releasing reusable buffers or changing
+    /// the dictionary.
+    pub fn reset_options(&mut self, options: &Options) {
+        self.inner.reset_options(options);
+    }
+
+    /// Return the configured raw LZ77 prefix dictionary.
+    pub const fn raw_dictionary(&self) -> &RawDictionary {
+        self.inner.raw_dictionary()
     }
 
     /// Return the configured maximum output size.
@@ -190,7 +254,7 @@ impl DecompressContext {
     }
 
     /// Replace the raw LZ77 prefix dictionary.
-    pub fn set_raw_dictionary(&mut self, dictionary: &[u8]) {
+    pub fn set_raw_dictionary(&mut self, dictionary: &RawDictionary) {
         self.inner.set_raw_dictionary(dictionary);
     }
 

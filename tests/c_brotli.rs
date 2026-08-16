@@ -168,6 +168,7 @@ fn c_brotli_raw_dictionary_decodes_through_burli() {
     let dictionary =
         b"raw-dictionary-entry:function renderTemplate(item){return item.label + item.value;}|"
             .repeat(1024);
+    let raw_dictionary = burli::decode::RawDictionary::new(&dictionary);
     let input = dictionary[128..dictionary.len() - 128].to_vec();
     let encoded = c_brotli_compress_with_raw_dictionary(&input, &dictionary, 11);
 
@@ -182,29 +183,41 @@ fn c_brotli_raw_dictionary_decodes_through_burli() {
         "dictionary-backed stream decoded without raw dictionary"
     );
     assert_eq!(
-        burli::decompress_with_raw_dictionary(&encoded, &dictionary).unwrap(),
+        burli::decompress_with_raw_dictionary(&encoded, &raw_dictionary).unwrap(),
         input
     );
     assert_eq!(
-        burli::decompress_with_raw_dictionary_and_limit(&encoded, &dictionary, input.len())
+        burli::decompress_with_raw_dictionary_and_limit(&encoded, &raw_dictionary, input.len())
+            .unwrap(),
+        input
+    );
+    let options = burli::decode::Options::new().max_output_size(input.len());
+    assert_eq!(
+        burli::decompress_with_raw_dictionary_and_options(&encoded, &raw_dictionary, &options)
             .unwrap(),
         input
     );
     assert_eq!(
-        burli::decompress_with_raw_dictionary_and_limit(&encoded, &dictionary, input.len() - 1),
+        burli::decompress_with_raw_dictionary_and_limit(&encoded, &raw_dictionary, input.len() - 1),
         Err(burli::BurliError::OutputLimitExceeded {
             limit: input.len() - 1,
             needed: input.len(),
         })
     );
 
-    let mut decompressor = burli::Decompressor::new();
-    assert!(decompressor.decompress(&encoded).is_err());
-    decompressor.set_raw_dictionary(&dictionary);
+    let mut decompressor =
+        burli::Decompressor::with_raw_dictionary_and_options(raw_dictionary.clone(), &options);
     assert_eq!(decompressor.decompress(&encoded).unwrap(), input);
     decompressor.clear_raw_dictionary();
     assert!(decompressor.decompress(&encoded).is_err());
-    decompressor.set_raw_dictionary(&dictionary);
+    decompressor.set_raw_dictionary(&raw_dictionary);
+    assert_eq!(decompressor.decompress(&encoded).unwrap(), input);
+    decompressor.clear_raw_dictionary();
+    assert!(decompressor.decompress(&encoded).is_err());
+    decompressor.set_raw_dictionary(&raw_dictionary);
+    decompressor.reset_options(&options);
+    assert_eq!(decompressor.options(), options);
+    assert_eq!(decompressor.raw_dictionary(), &raw_dictionary);
 
     let mut appended = b"decoded:".to_vec();
     let written = decompressor
@@ -224,13 +237,14 @@ fn c_brotli_raw_dictionary_decodes_through_burli() {
         .expect("C Brotli failed to decode its raw-dictionary stream");
     assert_eq!(decoded_by_c, input);
 
-    let mut stream = burli::StreamDecoder::with_raw_dictionary(encoded.as_slice(), &dictionary);
+    let mut stream =
+        burli::StreamDecoder::with_raw_dictionary(encoded.as_slice(), raw_dictionary.clone());
     let mut streamed = Vec::new();
     stream.read_to_end(&mut streamed).unwrap();
     assert_eq!(streamed, input);
 
     let mut limited =
-        burli::StreamDecoder::with_raw_dictionary_and_limit(encoded.as_slice(), &dictionary, 4);
+        burli::StreamDecoder::with_raw_dictionary_and_limit(encoded.as_slice(), raw_dictionary, 4);
     let mut streamed = Vec::new();
     assert_eq!(
         limited.read_to_end(&mut streamed).unwrap_err().kind(),
@@ -278,7 +292,9 @@ fn c_brotli_truncated_and_mutated_streams_match_or_error_without_panics() {
                         for mask in [0x01, 0x55, 0xff] {
                             let mut mutated = encoded.clone();
                             mutated[position] ^= mask;
-                            assert_matches_c_decoder_or_errors(&mutated, &input, &label);
+                            let mutation_label =
+                                format!("{label} mutation position={position} mask=0x{mask:02x}");
+                            assert_matches_c_decoder_or_errors(&mutated, &input, &mutation_label);
                         }
                     }
                 }
@@ -452,6 +468,14 @@ fn assert_matches_c_decoder_or_errors(encoded: &[u8], input: &[u8], label: &str)
 
     match c_decoded {
         Some(expected) => {
+            if is_strict_trailing_decode_error(&burli_decoded)
+                && is_strict_trailing_decode_error(&sliced)
+                && is_strict_trailing_decode_error(&stateful)
+                && stream_matches_expected_or_strict_trailing_error(&streamed, &expected)
+            {
+                return;
+            }
+
             let burli_decoded = burli_decoded.unwrap_or_else(|error| {
                 panic!("{label} mutated decode failed while C accepted it: {error:?}")
             });
@@ -492,6 +516,40 @@ fn assert_matches_c_decoder_or_errors(encoded: &[u8], input: &[u8], label: &str)
             );
         }
     }
+}
+
+fn is_strict_trailing_decode_error<T>(result: &Result<T, burli::BurliError>) -> bool {
+    result.as_ref().is_err_and(is_strict_trailing_burli_error)
+}
+
+fn is_strict_trailing_stream_error<T>(result: &io::Result<T>) -> bool {
+    let Err(error) = result else {
+        return false;
+    };
+    error.kind() == io::ErrorKind::InvalidData
+        && error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<burli::BurliError>())
+            .is_some_and(is_strict_trailing_burli_error)
+}
+
+fn stream_matches_expected_or_strict_trailing_error(
+    result: &io::Result<Vec<u8>>,
+    expected: &[u8],
+) -> bool {
+    match result {
+        Ok(decoded) => decoded == expected,
+        Err(_) => is_strict_trailing_stream_error(result),
+    }
+}
+
+fn is_strict_trailing_burli_error(error: &burli::BurliError) -> bool {
+    matches!(
+        error,
+        burli::BurliError::Format(
+            "trailing bytes after Brotli stream" | "non-zero trailing Brotli padding"
+        )
+    )
 }
 
 fn assert_stream_decodes(encoded: &[u8], expected: &[u8], label: &str, chunk: usize) {

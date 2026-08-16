@@ -19,9 +19,14 @@ pub use burli_core::{
 };
 
 #[doc(hidden)]
-pub use burli_decode as decode;
-#[doc(hidden)]
 pub use burli_encode as encode;
+
+/// Decode-specific API surface.
+pub mod decode {
+    pub use burli_decode::Options;
+    #[cfg(feature = "alloc")]
+    pub use burli_decode::RawDictionary;
+}
 
 /// Compress `input` at Brotli `quality`.
 ///
@@ -73,7 +78,7 @@ pub fn compress_into_slice(input: &[u8], output: &mut [u8], quality: u8) -> Resu
 
 /// Decompress a complete Brotli stream.
 ///
-/// Use [`decompress_with_limit`] for untrusted input with a hard output cap.
+/// Use [`decompress_with_options`] for untrusted input with a hard output cap.
 ///
 /// # Errors
 ///
@@ -84,6 +89,20 @@ pub fn decompress(input: &[u8]) -> Result<alloc::vec::Vec<u8>> {
     burli_decode::decompress(input)
 }
 
+/// Decompress a complete Brotli stream with explicit [`decode::Options`].
+///
+/// # Errors
+///
+/// Returns an error for malformed streams, unsupported large-window streams, or
+/// output-limit violations.
+#[cfg(feature = "alloc")]
+pub fn decompress_with_options(
+    input: &[u8],
+    options: &decode::Options,
+) -> Result<alloc::vec::Vec<u8>> {
+    burli_decode::decompress_with_options(input, options)
+}
+
 /// Decompress a complete Brotli stream with a maximum output size.
 ///
 /// # Errors
@@ -92,7 +111,10 @@ pub fn decompress(input: &[u8]) -> Result<alloc::vec::Vec<u8>> {
 /// exceed `max_output_size`.
 #[cfg(feature = "alloc")]
 pub fn decompress_with_limit(input: &[u8], max_output_size: usize) -> Result<alloc::vec::Vec<u8>> {
-    burli_decode::decompress_with_limit(input, max_output_size)
+    decompress_with_options(
+        input,
+        &decode::Options::new().max_output_size(max_output_size),
+    )
 }
 
 /// Decompress a complete Brotli stream with a raw LZ77 prefix dictionary.
@@ -103,9 +125,25 @@ pub fn decompress_with_limit(input: &[u8], max_output_size: usize) -> Result<all
 #[cfg(feature = "alloc")]
 pub fn decompress_with_raw_dictionary(
     input: &[u8],
-    dictionary: &[u8],
+    dictionary: &decode::RawDictionary,
 ) -> Result<alloc::vec::Vec<u8>> {
     burli_decode::decompress_with_raw_dictionary(input, dictionary)
+}
+
+/// Decompress a complete Brotli stream with a raw LZ77 prefix dictionary and
+/// explicit [`decode::Options`].
+///
+/// # Errors
+///
+/// Returns an error for malformed streams, unsupported large-window streams, or
+/// output-limit violations.
+#[cfg(feature = "alloc")]
+pub fn decompress_with_raw_dictionary_and_options(
+    input: &[u8],
+    dictionary: &decode::RawDictionary,
+    options: &decode::Options,
+) -> Result<alloc::vec::Vec<u8>> {
+    burli_decode::decompress_with_raw_dictionary_and_options(input, dictionary, options)
 }
 
 /// Decompress a complete Brotli stream with a raw LZ77 prefix dictionary and
@@ -118,10 +156,14 @@ pub fn decompress_with_raw_dictionary(
 #[cfg(feature = "alloc")]
 pub fn decompress_with_raw_dictionary_and_limit(
     input: &[u8],
-    dictionary: &[u8],
+    dictionary: &decode::RawDictionary,
     max_output_size: usize,
 ) -> Result<alloc::vec::Vec<u8>> {
-    burli_decode::decompress_with_raw_dictionary_and_limit(input, dictionary, max_output_size)
+    decompress_with_raw_dictionary_and_options(
+        input,
+        dictionary,
+        &decode::Options::new().max_output_size(max_output_size),
+    )
 }
 
 /// Decompress `input` and append bytes to `output`.
@@ -134,7 +176,25 @@ pub fn decompress_with_raw_dictionary_and_limit(
 /// Returns an error for malformed streams or output-limit violations.
 #[cfg(feature = "alloc")]
 pub fn decompress_into(input: &[u8], output: &mut alloc::vec::Vec<u8>) -> Result<usize> {
-    burli_decode::decompress_into(input, output)
+    decompress_into_with_options(input, output, &decode::Options::new())
+}
+
+/// Decompress `input` and append bytes to `output` with explicit
+/// [`decode::Options`].
+///
+/// Returns the number of bytes appended. The caller buffer is not modified when
+/// decoding fails.
+///
+/// # Errors
+///
+/// Returns an error for malformed streams or output-limit violations.
+#[cfg(feature = "alloc")]
+pub fn decompress_into_with_options(
+    input: &[u8],
+    output: &mut alloc::vec::Vec<u8>,
+    options: &decode::Options,
+) -> Result<usize> {
+    burli_decode::decompress_into_with_options(input, output, options)
 }
 
 /// Decompress `input` into a caller-provided slice.
@@ -147,7 +207,26 @@ pub fn decompress_into(input: &[u8], output: &mut alloc::vec::Vec<u8>) -> Result
 /// Returns [`BurliError::OutputLimitExceeded`] if `output` is too small.
 #[cfg(feature = "alloc")]
 pub fn decompress_into_slice(input: &[u8], output: &mut [u8]) -> Result<usize> {
-    burli_decode::decompress_into_slice(input, output)
+    decompress_into_slice_with_options(input, output, &decode::Options::new())
+}
+
+/// Decompress `input` into a caller-provided slice with explicit
+/// [`decode::Options`].
+///
+/// Returns the number of bytes written. The slice is not partially written on
+/// size errors.
+///
+/// # Errors
+///
+/// Returns [`BurliError::OutputLimitExceeded`] if `output` is too small or if
+/// the configured output limit is exceeded.
+#[cfg(feature = "alloc")]
+pub fn decompress_into_slice_with_options(
+    input: &[u8],
+    output: &mut [u8],
+    options: &decode::Options,
+) -> Result<usize> {
+    burli_decode::decompress_into_slice_with_options(input, output, options)
 }
 
 #[cfg(feature = "alloc")]

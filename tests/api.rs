@@ -128,6 +128,62 @@ fn decode_into_slice_writes_existing_buffer() {
 }
 
 #[test]
+fn raw_dictionary_owns_and_exposes_bytes() {
+    let dictionary = burli::decode::RawDictionary::from_vec(b"prefix bytes".to_vec());
+
+    assert_eq!(dictionary.len(), 12);
+    assert_eq!(dictionary.as_bytes(), b"prefix bytes");
+    assert_eq!(dictionary.as_ref(), b"prefix bytes");
+    assert!(!dictionary.is_empty());
+    assert!(burli::decode::RawDictionary::empty().is_empty());
+}
+
+#[test]
+fn decode_options_limit_output_without_mutating_vec() {
+    let input = b"too large";
+    let encoded = burli::compress(input, 0).unwrap();
+    let options = burli::decode::Options::new().max_output_size(4);
+    let mut decoded = b"prefix".to_vec();
+
+    assert_eq!(
+        burli::decompress_with_options(&encoded, &options),
+        Err(BurliError::OutputLimitExceeded {
+            limit: 4,
+            needed: input.len()
+        })
+    );
+    assert_eq!(
+        burli::decompress_into_with_options(&encoded, &mut decoded, &options),
+        Err(BurliError::OutputLimitExceeded {
+            limit: 4,
+            needed: input.len()
+        })
+    );
+    assert_eq!(decoded, b"prefix");
+}
+
+#[test]
+fn stateful_decode_options_limit_output() {
+    let input = b"too large";
+    let encoded = burli::compress(input, 0).unwrap();
+    let options = burli::decode::Options::new().max_output_size(4);
+    let mut decompressor = burli::Decompressor::with_options(&options);
+
+    assert_eq!(decompressor.options(), options);
+    assert_eq!(
+        decompressor.decompress(&encoded),
+        Err(BurliError::OutputLimitExceeded {
+            limit: 4,
+            needed: input.len()
+        })
+    );
+
+    let options = burli::decode::Options::new();
+    decompressor.reset_options(&options);
+    assert_eq!(decompressor.decompress(&encoded).unwrap(), input);
+}
+
+#[test]
 fn stateful_decode_into_slice_respects_buffer_size() {
     let input = b"too large";
     let encoded = burli::compress(input, 0).unwrap();
@@ -181,6 +237,20 @@ fn stream_decoder_with_limit_reports_invalid_data() {
     let mut decoder = burli::StreamDecoder::with_limit(encoded.as_slice(), 4);
     let mut decoded = Vec::new();
 
+    let error = decoder.read_to_end(&mut decoded).unwrap_err();
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
+#[cfg(feature = "std")]
+fn stream_decoder_with_options_reports_invalid_data() {
+    let encoded = burli::compress(b"too large", 0).unwrap();
+    let options = burli::decode::Options::new().max_output_size(4);
+    let mut decoder = burli::StreamDecoder::with_options(encoded.as_slice(), &options);
+    let mut decoded = Vec::new();
+
+    assert_eq!(decoder.options(), options);
     let error = decoder.read_to_end(&mut decoded).unwrap_err();
 
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);

@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use crate::{
-    compressed::{DistanceRing, MetaBlockDecodeParams},
+    compressed::{DistancePolicy, DistanceRing, MetaBlockDecodeParams},
     dictionary::RawDictionary,
 };
 use burli_core::{
@@ -20,11 +20,98 @@ pub(crate) enum MetaBlockHeader {
     Compressed { len: usize, is_last: bool },
 }
 
+#[cfg(any(test, kani))]
 pub fn decompress_with_limit(
     input: &[u8],
     max_output_size: usize,
 ) -> Result<Vec<u8>, DecompressError> {
     decompress_with_raw_dictionary_and_limit(input, RawDictionary::empty(), max_output_size)
+}
+
+pub(crate) fn decompress_concat_payload_with_limit(
+    input: &[u8],
+    payload_bit_len: usize,
+    window_bits: u8,
+    max_output_size: usize,
+) -> Result<(Vec<u8>, bool), DecompressError> {
+    if payload_bit_len > input.len().saturating_mul(8) {
+        return Err(BurliError::Format(
+            "concat fragment bit length exceeds payload",
+        ));
+    }
+    let padding_reader = BitReader::with_bit_pos(input, payload_bit_len)?;
+    if !padding_reader.remaining_bits_are_zero() {
+        return Err(BurliError::Format("non-zero concat fragment padding"));
+    }
+
+    let mut output = if max_output_size <= MAX_META_BLOCK_SIZE {
+        Vec::with_capacity(max_output_size)
+    } else {
+        Vec::new()
+    };
+    let mut reader = BitReader::new(input);
+    let mut distances = DistanceRing::new();
+    let mut has_copy = false;
+
+    while reader.consumed_bits() < payload_bit_len {
+        match read_meta_block_header(&mut reader)? {
+            MetaBlockHeader::LastEmpty => {
+                return Err(BurliError::Format(
+                    "concat fragment contains stream trailer",
+                ));
+            }
+            MetaBlockHeader::Metadata { .. } => {
+                return Err(BurliError::Format(
+                    "concat fragment contains metadata block",
+                ));
+            }
+            MetaBlockHeader::Uncompressed { len } => {
+                let needed = output
+                    .len()
+                    .checked_add(len)
+                    .ok_or(BurliError::Format("Brotli output length overflow"))?;
+                if needed > max_output_size {
+                    return Err(BurliError::OutputLimitExceeded {
+                        limit: max_output_size,
+                        needed,
+                    });
+                }
+                output.reserve(len);
+
+                reader.read_zero_padding_to_byte()?;
+                let bytes = reader.read_aligned_bytes(len)?;
+                output.extend_from_slice(bytes);
+            }
+            MetaBlockHeader::Compressed { len, is_last } => {
+                if is_last {
+                    return Err(BurliError::Format(
+                        "concat fragment contains final meta-block",
+                    ));
+                }
+                has_copy |= crate::compressed::decode_meta_block_with_base_and_policy(
+                    &mut reader,
+                    &mut output,
+                    MetaBlockDecodeParams {
+                        output_base: 0,
+                        len,
+                        max_output_size,
+                        window_bits,
+                        raw_dictionary: RawDictionary::empty(),
+                    },
+                    &mut distances,
+                    DistancePolicy::LocalOnly,
+                )?;
+            }
+        }
+        if reader.consumed_bits() > payload_bit_len {
+            return Err(BurliError::Format("concat fragment payload overread"));
+        }
+    }
+
+    if reader.consumed_bits() != payload_bit_len {
+        return Err(BurliError::Format("concat fragment payload underread"));
+    }
+    Ok((output, has_copy))
 }
 
 pub(crate) fn decompress_with_raw_dictionary_and_limit(
