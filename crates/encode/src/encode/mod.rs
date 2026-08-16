@@ -3523,12 +3523,10 @@ fn reverse_bits(value: u8, width: u8) -> u8 {
 }
 
 fn reverse_bits_u16(value: u16, width: u8) -> u16 {
-    let mut reversed = 0;
-    for bit in 0..width {
-        reversed <<= 1;
-        reversed |= (value >> bit) & 1;
+    if width == 0 {
+        return 0;
     }
-    reversed
+    value.reverse_bits() >> (16 - width)
 }
 
 fn write_simple_prefix_code_single(
