@@ -42,6 +42,26 @@ BURLI_GOOGLE_BROTLI_FRAGMENTED_EXHAUSTIVE=1 \
   --run-ignored ignored-only
 ```
 
+## Releasing
+
+`release-plz` runs on every push to `main`
+(`.github/workflows/release-plz.yml`). It opens or updates a release PR,
+creates annotated tags after merge, publishes to crates.io, and creates
+GitHub releases. Configuration lives in `release-plz.toml`.
+
+Publishing uses crates.io trusted publishing through GitHub Actions OIDC. Do
+not add a crates.io token secret unless trusted publishing cannot be used.
+
+### Steps
+
+1. **Review the release-plz PR.** Verify semver bumps and crate order.
+
+2. **Run any needed release audit.** Use the Kani and fuzz commands below when
+   the release risk warrants an extended audit.
+
+3. **Merge the release PR.** release-plz tags and publishes to crates.io
+   automatically.
+
 ## Kani
 
 Requires Kani:
