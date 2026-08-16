@@ -160,6 +160,9 @@ The fixed header is the sidecar metadata. It travels with the payload in the
 serialized fragment. In memory, APIs may expose it as a `FragmentMetadata`
 struct.
 
+API implementations accept an `Options` object with resource limits. Those
+limits are not encoded in the fragment. They are local receiver policy.
+
 `first_len` and `last_len` are 0, 1, or 2. Unused bytes in `first_bytes` and
 `last_bytes` must be zero.
 
@@ -180,6 +183,7 @@ Assembler validation rejects:
 - unsupported format version;
 - mismatched `ConcatSpec`;
 - `large_window = true`;
+- configured decoded-size, payload-size, or assembled-size limits;
 - invalid `mode`, `dictionary_policy`, `block_bits_or_zero`, or reserved bytes;
 - unknown flags;
 - header checksum mismatch;

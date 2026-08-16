@@ -11,7 +11,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use burli_core::{
-    BurliError, Mode, Options, Quality, Result,
+    BurliError, Mode, Options as BrotliOptions, Quality, Result,
     bits::{BitReader, BitWriter},
     format::{MAX_BLOCK_BITS, MAX_WINDOW_BITS, MIN_BLOCK_BITS, MIN_WINDOW_BITS},
 };
@@ -29,6 +29,68 @@ const REQUIRED_FLAGS: u32 = FLAG_DICTIONARY_DISABLED | FLAG_PRIOR_STATE_INDEPEND
 const ALLOWED_FLAGS: u32 = REQUIRED_FLAGS | PAYLOAD_KIND_FLAGS;
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// Limits and validation behavior for concat APIs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct Options {
+    input_ceiling: usize,
+    payload_budget: usize,
+    assembled_cap: usize,
+}
+
+impl Options {
+    /// Build options with no explicit limits.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            input_ceiling: usize::MAX,
+            payload_budget: usize::MAX,
+            assembled_cap: usize::MAX,
+        }
+    }
+
+    /// Set maximum decoded bytes allowed for one fragment.
+    #[must_use]
+    pub const fn max_fragment_input_len(mut self, limit: usize) -> Self {
+        self.input_ceiling = limit;
+        self
+    }
+
+    /// Set maximum encoded payload bytes allowed for one fragment.
+    #[must_use]
+    pub const fn max_fragment_payload_len(mut self, limit: usize) -> Self {
+        self.payload_budget = limit;
+        self
+    }
+
+    /// Set maximum decoded bytes allowed across an assembled stream.
+    #[must_use]
+    pub const fn max_assembled_input_len(mut self, limit: usize) -> Self {
+        self.assembled_cap = limit;
+        self
+    }
+
+    /// Return maximum decoded bytes allowed for one fragment.
+    pub const fn max_fragment_input_len_value(&self) -> usize {
+        self.input_ceiling
+    }
+
+    /// Return maximum encoded payload bytes allowed for one fragment.
+    pub const fn max_fragment_payload_len_value(&self) -> usize {
+        self.payload_budget
+    }
+
+    /// Return maximum decoded bytes allowed across an assembled stream.
+    pub const fn max_assembled_input_len_value(&self) -> usize {
+        self.assembled_cap
+    }
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Dictionary policy for concat fragments.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
@@ -117,13 +179,13 @@ impl ConcatSpec {
         self.dictionary_policy
     }
 
-    fn options(&self) -> Result<Options> {
+    fn options(&self) -> Result<BrotliOptions> {
         if self.large_window {
             return Err(BurliError::Unsupported(
                 "large-window concat fragments are not implemented",
             ));
         }
-        let options = Options::default()
+        let options = BrotliOptions::default()
             .quality(self.quality.get())?
             .window_bits(self.window_bits)?
             .block_bits(self.block_bits)?
@@ -263,9 +325,14 @@ impl ConcatFragment {
     ///
     /// # Errors
     ///
-    /// Returns an error if metadata and payload disagree.
-    pub fn from_parts(metadata: FragmentMetadata, payload: Vec<u8>) -> Result<Self> {
-        validate_fragment_parts(&metadata, &payload)?;
+    /// Returns an error if metadata and payload disagree or configured limits
+    /// are exceeded.
+    pub fn from_parts(
+        metadata: FragmentMetadata,
+        payload: Vec<u8>,
+        options: &Options,
+    ) -> Result<Self> {
+        validate_fragment_parts(&metadata, &payload, options)?;
         Ok(Self { metadata, payload })
     }
 
@@ -273,9 +340,10 @@ impl ConcatFragment {
     ///
     /// # Errors
     ///
-    /// Returns an error if the fragment is internally invalid.
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        validate_fragment_parts(&self.metadata, &self.payload)?;
+    /// Returns an error if the fragment is internally invalid or configured
+    /// limits are exceeded.
+    pub fn to_bytes(&self, options: &Options) -> Result<Vec<u8>> {
+        validate_fragment_parts(&self.metadata, &self.payload, options)?;
         let mut out = Vec::with_capacity(HEADER_LEN + self.payload.len());
         let mut header = encode_header(&self.metadata)?;
         out.append(&mut header);
@@ -287,9 +355,9 @@ impl ConcatFragment {
     ///
     /// # Errors
     ///
-    /// Returns an error for malformed headers, checksum mismatch, or invalid
-    /// fragment payload.
-    pub fn from_bytes(input: &[u8]) -> Result<Self> {
+    /// Returns an error for malformed headers, checksum mismatch, invalid
+    /// fragment payload, or configured limits.
+    pub fn from_bytes(input: &[u8], options: &Options) -> Result<Self> {
         if input.len() < HEADER_LEN {
             return Err(BurliError::Format("concat fragment header truncated"));
         }
@@ -302,7 +370,8 @@ impl ConcatFragment {
                 "serialized concat fragment length mismatch",
             ));
         }
-        Self::from_parts(metadata, input[HEADER_LEN..].to_vec())
+        validate_fragment_metadata_limits(&metadata, options)?;
+        Self::from_parts(metadata, input[HEADER_LEN..].to_vec(), options)
     }
 }
 
@@ -310,12 +379,18 @@ impl ConcatFragment {
 ///
 /// # Errors
 ///
-/// Returns an error for unsupported encoder options.
+/// Returns an error for unsupported encoder options or configured limits.
 #[cfg(feature = "alloc")]
-pub fn encode_fragment(input: &[u8], spec: &ConcatSpec) -> Result<ConcatFragment> {
-    let options = spec.options()?;
+pub fn encode_fragment(
+    input: &[u8],
+    spec: &ConcatSpec,
+    options: &Options,
+) -> Result<ConcatFragment> {
+    validate_input_len_limit(input.len(), options.input_ceiling)?;
+    let brotli_options = spec.options()?;
     let (payload, payload_bit_len, has_copy) =
-        burli_encode::encode_concat_fragment_with_options(input, &options)?;
+        burli_encode::encode_concat_fragment_with_options(input, &brotli_options)?;
+    validate_payload_len_limit(payload.len(), options.payload_budget)?;
     let payload_kind = if has_copy {
         FLAG_LOCAL_BACKWARD_REFERENCES
     } else {
@@ -335,7 +410,7 @@ pub fn encode_fragment(input: &[u8], spec: &ConcatSpec) -> Result<ConcatFragment
         checksum: checksum64(&payload),
         flags: REQUIRED_FLAGS | payload_kind,
     };
-    validate_fragment_parts(&metadata, &payload)?;
+    validate_fragment_parts(&metadata, &payload, options)?;
     Ok(ConcatFragment { metadata, payload })
 }
 
@@ -344,6 +419,7 @@ pub fn encode_fragment(input: &[u8], spec: &ConcatSpec) -> Result<ConcatFragment
 #[derive(Clone, Debug)]
 pub struct ConcatAssembler {
     spec: ConcatSpec,
+    options: Options,
     fragments: Vec<ConcatFragment>,
 }
 
@@ -351,9 +427,10 @@ pub struct ConcatAssembler {
 impl ConcatAssembler {
     /// Create an assembler for a spec.
     #[must_use]
-    pub fn new(spec: &ConcatSpec) -> Self {
+    pub fn new(spec: &ConcatSpec, options: &Options) -> Self {
         Self {
             spec: spec.clone(),
+            options: *options,
             fragments: Vec::new(),
         }
     }
@@ -364,7 +441,14 @@ impl ConcatAssembler {
     ///
     /// Returns an error if the fragment does not match this assembler.
     pub fn push(&mut self, fragment: &ConcatFragment) -> Result<&mut Self> {
-        validate_fragment_for_spec(&self.spec, fragment)?;
+        validate_fragment_for_spec(&self.spec, fragment, &self.options)?;
+        validate_assembled_input_len(
+            self.fragments
+                .iter()
+                .map(|fragment| fragment.metadata.input_len)
+                .chain(core::iter::once(fragment.metadata.input_len)),
+            self.options.assembled_cap,
+        )?;
         self.fragments.push(fragment.clone());
         Ok(self)
     }
@@ -400,7 +484,7 @@ impl ConcatAssembler {
     ///
     /// Returns an error if validation or bit assembly fails.
     pub fn finish(&self, output: &mut Vec<u8>) -> Result<usize> {
-        assemble_fragments(&self.spec, &self.fragments, output)
+        assemble_fragments(&self.spec, &self.fragments, output, &self.options)
     }
 }
 
@@ -408,20 +492,26 @@ impl ConcatAssembler {
 ///
 /// # Errors
 ///
-/// Returns an error if any fragment is invalid or mismatched.
+/// Returns an error if any fragment is invalid, mismatched, or over a
+/// configured limit.
 #[cfg(feature = "alloc")]
 pub fn assemble_fragments(
     spec: &ConcatSpec,
     fragments: &[ConcatFragment],
     output: &mut Vec<u8>,
+    options: &Options,
 ) -> Result<usize> {
     for fragment in fragments {
-        validate_fragment_for_spec(spec, fragment)?;
+        validate_fragment_for_spec(spec, fragment, options)?;
     }
+    validate_assembled_input_len(
+        fragments.iter().map(|fragment| fragment.metadata.input_len),
+        options.assembled_cap,
+    )?;
 
-    let options = spec.options()?;
+    let brotli_options = spec.options()?;
     let mut writer = BitWriter::new();
-    burli_encode::write_concat_stream_header(&mut writer, &options)?;
+    burli_encode::write_concat_stream_header(&mut writer, &brotli_options)?;
     for fragment in fragments {
         write_payload_bits(
             &mut writer,
@@ -434,15 +524,23 @@ pub fn assemble_fragments(
 }
 
 #[cfg(feature = "alloc")]
-fn validate_fragment_for_spec(spec: &ConcatSpec, fragment: &ConcatFragment) -> Result<()> {
+fn validate_fragment_for_spec(
+    spec: &ConcatSpec,
+    fragment: &ConcatFragment,
+    concat_options: &Options,
+) -> Result<()> {
     if fragment.metadata.spec != *spec {
         return Err(BurliError::Format("concat fragment spec mismatch"));
     }
-    validate_fragment_parts(&fragment.metadata, &fragment.payload)
+    validate_fragment_parts(&fragment.metadata, &fragment.payload, concat_options)
 }
 
 #[cfg(feature = "alloc")]
-fn validate_fragment_parts(metadata: &FragmentMetadata, payload: &[u8]) -> Result<()> {
+fn validate_fragment_parts(
+    metadata: &FragmentMetadata,
+    payload: &[u8],
+    concat_options: &Options,
+) -> Result<()> {
     if metadata.version_major != VERSION_MAJOR {
         return Err(BurliError::Format("unsupported concat fragment version"));
     }
@@ -456,6 +554,7 @@ fn validate_fragment_parts(metadata: &FragmentMetadata, payload: &[u8]) -> Resul
             "concat fragment payload length mismatch",
         ));
     }
+    validate_fragment_metadata_limits(metadata, concat_options)?;
     if metadata.flags & !ALLOWED_FLAGS != 0 {
         return Err(BurliError::Format("concat fragment unknown flags set"));
     }
@@ -508,17 +607,21 @@ fn validate_fragment_parts(metadata: &FragmentMetadata, payload: &[u8]) -> Resul
     if metadata.flags & REQUIRED_FLAGS != REQUIRED_FLAGS {
         return Err(BurliError::Format("concat fragment required flags missing"));
     }
-    validate_decoded_summary(metadata, payload)?;
+    validate_decoded_summary(metadata, payload, concat_options)?;
     Ok(())
 }
 
 #[cfg(feature = "alloc")]
-fn validate_decoded_summary(metadata: &FragmentMetadata, payload: &[u8]) -> Result<()> {
+fn validate_decoded_summary(
+    metadata: &FragmentMetadata,
+    payload: &[u8],
+    concat_options: &Options,
+) -> Result<()> {
     let (decoded, has_copy) = burli_decode::decompress_concat_payload_with_limit(
         payload,
         metadata.payload_bit_len,
         metadata.spec.window_bits,
-        metadata.input_len,
+        concat_options.input_ceiling,
     )?;
     let expected_kind = if has_copy {
         FLAG_LOCAL_BACKWARD_REFERENCES
@@ -535,6 +638,43 @@ fn validate_decoded_summary(metadata: &FragmentMetadata, payload: &[u8]) -> Resu
     }
     if two_prefix(&decoded) != metadata.first_bytes || two_suffix(&decoded) != metadata.last_bytes {
         return Err(BurliError::Format("concat fragment byte summary mismatch"));
+    }
+    Ok(())
+}
+
+fn validate_fragment_metadata_limits(metadata: &FragmentMetadata, options: &Options) -> Result<()> {
+    validate_input_len_limit(metadata.input_len, options.input_ceiling)?;
+    validate_payload_len_limit(metadata.payload_len, options.payload_budget)
+}
+
+fn validate_input_len_limit(needed: usize, limit: usize) -> Result<()> {
+    if needed > limit {
+        return Err(BurliError::OutputLimitExceeded { limit, needed });
+    }
+    Ok(())
+}
+
+fn validate_payload_len_limit(needed: usize, limit: usize) -> Result<()> {
+    if needed > limit {
+        return Err(BurliError::Format(
+            "concat fragment payload length exceeds configured limit",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_assembled_input_len<I>(lengths: I, limit: usize) -> Result<()>
+where
+    I: IntoIterator<Item = usize>,
+{
+    let mut needed = 0_usize;
+    for len in lengths {
+        needed = needed
+            .checked_add(len)
+            .ok_or(BurliError::Format("concat assembled input length overflow"))?;
+        if needed > limit {
+            return Err(BurliError::OutputLimitExceeded { limit, needed });
+        }
     }
     Ok(())
 }
@@ -736,6 +876,7 @@ fn checksum64(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     #[cfg(feature = "std")]
     use std::io::Read;
 
@@ -751,10 +892,42 @@ mod tests {
         decoded
     }
 
+    fn metadata_for_payload(
+        payload: &[u8],
+        payload_bit_len: usize,
+        input_len: usize,
+        payload_kind: u32,
+    ) -> FragmentMetadata {
+        let (mut metadata, _) = encode_fragment(b"", &spec(1), &Options::new())
+            .unwrap()
+            .into_parts();
+        metadata.input_len = input_len;
+        metadata.payload_len = payload.len();
+        metadata.payload_bit_len = payload_bit_len;
+        metadata.first_bytes = [0; 2];
+        metadata.first_len = 0;
+        metadata.last_bytes = [0; 2];
+        metadata.last_len = 0;
+        metadata.checksum = checksum64(payload);
+        metadata.flags = REQUIRED_FLAGS | payload_kind;
+        metadata
+    }
+
+    fn serialized_with_header(metadata: &FragmentMetadata, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = encode_header(metadata).unwrap();
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    fn rewrite_header_checksum(bytes: &mut [u8]) {
+        let checksum = checksum64(&bytes[..64]).to_le_bytes();
+        bytes[64..72].copy_from_slice(&checksum);
+    }
+
     #[test]
     fn assembles_no_fragments_as_empty_brotli_stream() {
         let mut output = Vec::new();
-        assemble_fragments(&spec(0), &[], &mut output).unwrap();
+        assemble_fragments(&spec(0), &[], &mut output, &Options::new()).unwrap();
 
         assert_eq!(burli_decode::decompress(&output).unwrap(), b"");
         #[cfg(feature = "std")]
@@ -771,11 +944,11 @@ mod tests {
         ];
         let fragments = inputs
             .iter()
-            .map(|input| encode_fragment(input, &spec).unwrap())
+            .map(|input| encode_fragment(input, &spec, &Options::new()).unwrap())
             .collect::<Vec<_>>();
 
         let mut encoded = Vec::new();
-        ConcatAssembler::new(&spec)
+        ConcatAssembler::new(&spec, &Options::new())
             .push_all(&fragments)
             .unwrap()
             .finish(&mut encoded)
@@ -793,7 +966,7 @@ mod tests {
 
         for quality in 0..=5 {
             let spec = spec(quality);
-            let fragment = encode_fragment(&input, &spec).unwrap();
+            let fragment = encode_fragment(&input, &spec, &Options::new()).unwrap();
 
             assert_eq!(
                 fragment.metadata().flags() & PAYLOAD_KIND_FLAGS,
@@ -802,7 +975,7 @@ mod tests {
             assert!(fragment.payload().len() < input.len() / 4);
 
             let mut encoded = Vec::new();
-            assemble_fragments(&spec, &[fragment], &mut encoded).unwrap();
+            assemble_fragments(&spec, &[fragment], &mut encoded, &Options::new()).unwrap();
             assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
             #[cfg(feature = "std")]
             assert_eq!(decode_with_rust_brotli(&encoded), input);
@@ -811,7 +984,7 @@ mod tests {
 
     #[test]
     fn fragment_payload_is_not_standalone_brotli() {
-        let fragment = encode_fragment(b"not a stream", &spec(1)).unwrap();
+        let fragment = encode_fragment(b"not a stream", &spec(1), &Options::new()).unwrap();
 
         assert!(burli_decode::decompress(fragment.payload()).is_err());
     }
@@ -827,19 +1000,19 @@ mod tests {
         ];
         let fragments = inputs
             .iter()
-            .map(|input| encode_fragment(input, &spec).unwrap())
+            .map(|input| encode_fragment(input, &spec, &Options::new()).unwrap())
             .collect::<Vec<_>>();
 
         let mut encoded = Vec::new();
-        assemble_fragments(&spec, &fragments, &mut encoded).unwrap();
+        assemble_fragments(&spec, &fragments, &mut encoded, &Options::new()).unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), inputs.concat());
     }
 
     #[test]
     fn serialized_fragment_has_documented_wire_header() {
-        let fragment = encode_fragment(b"wire", &spec(2)).unwrap();
-        let bytes = fragment.to_bytes().unwrap();
+        let fragment = encode_fragment(b"wire", &spec(2), &Options::new()).unwrap();
+        let bytes = fragment.to_bytes(&Options::new()).unwrap();
         let metadata = fragment.metadata();
 
         assert_eq!(&bytes[..8], b"BURLICAT");
@@ -880,20 +1053,85 @@ mod tests {
 
     #[test]
     fn serialized_fragment_round_trips() {
-        let fragment = encode_fragment(b"serialized fragment", &spec(4)).unwrap();
-        let parsed = ConcatFragment::from_bytes(&fragment.to_bytes().unwrap()).unwrap();
+        let fragment = encode_fragment(b"serialized fragment", &spec(4), &Options::new()).unwrap();
+        let parsed = ConcatFragment::from_bytes(
+            &fragment.to_bytes(&Options::new()).unwrap(),
+            &Options::new(),
+        )
+        .unwrap();
 
         assert_eq!(parsed, fragment);
     }
 
     #[test]
+    fn options_limit_encoded_fragment_input() {
+        let options = Options::new().max_fragment_input_len(3);
+
+        assert!(matches!(
+            encode_fragment(b"four", &spec(1), &options),
+            Err(BurliError::OutputLimitExceeded {
+                limit: 3,
+                needed: 4
+            })
+        ));
+    }
+
+    #[test]
+    fn options_limit_parsed_fragment_payload_before_copy() {
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
+        let bytes = fragment.to_bytes(&Options::new()).unwrap();
+        let options =
+            Options::new().max_fragment_payload_len(fragment.metadata().payload_len() - 1);
+
+        assert!(matches!(
+            ConcatFragment::from_bytes(&bytes, &options),
+            Err(BurliError::Format(
+                "concat fragment payload length exceeds configured limit"
+            ))
+        ));
+    }
+
+    #[test]
+    fn options_limit_parsed_fragment_decoded_len_before_decode() {
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
+        let bytes = fragment.to_bytes(&Options::new()).unwrap();
+        let options = Options::new().max_fragment_input_len(fragment.metadata().input_len() - 1);
+
+        assert!(matches!(
+            ConcatFragment::from_bytes(&bytes, &options),
+            Err(BurliError::OutputLimitExceeded {
+                limit: 6,
+                needed: 7
+            })
+        ));
+    }
+
+    #[test]
+    fn options_limit_assembled_input_before_output_mutation() {
+        let spec = spec(2);
+        let first = encode_fragment(b"first", &spec, &Options::new()).unwrap();
+        let second = encode_fragment(b"second", &spec, &Options::new()).unwrap();
+        let options = Options::new().max_assembled_input_len(10);
+        let mut output = b"prefix".to_vec();
+
+        assert!(matches!(
+            assemble_fragments(&spec, &[first, second], &mut output, &options),
+            Err(BurliError::OutputLimitExceeded {
+                limit: 10,
+                needed: 11
+            })
+        ));
+        assert_eq!(output, b"prefix");
+    }
+
+    #[test]
     fn rejects_corrupt_serialized_header_checksum() {
-        let fragment = encode_fragment(b"serialized fragment", &spec(4)).unwrap();
-        let mut bytes = fragment.to_bytes().unwrap();
+        let fragment = encode_fragment(b"serialized fragment", &spec(4), &Options::new()).unwrap();
+        let mut bytes = fragment.to_bytes(&Options::new()).unwrap();
         bytes[16] ^= 1;
 
         assert!(matches!(
-            ConcatFragment::from_bytes(&bytes),
+            ConcatFragment::from_bytes(&bytes, &Options::new()),
             Err(BurliError::Format(
                 "concat fragment header checksum mismatch"
             ))
@@ -902,25 +1140,40 @@ mod tests {
 
     #[test]
     fn rejects_corrupt_serialized_payload_checksum() {
-        let fragment = encode_fragment(b"serialized fragment", &spec(4)).unwrap();
-        let mut bytes = fragment.to_bytes().unwrap();
+        let fragment = encode_fragment(b"serialized fragment", &spec(4), &Options::new()).unwrap();
+        let mut bytes = fragment.to_bytes(&Options::new()).unwrap();
         let last = bytes.last_mut().unwrap();
         *last ^= 1;
 
         assert!(matches!(
-            ConcatFragment::from_bytes(&bytes),
+            ConcatFragment::from_bytes(&bytes, &Options::new()),
             Err(BurliError::Format("concat fragment checksum mismatch"))
         ));
     }
 
     #[test]
+    fn rejects_serialized_reserved_bytes() {
+        let fragment = encode_fragment(b"serialized fragment", &spec(4), &Options::new()).unwrap();
+        let mut bytes = fragment.to_bytes(&Options::new()).unwrap();
+        bytes[22] = 1;
+        rewrite_header_checksum(&mut bytes);
+
+        assert!(matches!(
+            ConcatFragment::from_bytes(&bytes, &Options::new()),
+            Err(BurliError::Format(
+                "concat fragment reserved bytes are non-zero"
+            ))
+        ));
+    }
+
+    #[test]
     fn rejects_serialized_length_mismatch() {
-        let fragment = encode_fragment(b"serialized fragment", &spec(4)).unwrap();
-        let mut bytes = fragment.to_bytes().unwrap();
+        let fragment = encode_fragment(b"serialized fragment", &spec(4), &Options::new()).unwrap();
+        let mut bytes = fragment.to_bytes(&Options::new()).unwrap();
         bytes.push(0);
 
         assert!(matches!(
-            ConcatFragment::from_bytes(&bytes),
+            ConcatFragment::from_bytes(&bytes, &Options::new()),
             Err(BurliError::Format(
                 "serialized concat fragment length mismatch"
             ))
@@ -930,33 +1183,33 @@ mod tests {
     #[test]
     fn staged_fragment_validation_happens_before_output_mutation() {
         let spec = spec(2);
-        let mut fragment = encode_fragment(b"payload", &spec).unwrap();
+        let mut fragment = encode_fragment(b"payload", &spec, &Options::new()).unwrap();
         fragment.metadata.checksum ^= 1;
         let mut output = b"prefix".to_vec();
 
-        assert!(assemble_fragments(&spec, &[fragment], &mut output).is_err());
+        assert!(assemble_fragments(&spec, &[fragment], &mut output, &Options::new()).is_err());
         assert_eq!(output, b"prefix");
     }
 
     #[test]
     fn rejects_spec_mismatch() {
-        let fragment = encode_fragment(b"payload", &spec(1)).unwrap();
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let mut output = Vec::new();
 
         assert!(matches!(
-            assemble_fragments(&spec(2), &[fragment], &mut output),
+            assemble_fragments(&spec(2), &[fragment], &mut output, &Options::new()),
             Err(BurliError::Format("concat fragment spec mismatch"))
         ));
     }
 
     #[test]
     fn rejects_payload_length_mismatch() {
-        let fragment = encode_fragment(b"payload", &spec(1)).unwrap();
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let (metadata, mut payload) = fragment.into_parts();
         payload.push(0);
 
         assert!(matches!(
-            ConcatFragment::from_parts(metadata, payload),
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
             Err(BurliError::Format(
                 "concat fragment payload length mismatch"
             ))
@@ -965,36 +1218,63 @@ mod tests {
 
     #[test]
     fn rejects_non_minimal_payload_bits() {
-        let fragment = encode_fragment(b"payload", &spec(1)).unwrap();
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let (mut metadata, payload) = fragment.into_parts();
         metadata.payload_bit_len = metadata.payload_bit_len.saturating_sub(8);
 
         assert!(matches!(
-            ConcatFragment::from_parts(metadata, payload),
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
             Err(BurliError::Format("concat fragment payload is not minimal"))
         ));
     }
 
     #[test]
     fn rejects_missing_required_flags() {
-        let fragment = encode_fragment(b"payload", &spec(1)).unwrap();
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let (mut metadata, payload) = fragment.into_parts();
         metadata.flags = FLAG_NO_BACKWARD_REFERENCES;
 
         assert!(matches!(
-            ConcatFragment::from_parts(metadata, payload),
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
             Err(BurliError::Format("concat fragment required flags missing"))
         ));
     }
 
     #[test]
+    fn rejects_unknown_flags() {
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
+        let (mut metadata, payload) = fragment.into_parts();
+        metadata.flags |= 1 << 31;
+
+        assert!(matches!(
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
+            Err(BurliError::Format("concat fragment unknown flags set"))
+        ));
+    }
+
+    #[test]
     fn rejects_invalid_payload_kind_flags() {
-        let fragment = encode_fragment(b"payload", &spec(1)).unwrap();
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let (mut metadata, payload) = fragment.into_parts();
         metadata.flags = REQUIRED_FLAGS;
 
         assert!(matches!(
-            ConcatFragment::from_parts(metadata, payload),
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
+            Err(BurliError::Format(
+                "concat fragment payload kind is invalid"
+            ))
+        ));
+    }
+
+    #[test]
+    fn rejects_conflicting_payload_kind_flags() {
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
+        let (mut metadata, payload) = fragment.into_parts();
+        metadata.flags =
+            REQUIRED_FLAGS | FLAG_NO_BACKWARD_REFERENCES | FLAG_LOCAL_BACKWARD_REFERENCES;
+
+        assert!(matches!(
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
             Err(BurliError::Format(
                 "concat fragment payload kind is invalid"
             ))
@@ -1004,19 +1284,19 @@ mod tests {
     #[test]
     fn rejects_payload_kind_mismatch() {
         let input = b"abcdefghabcdefghabcdefghabcdefgh".repeat(128);
-        let fragment = encode_fragment(&input, &spec(3)).unwrap();
+        let fragment = encode_fragment(&input, &spec(3), &Options::new()).unwrap();
         let (mut metadata, payload) = fragment.into_parts();
         metadata.flags = (metadata.flags & !PAYLOAD_KIND_FLAGS) | FLAG_NO_BACKWARD_REFERENCES;
 
         assert!(matches!(
-            ConcatFragment::from_parts(metadata, payload),
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
             Err(BurliError::Format("concat fragment payload kind mismatch"))
         ));
     }
 
     #[test]
     fn rejects_non_zero_payload_padding() {
-        let fragment = encode_fragment(b"payload", &spec(1)).unwrap();
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let (mut metadata, mut payload) = fragment.into_parts();
         let padding_bits = payload
             .len()
@@ -1028,19 +1308,63 @@ mod tests {
         metadata.checksum = checksum64(&payload);
 
         assert!(matches!(
-            ConcatFragment::from_parts(metadata, payload),
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
             Err(BurliError::Format("non-zero concat fragment padding"))
         ));
     }
 
     #[test]
+    fn rejects_metadata_block_payload() {
+        let payload = vec![0b0000_0110];
+        let metadata = metadata_for_payload(&payload, 6, 0, FLAG_NO_BACKWARD_REFERENCES);
+
+        assert!(matches!(
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
+            Err(BurliError::Format(
+                "concat fragment contains metadata block"
+            ))
+        ));
+    }
+
+    #[test]
+    fn rejects_stream_trailer_payload() {
+        let mut writer = BitWriter::new();
+        burli_encode::write_concat_stream_trailer(&mut writer).unwrap();
+        let payload_bit_len = writer.written_bits();
+        let payload = writer.into_bytes();
+        let metadata =
+            metadata_for_payload(&payload, payload_bit_len, 0, FLAG_NO_BACKWARD_REFERENCES);
+
+        assert!(matches!(
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
+            Err(BurliError::Format(
+                "concat fragment contains stream trailer"
+            ))
+        ));
+    }
+
+    #[test]
+    fn rejects_serialized_metadata_block_payload() {
+        let payload = vec![0b0000_0110];
+        let metadata = metadata_for_payload(&payload, 6, 0, FLAG_NO_BACKWARD_REFERENCES);
+        let bytes = serialized_with_header(&metadata, &payload);
+
+        assert!(matches!(
+            ConcatFragment::from_bytes(&bytes, &Options::new()),
+            Err(BurliError::Format(
+                "concat fragment contains metadata block"
+            ))
+        ));
+    }
+
+    #[test]
     fn rejects_decoded_length_mismatch() {
-        let fragment = encode_fragment(b"payload", &spec(1)).unwrap();
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let (mut metadata, payload) = fragment.into_parts();
         metadata.input_len += 1;
 
         assert!(matches!(
-            ConcatFragment::from_parts(metadata, payload),
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
             Err(BurliError::Format(
                 "concat fragment decoded length mismatch"
             ))
@@ -1049,12 +1373,12 @@ mod tests {
 
     #[test]
     fn rejects_byte_summary_mismatch() {
-        let fragment = encode_fragment(b"payload", &spec(1)).unwrap();
+        let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let (mut metadata, payload) = fragment.into_parts();
         metadata.first_bytes[0] ^= 1;
 
         assert!(matches!(
-            ConcatFragment::from_parts(metadata, payload),
+            ConcatFragment::from_parts(metadata, payload, &Options::new()),
             Err(BurliError::Format("concat fragment byte summary mismatch"))
         ));
     }
@@ -1062,7 +1386,7 @@ mod tests {
     #[test]
     fn q6_fragments_are_unsupported_until_encoder_supports_them() {
         assert!(matches!(
-            encode_fragment(b"payload", &spec(6)),
+            encode_fragment(b"payload", &spec(6), &Options::new()),
             Err(BurliError::Unsupported(_))
         ));
     }
@@ -1075,6 +1399,7 @@ mod tests {
         assert_send_sync::<FragmentMetadata>();
         assert_send_sync::<ConcatFragment>();
         assert_send_sync::<ConcatAssembler>();
+        assert_send_sync::<Options>();
     }
 
     #[cfg(feature = "std")]
@@ -1091,7 +1416,7 @@ mod tests {
             .cloned()
             .map(|input| {
                 let spec = spec.clone();
-                std::thread::spawn(move || encode_fragment(&input, &spec).unwrap())
+                std::thread::spawn(move || encode_fragment(&input, &spec, &Options::new()).unwrap())
             })
             .collect::<Vec<_>>();
         let fragments = handles
@@ -1100,7 +1425,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let mut encoded = Vec::new();
-        assemble_fragments(&spec, &fragments, &mut encoded).unwrap();
+        assemble_fragments(&spec, &fragments, &mut encoded, &Options::new()).unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), inputs.concat());
     }
