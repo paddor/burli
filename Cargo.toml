@@ -12,7 +12,7 @@ license = "MIT"
 repository = "https://github.com/paddor/burli"
 categories = ["compression"]
 keywords = ["brotli", "compression", "decompression", "web"]
-include = ["/src/**/*", "/README.md", "/LICENSE", "/DESIGN.md", "/SAFETY.md", "/SECURITY.md"]
+include = ["/src/**/*", "/README.md", "/CHANGELOG.md", "/LICENSE", "/DESIGN.md", "/SAFETY.md", "/SECURITY.md"]
 
 [features]
 default = ["std", "simd"]
