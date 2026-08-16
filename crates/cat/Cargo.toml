@@ -22,8 +22,8 @@ paranoid = ["burli-core/paranoid", "burli-encode/paranoid", "burli-decode/parano
 
 [dependencies]
 burli-core = { version = "0.1.0", path = "../core", default-features = false }
-burli-encode = { version = "0.1.0", path = "../encode", default-features = false }
-burli-decode = { version = "0.1.0", path = "../decode", default-features = false }
+burli-encode = { version = "0.1.1", path = "../encode", default-features = false }
+burli-decode = { version = "0.1.1", path = "../decode", default-features = false }
 
 [dev-dependencies]
 rust-brotli = { package = "brotli", version = "8.0.4" }
