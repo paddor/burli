@@ -10,8 +10,6 @@ extern crate alloc;
 pub mod error;
 pub mod format;
 pub mod options;
-pub mod simd;
-
 pub mod bits;
 #[doc(hidden)]
 pub mod dictionary;
