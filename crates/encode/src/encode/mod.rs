@@ -987,6 +987,82 @@ impl Token {
     }
 }
 
+const LITERAL_BYTE_SCORE: usize = 135;
+const DISTANCE_BIT_PENALTY: usize = 30;
+const SCORE_BASE: usize = DISTANCE_BIT_PENALTY * 8 * core::mem::size_of::<usize>();
+const MIN_SCORE: usize = SCORE_BASE + 100;
+
+#[inline]
+fn literal_only(input_len: usize) -> Vec<Token> {
+    if input_len == 0 {
+        return Vec::new();
+    }
+    vec![Token {
+        insert_start: 0,
+        insert_len: input_len,
+        copy_len: 0,
+        copy_len_code: 0,
+        distance: 0,
+        distance_code: None,
+        use_last_distance: false,
+    }]
+}
+
+#[inline]
+fn score_distance(len: usize, distance: usize) -> usize {
+    SCORE_BASE + LITERAL_BYTE_SCORE * len
+        - DISTANCE_BIT_PENALTY * (usize::BITS as usize - 1 - distance.leading_zeros() as usize)
+}
+
+#[inline]
+fn score_last_distance(len: usize) -> usize {
+    SCORE_BASE + LITERAL_BYTE_SCORE * len + 15
+}
+
+#[inline]
+fn compute_distance_code(
+    distance: usize,
+    max_backward_distance: usize,
+    dist_cache: [usize; 4],
+) -> usize {
+    if distance <= max_backward_distance {
+        let distance_plus_3 = distance + 3;
+        let offset0 = distance_plus_3.wrapping_sub(dist_cache[0]);
+        let offset1 = distance_plus_3.wrapping_sub(dist_cache[1]);
+        if distance == dist_cache[0] {
+            return 0;
+        }
+        if distance == dist_cache[1] {
+            return 1;
+        }
+        if offset0 < 7 {
+            return (0x0975_0468_usize >> (4 * offset0)) & 0x0f;
+        }
+        if offset1 < 7 {
+            return (0x0fdb_1ace_usize >> (4 * offset1)) & 0x0f;
+        }
+        if distance == dist_cache[2] {
+            return 2;
+        }
+        if distance == dist_cache[3] {
+            return 3;
+        }
+    }
+    distance + 15
+}
+
+#[inline]
+fn simple_dictionary_match_len(input: &[u8], pos: usize, word: &[u8], max_len: usize) -> usize {
+    let Some(candidate) = input.get(pos..pos.saturating_add(max_len)) else {
+        return 0;
+    };
+    candidate
+        .iter()
+        .zip(word)
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
 #[derive(Clone, Debug)]
 struct PreparedBatch {
     prepared: Vec<PreparedToken>,

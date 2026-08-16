@@ -1,6 +1,8 @@
 use alloc::{vec, vec::Vec};
 
-use super::{INITIAL_LAST_DISTANCE, MAX_META_BLOCK_SIZE, Token, match_len, read_u64_le, tune};
+use super::{
+    INITIAL_LAST_DISTANCE, MAX_META_BLOCK_SIZE, Token, literal_only, match_len, read_u64_le, tune,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Decision {
@@ -160,21 +162,6 @@ pub(super) fn collect_tokens(
         });
     }
     tokens
-}
-
-fn literal_only(input_len: usize) -> Vec<Token> {
-    if input_len == 0 {
-        return Vec::new();
-    }
-    vec![Token {
-        insert_start: 0,
-        insert_len: input_len,
-        copy_len: 0,
-        copy_len_code: 0,
-        distance: 0,
-        distance_code: None,
-        use_last_distance: false,
-    }]
 }
 
 fn sample(input: &[u8]) -> Sample {
