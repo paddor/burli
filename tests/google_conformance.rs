@@ -1,41 +1,17 @@
 #![cfg(feature = "std")]
 
+mod common;
+
 use std::{
     env,
     ffi::OsStr,
     fs,
-    io::{self, Read},
+    io::Read,
     path::{Path, PathBuf},
     process::Command,
 };
 
-struct FragmentedRead<'a> {
-    input: &'a [u8],
-    pos: usize,
-    chunk: usize,
-}
-
-impl<'a> FragmentedRead<'a> {
-    const fn new(input: &'a [u8], chunk: usize) -> Self {
-        Self {
-            input,
-            pos: 0,
-            chunk,
-        }
-    }
-}
-
-impl Read for FragmentedRead<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.pos == self.input.len() {
-            return Ok(0);
-        }
-        let count = buf.len().min(self.chunk).min(self.input.len() - self.pos);
-        buf[..count].copy_from_slice(&self.input[self.pos..self.pos + count]);
-        self.pos += count;
-        Ok(count)
-    }
-}
+use common::FragmentedRead;
 
 #[test]
 #[ignore = "downloads or uses upstream Brotli testdata"]
