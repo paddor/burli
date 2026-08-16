@@ -230,10 +230,12 @@ pub fn decompress_into_slice_with_options(
 }
 
 #[cfg(feature = "alloc")]
+#[allow(deprecated)]
 pub use burli_decode::context::{DecompressContext, Decompressor};
 #[cfg(feature = "std")]
 pub use burli_decode::streaming::StreamDecoder;
 #[cfg(feature = "alloc")]
+#[allow(deprecated)]
 pub use burli_encode::context::{CompressContext, Compressor};
 #[cfg(feature = "std")]
 pub use burli_encode::streaming::StreamEncoder;
