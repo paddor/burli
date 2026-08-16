@@ -197,7 +197,7 @@ fn sample(input: &[u8]) -> Sample {
             miss_streak += 1;
             max_miss_streak = max_miss_streak.max(miss_streak);
         }
-        debug_assert!(pos <= u16::MAX as usize);
+        debug_assert!(u16::try_from(pos).is_ok());
         table[key] = pos as u16;
         pos += tune::LOW_COMPRESS_SAMPLE_STEP;
     }
