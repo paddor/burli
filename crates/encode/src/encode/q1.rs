@@ -595,8 +595,8 @@ fn append_literal_span_bits_paired(
     literals: &[u8],
     literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
 ) {
-    let mut pairs = literals.chunks_exact(2);
-    for pair in &mut pairs {
+    let (pairs, remainder) = literals.as_chunks::<2>();
+    for pair in pairs {
         let first = literal_code_map[usize::from(pair[0])];
         let second = literal_code_map[usize::from(pair[1])];
         debug_assert!(first.len != u8::MAX);
@@ -611,7 +611,8 @@ fn append_literal_span_bits_paired(
         );
     }
 
-    if let &[literal] = pairs.remainder() {
+    if remainder.len() == 1 {
+        let literal = remainder[0];
         let literal_code = literal_code_map[usize::from(literal)];
         debug_assert!(literal_code.len != u8::MAX);
         append_pending_bits(
@@ -632,8 +633,8 @@ fn append_literal_span_bits_packed(
     literals: &[u8],
     literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
 ) {
-    let mut chunks = literals.chunks_exact(4);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = literals.as_chunks::<4>();
+    for chunk in chunks {
         let first = literal_code_map[usize::from(chunk[0])];
         let second = literal_code_map[usize::from(chunk[1])];
         let third = literal_code_map[usize::from(chunk[2])];
@@ -676,7 +677,7 @@ fn append_literal_span_bits_packed(
         writer,
         pending_bits,
         pending_width,
-        chunks.remainder(),
+        remainder,
         literal_code_map,
     );
 }

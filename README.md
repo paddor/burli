@@ -6,28 +6,23 @@ all normal quality levels. The encoder currently supports qualities 0 through
 
 ## Why Bürli
 
-**Memory safe by default.** Public API has no unsafe. Default-build unsafe is
-kept in small primitive helpers. The `paranoid` feature forbids unsafe in all
-Bürli crates.
+**Fast q0..q5 encoder.** Covers the transfer-oriented part of Brotli's
+speed/ratio curve, with aggressive skip behavior for low-compressibility input.
 
-**Fast pure-Rust q0..q5 encoder.** The encoder focuses on the web and transfer
-part of Brotli's speed/ratio curve, with aggressive skip behavior for
-low-compressibility input.
+**Memory safety.** Public API has no unsafe. Unsafe is limited to small
+primitive helpers in the default build. The `paranoid` feature forbids unsafe in
+all Bürli crates.
 
-**Small API.** One-shot helpers for simple use, reusable contexts for hot loops,
-and `std::io` streaming types when needed.
-
-**No C dependency.** Google Brotli remains the compatibility and performance
-baseline, but Bürli is pure Rust. Compared with `rust-brotli`, Bürli prioritizes
-a smaller public surface, tighter safety boundary, and benchmark-visible encoder
-policy.
+**Small API.** One-shot helpers for simple use, caller-buffer variants for tight
+loops, reusable contexts for repeated work, and `std::io` streaming wrappers
+when needed.
 
 ## Performance
 
 ![Brotli pipeline benchmark](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/summary.svg)
 
 <details>
-<summary>x86_64 details</summary>
+<summary>x86_64 details (pipeline, scatter, matrix, small inputs)</summary>
 
 ![per-file pipeline](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/pipeline.svg)
 ![encode speed vs compression ratio](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/scatter.svg)
@@ -40,17 +35,37 @@ policy.
 ## API
 
 ```rust
+// One-shot (allocating)
 let compressed = burli::compress(input, 5)?;
-let original = burli::decompress(&compressed)?;
+let original   = burli::decompress(&compressed)?;
 
+// One-shot into caller buffer
+let n = burli::compress_into(input, &mut output_buf, 5)?;
+burli::decompress_into(&compressed, &mut output_vec)?;
+
+// Reusable context
 let mut compressor = burli::Compressor::new(5)?;
-let mut output = Vec::new();
-compressor.compress_into(input, &mut output)?;
+let compressed = compressor.compress(input)?;
 
 let mut decompressor = burli::Decompressor::new();
-let mut decoded = Vec::new();
-decompressor.decompress_into(&output, &mut decoded)?;
+let original = decompressor.decompress(&compressed)?;
 ```
+
+### Streaming
+
+```rust
+use std::io::{Read, Write};
+
+let mut enc = burli::StreamEncoder::new(Vec::new(), 5)?;
+enc.write_all(input)?;
+let compressed = enc.finish()?;
+
+let mut dec = burli::StreamDecoder::new(&compressed[..]);
+let mut decoded = Vec::new();
+dec.read_to_end(&mut decoded)?;
+```
+
+### Raw Dictionaries
 
 Raw LZ77 prefix dictionaries are decode-only for now:
 
@@ -58,5 +73,32 @@ Raw LZ77 prefix dictionaries are decode-only for now:
 let original = burli::decompress_with_raw_dictionary(&compressed, dictionary)?;
 ```
 
-Streaming is available with `StreamEncoder` and `StreamDecoder` when the `std`
-feature is enabled.
+## Safety
+
+[SAFETY.md](SAFETY.md) documents the unsafe boundary and Brotli bug classes
+that Bürli is designed to prevent.
+
+Bounded decompression is first-class: use `decompress_with_limit`,
+`Decompressor::with_limit`, `StreamDecoder::with_limit`, or
+`decompress_into_slice` for untrusted input. Plain `decompress()` has no
+practical output cap.
+
+Current safety checks include Kani coverage for low-level primitives and more
+than 6 hours of `libFuzzer` coverage across decode, encode/decode round trips,
+corruption cases, streaming, and C Brotli cross-checks.
+
+## Design
+
+[DESIGN.md](DESIGN.md) covers the implemented encode/decode pipeline, bit I/O,
+Huffman tables, backward copies, dictionaries, streaming, and quality policy.
+
+## Levels
+
+Bürli's encoder covers the fast end of Brotli. q0 favors throughput and may
+store low-compressibility blocks. q1 through q5 spend progressively more work on
+matching and entropy coding for better ratios.
+
+The current encoder stops at q5. Brotli q6 through q11 spend much more CPU for
+ratios that usually matter more for archival storage than transfer pipelines.
+All implemented qualities produce standard Brotli streams decoded by the same
+decoder.

@@ -1,6 +1,6 @@
 [package]
 name = "burli-core"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Shared Brotli types and primitives for burli"
@@ -9,6 +9,7 @@ repository = "https://github.com/paddor/burli"
 readme = "README.md"
 categories = ["compression"]
 keywords = ["brotli", "compression"]
+include = ["/src/**/*", "/README.md"]
 
 [lints]
 workspace = true
