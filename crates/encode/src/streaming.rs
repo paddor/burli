@@ -139,7 +139,8 @@ impl<W: Write> Write for StreamEncoder<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.buffered.extend_from_slice(buf);
         while self.buffered.len() >= self.block_size {
-            let chunk: Vec<u8> = self.buffered.drain(..self.block_size).collect();
+            let tail = self.buffered.split_off(self.block_size);
+            let chunk = core::mem::replace(&mut self.buffered, tail);
             self.write_meta_block(&chunk, false)?;
         }
         Ok(buf.len())
