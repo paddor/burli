@@ -121,13 +121,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     print_worst("encode speed: Burli / C", encode, args.top, true);
-    print_worst("decode speed on C streams: Burli / C", decode_c, args.top, true);
-    print_worst("decode speed on own streams: Burli / C", decode_self, args.top, true);
+    print_worst(
+        "decode speed on C streams: Burli / C",
+        decode_c,
+        args.top,
+        true,
+    );
+    print_worst(
+        "decode speed on own streams: Burli / C",
+        decode_self,
+        args.top,
+        true,
+    );
     print_worst("compressed size: Burli / C", size, args.top, false);
     if missing_burli != 0 || missing_decode_c != 0 {
-        println!(
-            "missing cells: burli={missing_burli}, decode-c={missing_decode_c}"
-        );
+        println!("missing cells: burli={missing_burli}, decode-c={missing_decode_c}");
     }
 
     Ok(())
@@ -150,7 +158,9 @@ fn parse_args() -> Result<Args, Box<dyn Error>> {
                 args.corpus = parse_corpus_filter(&iter.next().ok_or("--corpus needs value")?)?;
             }
             "--top" => args.top = parse_non_zero_usize(&iter.next().ok_or("--top needs value")?)?,
-            "--cache" => args.cache = Some(PathBuf::from(iter.next().ok_or("--cache needs value")?)),
+            "--cache" => {
+                args.cache = Some(PathBuf::from(iter.next().ok_or("--cache needs value")?))
+            }
             "-h" | "--help" => {
                 print_help();
                 std::process::exit(0);
@@ -202,7 +212,11 @@ fn load_latest(cache: &Path, codec: &str) -> Result<BTreeMap<Key, BenchRow>, Box
         Err(error) => return Err(error.into()),
     };
     let mut rows: BTreeMap<Key, BenchRow> = BTreeMap::new();
-    for line in content.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         let Ok(row) = serde_json::from_str::<BenchRow>(line) else {
             continue;
         };
@@ -297,7 +311,9 @@ fn print_worst(title: &str, mut rows: Vec<GateRow>, top: usize, higher_is_better
     }
     println!();
     println!("{title}");
-    println!("ratio  q  scope  size     input                         burli        C            bytes");
+    println!(
+        "ratio  q  scope  size     input                         burli        C            bytes"
+    );
     for row in rows.into_iter().take(top) {
         let scope = if row.is_small { "small" } else { "full " };
         let burli_value = row.burli_mbs.map_or_else(
@@ -314,13 +330,7 @@ fn print_worst(title: &str, mut rows: Vec<GateRow>, top: usize, higher_is_better
         };
         println!(
             "{:5.2} q{} {scope} {:7} {:29} {:>14} {:>12} {:>12}",
-            row.ratio,
-            row.quality,
-            row.input_size,
-            row.input,
-            burli_value,
-            google_value,
-            bytes
+            row.ratio, row.quality, row.input_size, row.input, burli_value, google_value, bytes
         );
     }
 }
