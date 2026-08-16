@@ -1,6 +1,6 @@
 use std::io::{self, Read};
 
-use burli_core::{BurliError, DecompressError, bits::BitReader};
+use burli_core::{BurliError, DecompressError, bits::BitReader, format::DEFAULT_MAX_OUTPUT_SIZE};
 
 use crate::{
     compressed::{DistanceRing, MetaBlockDecodeParams},
@@ -45,7 +45,7 @@ enum DecodeStep {
 impl<R: Read> StreamDecoder<R> {
     /// Create a stream decoder with no practical output limit.
     pub const fn new(inner: R) -> Self {
-        Self::with_limit(inner, burli_core::format::DEFAULT_MAX_OUTPUT_SIZE)
+        Self::with_limit(inner, DEFAULT_MAX_OUTPUT_SIZE)
     }
 
     /// Create a stream decoder with a hard output limit.
@@ -65,13 +65,26 @@ impl<R: Read> StreamDecoder<R> {
         }
     }
 
+    /// Create a stream decoder with explicit [`crate::Options`].
+    pub fn with_options(inner: R, options: &crate::Options) -> Self {
+        Self {
+            inner,
+            max_output_size: options.max_output_size_value(),
+            encoded: Vec::new(),
+            bit_pos: 0,
+            window_bits: None,
+            distances: DistanceRing::new(),
+            raw_dictionary: Vec::new(),
+            output: Vec::new(),
+            output_pos: 0,
+            output_base: 0,
+            state: State::Reading,
+        }
+    }
+
     /// Create a stream decoder with a raw LZ77 prefix dictionary.
     pub fn with_raw_dictionary(inner: R, dictionary: &[u8]) -> Self {
-        Self::with_raw_dictionary_and_limit(
-            inner,
-            dictionary,
-            burli_core::format::DEFAULT_MAX_OUTPUT_SIZE,
-        )
+        Self::with_raw_dictionary_and_limit(inner, dictionary, DEFAULT_MAX_OUTPUT_SIZE)
     }
 
     /// Create a stream decoder with a raw LZ77 prefix dictionary and hard
@@ -99,6 +112,11 @@ impl<R: Read> StreamDecoder<R> {
     /// Return the wrapped reader.
     pub fn into_inner(self) -> R {
         self.inner
+    }
+
+    /// Return current decode options.
+    pub fn options(&self) -> crate::Options {
+        crate::Options::new().max_output_size(self.max_output_size)
     }
 
     fn read_more_encoded(&mut self) -> io::Result<bool> {

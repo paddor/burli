@@ -12,6 +12,8 @@ pub mod context;
 #[cfg(feature = "std")]
 pub mod streaming;
 
+mod options;
+
 #[cfg(feature = "alloc")]
 mod compressed;
 #[cfg(feature = "alloc")]
@@ -24,6 +26,7 @@ mod huffman;
 mod stored;
 
 pub use burli_core::{DecompressError, format::DEFAULT_MAX_OUTPUT_SIZE};
+pub use options::Options;
 
 /// Decompress a complete Brotli stream.
 ///
@@ -33,7 +36,25 @@ pub use burli_core::{DecompressError, format::DEFAULT_MAX_OUTPUT_SIZE};
 /// output-limit violations.
 #[cfg(feature = "alloc")]
 pub fn decompress(input: &[u8]) -> Result<alloc::vec::Vec<u8>, DecompressError> {
-    decompress_with_limit(input, DEFAULT_MAX_OUTPUT_SIZE)
+    decompress_with_options(input, &Options::new())
+}
+
+/// Decompress a complete Brotli stream with explicit [`Options`].
+///
+/// # Errors
+///
+/// Returns an error for malformed streams, unsupported large-window streams, or
+/// output-limit violations.
+#[cfg(feature = "alloc")]
+pub fn decompress_with_options(
+    input: &[u8],
+    options: &Options,
+) -> Result<alloc::vec::Vec<u8>, DecompressError> {
+    stored::decompress_with_raw_dictionary_and_limit(
+        input,
+        crate::dictionary::RawDictionary::empty(),
+        options.max_output_size_value(),
+    )
 }
 
 /// Decompress a complete Brotli stream with a maximum output size.
@@ -47,7 +68,7 @@ pub fn decompress_with_limit(
     input: &[u8],
     max_output_size: usize,
 ) -> Result<alloc::vec::Vec<u8>, DecompressError> {
-    stored::decompress_with_limit(input, max_output_size)
+    decompress_with_options(input, &Options::new().max_output_size(max_output_size))
 }
 
 #[doc(hidden)]
@@ -114,11 +135,28 @@ pub fn decompress_into(
     input: &[u8],
     output: &mut alloc::vec::Vec<u8>,
 ) -> Result<usize, DecompressError> {
+    decompress_into_with_options(input, output, &Options::new())
+}
+
+/// Decompress `input` and append bytes to `output` with explicit [`Options`].
+///
+/// Returns the number of bytes appended. The caller buffer is not modified when
+/// decoding fails.
+///
+/// # Errors
+///
+/// Returns an error for malformed streams or output-limit violations.
+#[cfg(feature = "alloc")]
+pub fn decompress_into_with_options(
+    input: &[u8],
+    output: &mut alloc::vec::Vec<u8>,
+    options: &Options,
+) -> Result<usize, DecompressError> {
     let before = output.len();
     let mut decompressed = alloc::vec::Vec::new();
     stored::decompress_into_empty_with_limit(
         input,
-        DEFAULT_MAX_OUTPUT_SIZE,
+        options.max_output_size_value(),
         &mut decompressed,
         crate::dictionary::RawDictionary::empty(),
     )?;
@@ -133,10 +171,29 @@ pub fn decompress_into(
 /// Returns [`DecompressError::OutputLimitExceeded`] if `output` is too small.
 #[cfg(feature = "alloc")]
 pub fn decompress_into_slice(input: &[u8], output: &mut [u8]) -> Result<usize, DecompressError> {
+    decompress_into_slice_with_options(input, output, &Options::new())
+}
+
+/// Decompress `input` into a caller-provided slice with explicit [`Options`].
+///
+/// Returns the number of bytes written. The slice is not partially written on
+/// size errors.
+///
+/// # Errors
+///
+/// Returns [`DecompressError::OutputLimitExceeded`] if `output` is too small or
+/// if the configured output limit is exceeded.
+#[cfg(feature = "alloc")]
+pub fn decompress_into_slice_with_options(
+    input: &[u8],
+    output: &mut [u8],
+    options: &Options,
+) -> Result<usize, DecompressError> {
+    let limit = options.max_output_size_value().min(output.len());
     let mut decompressed = alloc::vec::Vec::with_capacity(output.len());
     stored::decompress_into_empty_with_limit(
         input,
-        output.len(),
+        limit,
         &mut decompressed,
         crate::dictionary::RawDictionary::empty(),
     )?;

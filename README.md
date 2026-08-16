@@ -78,8 +78,8 @@ let original = burli::decompress_with_raw_dictionary(&compressed, dictionary)?;
 [SAFETY.md](SAFETY.md) documents the unsafe boundary and Brotli bug classes
 that Bürli is designed to prevent.
 
-Bounded decompression is first-class: use `decompress_with_limit`,
-`Decompressor::with_limit`, `StreamDecoder::with_limit`, or
+Bounded decompression is first-class: use `decompress_with_options`,
+`Decompressor::with_options`, `StreamDecoder::with_options`, or
 `decompress_into_slice` for untrusted input. Plain `decompress()` has no
 practical output cap.
 

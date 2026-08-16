@@ -2,6 +2,8 @@ use alloc::vec::Vec;
 
 use burli_core::{DecompressError, format::DEFAULT_MAX_OUTPUT_SIZE};
 
+use crate::Options;
+
 #[derive(Clone, Debug)]
 /// Reusable one-shot Brotli decompressor.
 ///
@@ -24,13 +26,18 @@ impl Decompressor {
         }
     }
 
-    /// Create a decompressor with a hard output limit.
-    pub fn with_limit(max_output_size: usize) -> Self {
+    /// Create a decompressor with explicit [`Options`].
+    pub fn with_options(options: &Options) -> Self {
         Self {
-            max_output_size,
+            max_output_size: options.max_output_size_value(),
             raw_dictionary: Vec::new(),
             scratch: Vec::new(),
         }
+    }
+
+    /// Create a decompressor with a hard output limit.
+    pub fn with_limit(max_output_size: usize) -> Self {
+        Self::with_options(&Options::new().max_output_size(max_output_size))
     }
 
     /// Create a decompressor with a raw LZ77 prefix dictionary.
@@ -50,6 +57,17 @@ impl Decompressor {
             raw_dictionary: dictionary.to_vec(),
             scratch: Vec::new(),
         }
+    }
+
+    /// Return current decode options.
+    pub fn options(&self) -> Options {
+        Options::new().max_output_size(self.max_output_size)
+    }
+
+    /// Replace decode options without releasing reusable buffers or changing
+    /// the dictionary.
+    pub fn reset_options(&mut self, options: &Options) {
+        self.max_output_size = options.max_output_size_value();
     }
 
     /// Return the configured maximum output size.
@@ -157,6 +175,13 @@ impl DecompressContext {
         }
     }
 
+    /// Create a context with explicit [`Options`].
+    pub fn with_options(options: &Options) -> Self {
+        Self {
+            inner: Decompressor::with_options(options),
+        }
+    }
+
     /// Create a context with a hard output limit.
     pub fn with_limit(max_output_size: usize) -> Self {
         Self {
@@ -177,6 +202,17 @@ impl DecompressContext {
         Self {
             inner: Decompressor::with_raw_dictionary_and_limit(dictionary, max_output_size),
         }
+    }
+
+    /// Return current decode options.
+    pub fn options(&self) -> Options {
+        self.inner.options()
+    }
+
+    /// Replace decode options without releasing reusable buffers or changing
+    /// the dictionary.
+    pub fn reset_options(&mut self, options: &Options) {
+        self.inner.reset_options(options);
     }
 
     /// Return the configured maximum output size.

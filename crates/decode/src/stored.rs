@@ -20,6 +20,7 @@ pub(crate) enum MetaBlockHeader {
     Compressed { len: usize, is_last: bool },
 }
 
+#[cfg(any(test, kani))]
 pub fn decompress_with_limit(
     input: &[u8],
     max_output_size: usize,
