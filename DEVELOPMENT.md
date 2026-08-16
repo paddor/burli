@@ -52,13 +52,8 @@ BURLI_GOOGLE_BROTLI_FRAGMENTED_EXHAUSTIVE=1 \
 creates annotated tags after the release PR merges, publishes to crates.io,
 and creates GitHub releases. Configuration lives in `release-plz.toml`.
 
-Publishing uses crates.io trusted publishing through GitHub Actions OIDC. Do
-not add a crates.io token secret unless trusted publishing cannot be used.
-
-New crates cannot be first-published through trusted publishing. `burli-cat`
-is therefore excluded from automated publishing until its first crates.io
-publish is done manually from this repository. After that first publish, remove
-the `burli-cat` `publish = false` override in `release-plz.toml`.
+Publishing uses crates.io trusted publishing through GitHub Actions OIDC for
+all publishable crates. Do not add a crates.io token secret.
 
 ### Steps
 
@@ -70,9 +65,8 @@ the `burli-cat` `publish = false` override in `release-plz.toml`.
 3. **Merge the release PR.** release-plz tags and publishes configured crates
    to crates.io automatically.
 
-4. **Publish `burli-cat` manually for its first crates.io release.** Run this
-   from the release PR merge commit after the workspace dependency versions are
-   bumped and published.
+4. **Update changelogs manually.** Each publishable crate has a
+   `CHANGELOG.md`; keep release entries curated by hand.
 
 ## Kani
 

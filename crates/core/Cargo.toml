@@ -9,7 +9,7 @@ repository = "https://github.com/paddor/burli"
 readme = "README.md"
 categories = ["compression"]
 keywords = ["brotli", "compression"]
-include = ["/src/**/*", "/README.md"]
+include = ["/src/**/*", "/README.md", "/CHANGELOG.md"]
 
 [lints]
 workspace = true
