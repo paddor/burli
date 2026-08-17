@@ -22,12 +22,12 @@ when needed.
 ![Brotli pipeline benchmark](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/summary.svg)
 
 <details>
-<summary>x86_64 details (pipeline, scatter, matrix, small inputs)</summary>
+<summary>x86_64 details</summary>
 
+![per-file encode/decode matrix](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/matrix.svg)
 ![per-file pipeline](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/pipeline.svg)
 ![encode speed vs compression ratio](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/scatter.svg)
 ![Silesia encode speed vs compression ratio](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/scatter_silesia.svg)
-![per-file encode/decode matrix](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/matrix.svg)
 ![small input encode throughput](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/small_encode.svg)
 ![small input decode throughput](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/small_decode.svg)
 </details>
