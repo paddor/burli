@@ -850,7 +850,7 @@ fn print_q0_store_stats(
         if quality != 0 {
             continue;
         }
-        let options = burli::Options::default().quality(quality)?;
+        let options = burli::Options::default().with_quality(quality)?;
         for input in inputs {
             let stats = burli::encode::diagnostics::q0_store_stats(&input.data, &options)?;
             println!(

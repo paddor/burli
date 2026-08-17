@@ -55,7 +55,7 @@ pub fn decompress_with_options(
     stored::decompress_with_raw_dictionary_and_limit(
         input,
         crate::dictionary::RawDictionary::empty(),
-        options.max_output_size_value(),
+        options.max_output_size(),
     )
 }
 
@@ -70,7 +70,7 @@ pub fn decompress_with_limit(
     input: &[u8],
     max_output_size: usize,
 ) -> Result<alloc::vec::Vec<u8>, DecompressError> {
-    decompress_with_options(input, &Options::new().max_output_size(max_output_size))
+    decompress_with_options(input, &Options::new().with_max_output_size(max_output_size))
 }
 
 #[doc(hidden)]
@@ -123,7 +123,7 @@ pub fn decompress_with_raw_dictionary_and_options(
     stored::decompress_with_raw_dictionary_and_limit(
         input,
         crate::dictionary::RawDictionary::new(dictionary.as_bytes()),
-        options.max_output_size_value(),
+        options.max_output_size(),
     )
 }
 
@@ -143,7 +143,7 @@ pub fn decompress_with_raw_dictionary_and_limit(
     decompress_with_raw_dictionary_and_options(
         input,
         dictionary,
-        &Options::new().max_output_size(max_output_size),
+        &Options::new().with_max_output_size(max_output_size),
     )
 }
 
@@ -178,7 +178,7 @@ pub fn decompress_into_with_options(
     let mut decompressed = alloc::vec::Vec::new();
     stored::decompress_into_empty_with_limit(
         input,
-        options.max_output_size_value(),
+        options.max_output_size(),
         &mut decompressed,
         crate::dictionary::RawDictionary::empty(),
     )?;
@@ -211,7 +211,7 @@ pub fn decompress_into_slice_with_options(
     output: &mut [u8],
     options: &Options,
 ) -> Result<usize, DecompressError> {
-    let limit = options.max_output_size_value().min(output.len());
+    let limit = options.max_output_size().min(output.len());
     let mut decompressed = alloc::vec::Vec::with_capacity(output.len());
     stored::decompress_into_empty_with_limit(
         input,

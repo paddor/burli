@@ -113,7 +113,7 @@ pub fn decompress_with_options(
 pub fn decompress_with_limit(input: &[u8], max_output_size: usize) -> Result<alloc::vec::Vec<u8>> {
     decompress_with_options(
         input,
-        &decode::Options::new().max_output_size(max_output_size),
+        &decode::Options::new().with_max_output_size(max_output_size),
     )
 }
 
@@ -162,7 +162,7 @@ pub fn decompress_with_raw_dictionary_and_limit(
     decompress_with_raw_dictionary_and_options(
         input,
         dictionary,
-        &decode::Options::new().max_output_size(max_output_size),
+        &decode::Options::new().with_max_output_size(max_output_size),
     )
 }
 
@@ -230,10 +230,12 @@ pub fn decompress_into_slice_with_options(
 }
 
 #[cfg(feature = "alloc")]
+#[allow(deprecated)]
 pub use burli_decode::context::{DecompressContext, Decompressor};
 #[cfg(feature = "std")]
 pub use burli_decode::streaming::StreamDecoder;
 #[cfg(feature = "alloc")]
+#[allow(deprecated)]
 pub use burli_encode::context::{CompressContext, Compressor};
 #[cfg(feature = "std")]
 pub use burli_encode::streaming::StreamEncoder;

@@ -1,42 +1,16 @@
 #[cfg(feature = "std")]
-use std::io::{self, Read, Write};
+mod common;
+
+#[cfg(feature = "std")]
+use std::io::{Read, Write};
 use std::panic::{self, UnwindSafe};
 
 use burli::BurliError;
+#[cfg(feature = "std")]
+use common::FragmentedRead;
 
 fn assert_no_panic<T>(f: impl FnOnce() -> T + UnwindSafe) -> T {
     panic::catch_unwind(f).expect("public API panicked")
-}
-
-#[cfg(feature = "std")]
-struct FragmentedRead<'a> {
-    input: &'a [u8],
-    pos: usize,
-    chunk: usize,
-}
-
-#[cfg(feature = "std")]
-impl<'a> FragmentedRead<'a> {
-    const fn new(input: &'a [u8], chunk: usize) -> Self {
-        Self {
-            input,
-            pos: 0,
-            chunk,
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl Read for FragmentedRead<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.pos == self.input.len() {
-            return Ok(0);
-        }
-        let count = buf.len().min(self.chunk).min(self.input.len() - self.pos);
-        buf[..count].copy_from_slice(&self.input[self.pos..self.pos + count]);
-        self.pos += count;
-        Ok(count)
-    }
 }
 
 #[test]

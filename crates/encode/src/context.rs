@@ -23,7 +23,7 @@ impl Compressor {
     /// Returns [`CompressError::InvalidQuality`] outside Brotli's quality range.
     pub fn new(quality: u8) -> Result<Self, CompressError> {
         Ok(Self {
-            options: Options::default().quality(quality)?,
+            options: Options::default().with_quality(quality)?,
             workspace: crate::encode::Workspace::default(),
             writer: BitWriter::new(),
             scratch: Vec::new(),
@@ -115,73 +115,5 @@ impl Compressor {
     }
 }
 
-/// Backward-compatible alias for [`Compressor`].
-pub struct CompressContext {
-    inner: Compressor,
-}
-
-impl CompressContext {
-    /// Create a context from explicit [`Options`].
-    pub fn new(options: Options) -> Self {
-        Self {
-            inner: Compressor::with_options(options),
-        }
-    }
-
-    /// Create a context for `quality`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CompressError::InvalidQuality`] outside Brotli's quality range.
-    pub fn with_quality(quality: u8) -> Result<Self, CompressError> {
-        Ok(Self {
-            inner: Compressor::new(quality)?,
-        })
-    }
-
-    /// Return current options.
-    pub const fn options(&self) -> &Options {
-        self.inner.options()
-    }
-
-    /// Replace options without releasing reusable buffers.
-    pub fn reset_options(&mut self, options: Options) {
-        self.inner.reset_options(options);
-    }
-
-    /// Compress `input` into a new `Vec`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the current options are unsupported.
-    pub fn compress(&mut self, input: &[u8]) -> Result<Vec<u8>, CompressError> {
-        self.inner.compress(input)
-    }
-
-    /// Compress `input` and append to `output`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the current options are unsupported.
-    pub fn compress_into(
-        &mut self,
-        input: &[u8],
-        output: &mut Vec<u8>,
-    ) -> Result<usize, CompressError> {
-        self.inner.compress_into(input, output)
-    }
-
-    /// Compress `input` into a caller-provided slice.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CompressError::OutputLimitExceeded`] when `output` is too
-    /// small.
-    pub fn compress_into_slice(
-        &mut self,
-        input: &[u8],
-        output: &mut [u8],
-    ) -> Result<usize, CompressError> {
-        self.inner.compress_into_slice(input, output)
-    }
-}
+#[deprecated(note = "use Compressor directly")]
+pub type CompressContext = Compressor;

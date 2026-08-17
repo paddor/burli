@@ -110,13 +110,13 @@ pub(crate) fn compress_into_with_options_workspace(
     writer: &mut BitWriter,
     output: &mut Vec<u8>,
 ) -> Result<usize, CompressError> {
-    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+    if options.quality() > MAX_LITERAL_ONLY_QUALITY {
         return Err(BurliError::Unsupported(
             "only q0..q5 Brotli encoding is implemented yet",
         ));
     }
     workspace.reset_stream();
-    if options.quality_value() == 0 && !input.is_empty() && input.len() <= 256 {
+    if options.quality() == 0 && !input.is_empty() && input.len() <= 256 {
         let before = output.len();
         let uncompressed = crate::metablock::compress_uncompressed_with_options(input, options)?;
         output.extend_from_slice(&uncompressed);
@@ -125,7 +125,7 @@ pub(crate) fn compress_into_with_options_workspace(
 
     writer.clear();
     writer.reserve(max_literal_only_size(input.len()));
-    crate::metablock::write_window_bits(writer, options.window_bits_value())?;
+    crate::metablock::write_window_bits(writer, options.window_bits())?;
     if input.is_empty() {
         crate::metablock::write_last_empty_meta_block(writer)?;
         return Ok(writer.finish_into(output));
@@ -139,7 +139,7 @@ pub(crate) fn compress_into_with_options_workspace(
         return Ok(writer.finish_into(output));
     }
 
-    let uncompressed_options = options.clone().quality(0)?;
+    let uncompressed_options = options.clone().with_quality(0)?;
     let uncompressed =
         crate::metablock::compress_uncompressed_with_options(input, &uncompressed_options)?;
     if uncompressed.len() < compressed_len {
@@ -205,12 +205,12 @@ pub(crate) fn write_stream_header(
     writer: &mut BitWriter,
     options: &Options,
 ) -> Result<(), CompressError> {
-    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+    if options.quality() > MAX_LITERAL_ONLY_QUALITY {
         return Err(BurliError::Unsupported(
             "only q0..q5 Brotli encoding is implemented yet",
         ));
     }
-    crate::metablock::write_window_bits(writer, options.window_bits_value())
+    crate::metablock::write_window_bits(writer, options.window_bits())
 }
 
 #[cfg(feature = "std")]
@@ -225,7 +225,7 @@ pub(crate) fn write_stream_chunk_with_workspace(
     if input.is_empty() {
         return Ok(());
     }
-    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+    if options.quality() > MAX_LITERAL_ONLY_QUALITY {
         return Err(BurliError::Unsupported(
             "only q0..q5 Brotli encoding is implemented yet",
         ));
@@ -244,7 +244,7 @@ pub(crate) fn encode_literal_fragment_with_options(
     input: &[u8],
     options: &Options,
 ) -> Result<(Vec<u8>, usize), CompressError> {
-    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+    if options.quality() > MAX_LITERAL_ONLY_QUALITY {
         return Err(BurliError::Unsupported(
             "only q0..q5 Brotli concat fragments are implemented yet",
         ));
@@ -252,7 +252,7 @@ pub(crate) fn encode_literal_fragment_with_options(
 
     let mut writer = BitWriter::with_capacity(max_literal_only_size(input.len()));
     let block_size = options
-        .block_bits_value()
+        .block_bits()
         .map_or(MAX_META_BLOCK_SIZE, |bits| 1_usize << bits)
         .min(MAX_META_BLOCK_SIZE);
     for chunk in input.chunks(block_size) {
@@ -266,7 +266,7 @@ pub(crate) fn encode_concat_fragment_with_options(
     input: &[u8],
     options: &Options,
 ) -> Result<(Vec<u8>, usize, bool), CompressError> {
-    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+    if options.quality() > MAX_LITERAL_ONLY_QUALITY {
         return Err(BurliError::Unsupported(
             "only q0..q5 Brotli concat fragments are implemented yet",
         ));
@@ -286,7 +286,7 @@ pub(crate) fn encode_concat_fragment_with_options(
             &mut writer,
             chunk,
             plan.max_backward_distance.min(chunk.len()),
-            options.quality_value(),
+            options.quality(),
             &mut workspace,
         )?;
     }
@@ -299,12 +299,12 @@ pub(crate) fn write_stream_header_to_writer(
     writer: &mut BitWriter,
     options: &Options,
 ) -> Result<(), CompressError> {
-    if options.quality_value() > MAX_LITERAL_ONLY_QUALITY {
+    if options.quality() > MAX_LITERAL_ONLY_QUALITY {
         return Err(BurliError::Unsupported(
             "only q0..q5 Brotli concat streams are implemented yet",
         ));
     }
-    crate::metablock::write_window_bits(writer, options.window_bits_value())
+    crate::metablock::write_window_bits(writer, options.window_bits())
 }
 
 pub(crate) fn write_last_empty_meta_block_to_writer(
@@ -423,15 +423,15 @@ struct EncoderPlan {
 
 impl EncoderPlan {
     fn from_options(input_len: usize, options: &Options) -> Result<Self, CompressError> {
-        let quality = options.quality_value();
+        let quality = options.quality();
         if quality > MAX_LITERAL_ONLY_QUALITY {
             return Err(BurliError::Unsupported(
                 "only q0..q5 Brotli encoding is implemented yet",
             ));
         }
 
-        let max_backward_distance = (1_usize << options.window_bits_value()) - 16;
-        let block_size = match options.block_bits_value() {
+        let max_backward_distance = (1_usize << options.window_bits()) - 16;
+        let block_size = match options.block_bits() {
             Some(bits) => 1_usize << bits,
             None if quality == 0 && input_len <= max_backward_distance => MAX_META_BLOCK_SIZE,
             None if quality == 0 => 1_usize << 18,
@@ -985,6 +985,82 @@ impl Token {
             self.copy_len_code
         }
     }
+}
+
+const LITERAL_BYTE_SCORE: usize = 135;
+const DISTANCE_BIT_PENALTY: usize = 30;
+const SCORE_BASE: usize = DISTANCE_BIT_PENALTY * 8 * core::mem::size_of::<usize>();
+const MIN_SCORE: usize = SCORE_BASE + 100;
+
+#[inline]
+fn literal_only(input_len: usize) -> Vec<Token> {
+    if input_len == 0 {
+        return Vec::new();
+    }
+    vec![Token {
+        insert_start: 0,
+        insert_len: input_len,
+        copy_len: 0,
+        copy_len_code: 0,
+        distance: 0,
+        distance_code: None,
+        use_last_distance: false,
+    }]
+}
+
+#[inline]
+fn score_distance(len: usize, distance: usize) -> usize {
+    SCORE_BASE + LITERAL_BYTE_SCORE * len
+        - DISTANCE_BIT_PENALTY * (usize::BITS as usize - 1 - distance.leading_zeros() as usize)
+}
+
+#[inline]
+fn score_last_distance(len: usize) -> usize {
+    SCORE_BASE + LITERAL_BYTE_SCORE * len + 15
+}
+
+#[inline]
+fn compute_distance_code(
+    distance: usize,
+    max_backward_distance: usize,
+    dist_cache: [usize; 4],
+) -> usize {
+    if distance <= max_backward_distance {
+        let distance_plus_3 = distance + 3;
+        let offset0 = distance_plus_3.wrapping_sub(dist_cache[0]);
+        let offset1 = distance_plus_3.wrapping_sub(dist_cache[1]);
+        if distance == dist_cache[0] {
+            return 0;
+        }
+        if distance == dist_cache[1] {
+            return 1;
+        }
+        if offset0 < 7 {
+            return (0x0975_0468_usize >> (4 * offset0)) & 0x0f;
+        }
+        if offset1 < 7 {
+            return (0x0fdb_1ace_usize >> (4 * offset1)) & 0x0f;
+        }
+        if distance == dist_cache[2] {
+            return 2;
+        }
+        if distance == dist_cache[3] {
+            return 3;
+        }
+    }
+    distance + 15
+}
+
+#[inline]
+fn simple_dictionary_match_len(input: &[u8], pos: usize, word: &[u8], max_len: usize) -> usize {
+    let Some(candidate) = input.get(pos..pos.saturating_add(max_len)) else {
+        return 0;
+    };
+    candidate
+        .iter()
+        .zip(word)
+        .take_while(|(left, right)| left == right)
+        .count()
 }
 
 #[derive(Clone, Debug)]
@@ -3523,12 +3599,10 @@ fn reverse_bits(value: u8, width: u8) -> u8 {
 }
 
 fn reverse_bits_u16(value: u16, width: u8) -> u16 {
-    let mut reversed = 0;
-    for bit in 0..width {
-        reversed <<= 1;
-        reversed |= (value >> bit) & 1;
+    if width == 0 {
+        return 0;
     }
-    reversed
+    value.reverse_bits() >> (16 - width)
 }
 
 fn write_simple_prefix_code_single(
@@ -3805,13 +3879,13 @@ mod tests {
         let input =
             b"abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789".repeat(64);
         let encoded =
-            compress_with_options(&input, &Options::default().quality(1).unwrap()).unwrap();
+            compress_with_options(&input, &Options::default().with_quality(1).unwrap()).unwrap();
 
         assert_ne!(
             encoded,
             crate::metablock::compress_uncompressed_with_options(
                 &input,
-                &Options::default().quality(0).unwrap()
+                &Options::default().with_quality(0).unwrap()
             )
             .unwrap()
         );
@@ -3822,10 +3896,10 @@ mod tests {
     fn q0_emits_compressed_stream_for_repeated_payload() {
         let input = b"function demo(){return demo_value;} ".repeat(256);
         let encoded =
-            compress_with_options(&input, &Options::default().quality(0).unwrap()).unwrap();
+            compress_with_options(&input, &Options::default().with_quality(0).unwrap()).unwrap();
         let uncompressed = crate::metablock::compress_uncompressed_with_options(
             &input,
-            &Options::default().quality(0).unwrap(),
+            &Options::default().with_quality(0).unwrap(),
         )
         .unwrap();
 
@@ -3836,7 +3910,7 @@ mod tests {
     #[test]
     fn q0_uses_uncompressed_for_tiny_payloads() {
         let input = b"<html><body>hello burli</body></html>".repeat(4);
-        let options = Options::default().quality(0).unwrap();
+        let options = Options::default().with_quality(0).unwrap();
         let encoded = compress_with_options(&input, &options).unwrap();
         let uncompressed =
             crate::metablock::compress_uncompressed_with_options(&input, &options).unwrap();
@@ -3998,7 +4072,7 @@ mod tests {
     fn q0_compresses_long_repetitive_payload() {
         let input = br#"{"name":"burli","kind":"brotli","safe":true}"#.repeat(4096);
         let encoded =
-            compress_with_options(&input, &Options::default().quality(0).unwrap()).unwrap();
+            compress_with_options(&input, &Options::default().with_quality(0).unwrap()).unwrap();
 
         assert!(encoded.len() * 20 < input.len());
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
@@ -4019,7 +4093,8 @@ mod tests {
             input.truncate(len);
 
             let encoded =
-                compress_with_options(&input, &Options::default().quality(0).unwrap()).unwrap();
+                compress_with_options(&input, &Options::default().with_quality(0).unwrap())
+                    .unwrap();
 
             assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
         }
@@ -4029,7 +4104,7 @@ mod tests {
     fn q1_round_trips_mixed_literals() {
         let input = b"function demo(){return 42;}";
         let encoded =
-            compress_with_options(input, &Options::default().quality(1).unwrap()).unwrap();
+            compress_with_options(input, &Options::default().with_quality(1).unwrap()).unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
@@ -4048,7 +4123,8 @@ mod tests {
             input.truncate(len);
 
             let encoded =
-                compress_with_options(&input, &Options::default().quality(1).unwrap()).unwrap();
+                compress_with_options(&input, &Options::default().with_quality(1).unwrap())
+                    .unwrap();
 
             assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
         }
@@ -4058,7 +4134,7 @@ mod tests {
     fn q5_round_trips_long_literal_run() {
         let input = vec![b'a'; 3000];
         let encoded =
-            compress_with_options(&input, &Options::default().quality(5).unwrap()).unwrap();
+            compress_with_options(&input, &Options::default().with_quality(5).unwrap()).unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
@@ -4067,7 +4143,7 @@ mod tests {
     fn q5_round_trips_literal_run_above_64k() {
         let input = vec![b'x'; 70_000];
         let encoded =
-            compress_with_options(&input, &Options::default().quality(5).unwrap()).unwrap();
+            compress_with_options(&input, &Options::default().with_quality(5).unwrap()).unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
@@ -4076,7 +4152,7 @@ mod tests {
     fn q5_compresses_repeated_payload() {
         let input = b"0123456789abcdef".repeat(128);
         let encoded =
-            compress_with_options(&input, &Options::default().quality(5).unwrap()).unwrap();
+            compress_with_options(&input, &Options::default().with_quality(5).unwrap()).unwrap();
 
         assert!(encoded.len() < input.len());
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
@@ -4087,7 +4163,7 @@ mod tests {
         let input =
             b"abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789".repeat(64);
         let encoded =
-            compress_with_options(&input, &Options::default().quality(1).unwrap()).unwrap();
+            compress_with_options(&input, &Options::default().with_quality(1).unwrap()).unwrap();
 
         assert!(encoded.len() < input.len());
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
@@ -4101,7 +4177,7 @@ mod tests {
             input[offset + 64..offset + 72].copy_from_slice(&copy);
         }
         let encoded =
-            compress_with_options(&input, &Options::default().quality(1).unwrap()).unwrap();
+            compress_with_options(&input, &Options::default().with_quality(1).unwrap()).unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
@@ -4129,14 +4205,14 @@ mod tests {
     fn q0_sparse_binary_round_trips() {
         let input = sparse_binary_fixture(128 * 1024 + 17);
         let encoded =
-            compress_with_options(&input, &Options::default().quality(0).unwrap()).unwrap();
+            compress_with_options(&input, &Options::default().with_quality(0).unwrap()).unwrap();
 
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
     }
 
     #[test]
     fn q0_store_stats_report_sparse_skip_work() {
-        let options = Options::default().quality(0).unwrap();
+        let options = Options::default().with_quality(0).unwrap();
         let input = sparse_binary_fixture(128 * 1024 + 17);
         let stats = q0_store_stats(&input, &options).unwrap();
 

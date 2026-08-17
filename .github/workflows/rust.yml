@@ -39,6 +39,10 @@ jobs:
           echo "DYLD_FALLBACK_LIBRARY_PATH=$prefix/lib:${DYLD_FALLBACK_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
       - run: cargo test --workspace --all-targets
       - run: cargo test -p burli --no-default-features --features alloc
+      - run: cargo check -p burli-core --no-default-features
+      - run: cargo check -p burli-encode --no-default-features
+      - run: cargo check -p burli-decode --no-default-features
+      - run: cargo check -p burli --no-default-features
 
   paranoid:
     name: paranoid (pure safe Rust)

@@ -190,10 +190,19 @@ impl<'a> BitReader<'a> {
     }
 
     pub fn remaining_bits_are_zero(&self) -> bool {
-        (0..self.remaining_bits()).all(|offset| {
-            let absolute = self.bit_pos + offset;
-            ((self.input[absolute / 8] >> (absolute % 8)) & 1) == 0
-        })
+        if self.remaining_bits() == 0 {
+            return true;
+        }
+        let start_byte = self.bit_pos / 8;
+        let bit_offset = self.bit_pos % 8;
+        if bit_offset != 0 {
+            let mask = !((1u8 << bit_offset) - 1);
+            if self.input[start_byte] & mask != 0 {
+                return false;
+            }
+            return self.input[start_byte + 1..].iter().all(|&b| b == 0);
+        }
+        self.input[start_byte..].iter().all(|&b| b == 0)
     }
 }
 

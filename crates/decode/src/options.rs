@@ -20,14 +20,14 @@ impl Options {
 
     /// Set the maximum decoded output size.
     #[must_use]
-    pub const fn max_output_size(mut self, limit: usize) -> Self {
+    pub const fn with_max_output_size(mut self, limit: usize) -> Self {
         self.max_output_size = limit;
         self
     }
 
     /// Return the maximum decoded output size.
     #[must_use]
-    pub const fn max_output_size_value(&self) -> usize {
+    pub const fn max_output_size(&self) -> usize {
         self.max_output_size
     }
 }

@@ -1,11 +1,15 @@
 #![cfg(feature = "std")]
 
+mod common;
+
 use std::{
     ffi::c_int,
     io::{self, Read},
     panic::{self, AssertUnwindSafe},
     path::Path,
 };
+
+use common::FragmentedRead;
 
 const DEFAULT_WINDOW_BITS: c_int = 22;
 const BROTLI_MODE_GENERIC: c_int = 0;
@@ -98,24 +102,6 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
-struct FragmentedRead<'a> {
-    input: &'a [u8],
-    pos: usize,
-    chunk: usize,
-}
-
-impl Read for FragmentedRead<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.pos == self.input.len() {
-            return Ok(0);
-        }
-        let count = buf.len().min(self.chunk).min(self.input.len() - self.pos);
-        buf[..count].copy_from_slice(&self.input[self.pos..self.pos + count]);
-        self.pos += count;
-        Ok(count)
-    }
-}
-
 #[test]
 fn c_brotli_q0_to_q5_decode_through_burli() {
     for quality in 0..=5 {
@@ -191,7 +177,7 @@ fn c_brotli_raw_dictionary_decodes_through_burli() {
             .unwrap(),
         input
     );
-    let options = burli::decode::Options::new().max_output_size(input.len());
+    let options = burli::decode::Options::new().with_max_output_size(input.len());
     assert_eq!(
         burli::decompress_with_raw_dictionary_and_options(&encoded, &raw_dictionary, &options)
             .unwrap(),
@@ -456,11 +442,7 @@ fn assert_matches_c_decoder_or_errors(encoded: &[u8], input: &[u8], label: &str)
     let mut decompressor = burli::Decompressor::with_limit(max_output);
     let stateful = assert_no_panic(|| decompressor.decompress(encoded));
     let streamed = assert_no_panic(|| {
-        let source = FragmentedRead {
-            input: encoded,
-            pos: 0,
-            chunk: 17,
-        };
+        let source = FragmentedRead::new(encoded, 17);
         let mut decoder = burli::StreamDecoder::with_limit(source, max_output);
         let mut decoded = Vec::new();
         decoder.read_to_end(&mut decoded).map(|_| decoded)
@@ -553,11 +535,7 @@ fn is_strict_trailing_burli_error(error: &burli::BurliError) -> bool {
 }
 
 fn assert_stream_decodes(encoded: &[u8], expected: &[u8], label: &str, chunk: usize) {
-    let source = FragmentedRead {
-        input: encoded,
-        pos: 0,
-        chunk,
-    };
+    let source = FragmentedRead::new(encoded, chunk);
     let mut decoder = burli::StreamDecoder::with_limit(source, expected.len());
     let mut decoded = Vec::new();
 

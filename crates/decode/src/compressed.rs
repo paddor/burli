@@ -1166,7 +1166,7 @@ fn copy_literals_multi_block_uniform_mode(
                 previous = (literal, previous.0);
             }
         }
-        _ => unreachable!("Brotli literal context mode is a 2-bit field"),
+        _ => return Err(BurliError::Format("invalid literal context mode")),
     }
     Ok(())
 }
@@ -1315,7 +1315,7 @@ fn copy_literals_single_block(
                 previous = (literal, previous.0);
             }
         }
-        _ => unreachable!("Brotli literal context mode is a 2-bit field"),
+        _ => return Err(BurliError::Format("invalid literal context mode")),
     }
     Ok(())
 }
@@ -1366,7 +1366,7 @@ fn copy_literals_single_block_trusted(
                 previous = (literal, previous.0);
             }
         }
-        _ => unreachable!("Brotli literal context mode is a 2-bit field"),
+        _ => unreachable!(),
     }
 }
 

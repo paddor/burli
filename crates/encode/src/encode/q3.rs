@@ -1,18 +1,16 @@
 use alloc::{vec, vec::Vec};
 
 use super::{
-    INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, match_len, read_u64_le,
-    token_supports_last_distance, tune,
+    INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, literal_only, match_len,
+    read_u64_le, score_distance, score_last_distance, token_supports_last_distance, tune,
 };
 
 const HASH_LEN: usize = 5;
 const HASH_TYPE_LEN: usize = 8;
 const STORE_LOOKAHEAD: usize = 8;
 const HASH_MUL: u64 = 0x1e35_a7bd_1e35_a7bd;
-const LITERAL_BYTE_SCORE: usize = 135;
-const DISTANCE_BIT_PENALTY: usize = 30;
-const SCORE_BASE: usize = DISTANCE_BIT_PENALTY * 8 * core::mem::size_of::<usize>();
-const MIN_SCORE: usize = SCORE_BASE + 100;
+use super::MIN_SCORE;
+
 const LAZY_SCORE_DIFF: usize = 175;
 const SPARSE_SEARCH_WINDOW: usize = 64;
 const LONG_MATCH_STORE_THRESHOLD: usize = 64;
@@ -264,21 +262,6 @@ fn collect_with_table<
     tokens
 }
 
-fn literal_only(input_len: usize) -> Vec<Token> {
-    if input_len == 0 {
-        return Vec::new();
-    }
-    vec![Token {
-        insert_start: 0,
-        insert_len: input_len,
-        copy_len: 0,
-        copy_len_code: 0,
-        distance: 0,
-        distance_code: None,
-        use_last_distance: false,
-    }]
-}
-
 #[inline(always)]
 fn find_match<const TABLE_BITS: usize, const BUCKET_SWEEP: usize>(
     input: &[u8],
@@ -424,44 +407,4 @@ fn hash<const TABLE_BITS: usize>(input: &[u8], pos: usize) -> usize {
 fn hash_word<const TABLE_BITS: usize>(word: u64) -> usize {
     let word = word << (64 - 8 * HASH_LEN);
     (word.wrapping_mul(HASH_MUL) >> (64 - TABLE_BITS)) as usize
-}
-
-fn score_distance(len: usize, distance: usize) -> usize {
-    SCORE_BASE + LITERAL_BYTE_SCORE * len
-        - DISTANCE_BIT_PENALTY * (usize::BITS as usize - 1 - distance.leading_zeros() as usize)
-}
-
-fn score_last_distance(len: usize) -> usize {
-    SCORE_BASE + LITERAL_BYTE_SCORE * len + 15
-}
-
-fn compute_distance_code(
-    distance: usize,
-    max_backward_distance: usize,
-    dist_cache: [usize; 4],
-) -> usize {
-    if distance <= max_backward_distance {
-        let distance_plus_3 = distance + 3;
-        let offset0 = distance_plus_3.wrapping_sub(dist_cache[0]);
-        let offset1 = distance_plus_3.wrapping_sub(dist_cache[1]);
-        if distance == dist_cache[0] {
-            return 0;
-        }
-        if distance == dist_cache[1] {
-            return 1;
-        }
-        if offset0 < 7 {
-            return (0x0975_0468_usize >> (4 * offset0)) & 0x0f;
-        }
-        if offset1 < 7 {
-            return (0x0fdb_1ace_usize >> (4 * offset1)) & 0x0f;
-        }
-        if distance == dist_cache[2] {
-            return 2;
-        }
-        if distance == dist_cache[3] {
-            return 3;
-        }
-    }
-    distance + 15
 }

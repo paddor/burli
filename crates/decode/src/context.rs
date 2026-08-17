@@ -29,7 +29,7 @@ impl Decompressor {
     /// Create a decompressor with explicit [`Options`].
     pub fn with_options(options: &Options) -> Self {
         Self {
-            max_output_size: options.max_output_size_value(),
+            max_output_size: options.max_output_size(),
             raw_dictionary: RawDictionary::empty(),
             scratch: Vec::new(),
         }
@@ -37,7 +37,7 @@ impl Decompressor {
 
     /// Create a decompressor with a hard output limit.
     pub fn with_limit(max_output_size: usize) -> Self {
-        Self::with_options(&Options::new().max_output_size(max_output_size))
+        Self::with_options(&Options::new().with_max_output_size(max_output_size))
     }
 
     /// Create a decompressor with a raw LZ77 prefix dictionary.
@@ -53,7 +53,7 @@ impl Decompressor {
     ) -> Self {
         Self::with_raw_dictionary_and_options(
             dictionary,
-            &Options::new().max_output_size(max_output_size),
+            &Options::new().with_max_output_size(max_output_size),
         )
     }
 
@@ -61,7 +61,7 @@ impl Decompressor {
     /// [`Options`].
     pub fn with_raw_dictionary_and_options(dictionary: RawDictionary, options: &Options) -> Self {
         Self {
-            max_output_size: options.max_output_size_value(),
+            max_output_size: options.max_output_size(),
             raw_dictionary: dictionary,
             scratch: Vec::new(),
         }
@@ -69,13 +69,13 @@ impl Decompressor {
 
     /// Return current decode options.
     pub fn options(&self) -> Options {
-        Options::new().max_output_size(self.max_output_size)
+        Options::new().with_max_output_size(self.max_output_size)
     }
 
     /// Replace decode options without releasing reusable buffers or changing
     /// the dictionary.
     pub fn reset_options(&mut self, options: &Options) {
-        self.max_output_size = options.max_output_size_value();
+        self.max_output_size = options.max_output_size();
     }
 
     /// Return the configured raw LZ77 prefix dictionary.
@@ -174,134 +174,5 @@ impl Default for Decompressor {
     }
 }
 
-/// Backward-compatible alias for [`Decompressor`].
-pub struct DecompressContext {
-    inner: Decompressor,
-}
-
-impl DecompressContext {
-    /// Create a context with no practical output limit.
-    pub const fn new() -> Self {
-        Self {
-            inner: Decompressor::new(),
-        }
-    }
-
-    /// Create a context with explicit [`Options`].
-    pub fn with_options(options: &Options) -> Self {
-        Self {
-            inner: Decompressor::with_options(options),
-        }
-    }
-
-    /// Create a context with a hard output limit.
-    pub fn with_limit(max_output_size: usize) -> Self {
-        Self {
-            inner: Decompressor::with_limit(max_output_size),
-        }
-    }
-
-    /// Create a context with a raw LZ77 prefix dictionary.
-    pub fn with_raw_dictionary(dictionary: RawDictionary) -> Self {
-        Self {
-            inner: Decompressor::with_raw_dictionary(dictionary),
-        }
-    }
-
-    /// Create a context with a raw LZ77 prefix dictionary and hard output
-    /// limit.
-    pub fn with_raw_dictionary_and_limit(
-        dictionary: RawDictionary,
-        max_output_size: usize,
-    ) -> Self {
-        Self {
-            inner: Decompressor::with_raw_dictionary_and_limit(dictionary, max_output_size),
-        }
-    }
-
-    /// Create a context with a raw LZ77 prefix dictionary and explicit
-    /// [`Options`].
-    pub fn with_raw_dictionary_and_options(dictionary: RawDictionary, options: &Options) -> Self {
-        Self {
-            inner: Decompressor::with_raw_dictionary_and_options(dictionary, options),
-        }
-    }
-
-    /// Return current decode options.
-    pub fn options(&self) -> Options {
-        self.inner.options()
-    }
-
-    /// Replace decode options without releasing reusable buffers or changing
-    /// the dictionary.
-    pub fn reset_options(&mut self, options: &Options) {
-        self.inner.reset_options(options);
-    }
-
-    /// Return the configured raw LZ77 prefix dictionary.
-    pub const fn raw_dictionary(&self) -> &RawDictionary {
-        self.inner.raw_dictionary()
-    }
-
-    /// Return the configured maximum output size.
-    pub const fn max_output_size(&self) -> usize {
-        self.inner.max_output_size()
-    }
-
-    /// Replace the output limit without releasing reusable buffers.
-    pub fn set_limit(&mut self, max_output_size: usize) {
-        self.inner.set_limit(max_output_size);
-    }
-
-    /// Replace the raw LZ77 prefix dictionary.
-    pub fn set_raw_dictionary(&mut self, dictionary: &RawDictionary) {
-        self.inner.set_raw_dictionary(dictionary);
-    }
-
-    /// Remove the raw LZ77 prefix dictionary.
-    pub fn clear_raw_dictionary(&mut self) {
-        self.inner.clear_raw_dictionary();
-    }
-
-    /// Decompress `input` into a new `Vec`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for malformed streams or output-limit violations.
-    pub fn decompress(&mut self, input: &[u8]) -> Result<Vec<u8>, DecompressError> {
-        self.inner.decompress(input)
-    }
-
-    /// Decompress `input` and append to `output`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for malformed streams or output-limit violations.
-    pub fn decompress_into(
-        &mut self,
-        input: &[u8],
-        output: &mut Vec<u8>,
-    ) -> Result<usize, DecompressError> {
-        self.inner.decompress_into(input, output)
-    }
-
-    /// Decompress `input` into a caller-provided slice.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DecompressError::OutputLimitExceeded`] when `output` is too
-    /// small.
-    pub fn decompress_into_slice(
-        &mut self,
-        input: &[u8],
-        output: &mut [u8],
-    ) -> Result<usize, DecompressError> {
-        self.inner.decompress_into_slice(input, output)
-    }
-}
-
-impl Default for DecompressContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+#[deprecated(note = "use Decompressor directly")]
+pub type DecompressContext = Decompressor;

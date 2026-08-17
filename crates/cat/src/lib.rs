@@ -30,6 +30,28 @@ const ALLOWED_FLAGS: u32 = REQUIRED_FLAGS | PAYLOAD_KIND_FLAGS;
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
+const OFF_VERSION_MAJOR: usize = 8;
+const OFF_VERSION_MINOR: usize = 9;
+const OFF_HEADER_LEN: usize = 10;
+const OFF_FLAGS: usize = 12;
+const OFF_QUALITY: usize = 16;
+const OFF_MODE: usize = 17;
+const OFF_WINDOW_BITS: usize = 18;
+const OFF_BLOCK_BITS: usize = 19;
+const OFF_LARGE_WINDOW: usize = 20;
+const OFF_DICTIONARY_POLICY: usize = 21;
+const OFF_RESERVED_22: usize = 22;
+const OFF_INPUT_LEN: usize = 24;
+const OFF_PAYLOAD_LEN: usize = 32;
+const OFF_PAYLOAD_BIT_LEN: usize = 40;
+const OFF_FIRST_LEN: usize = 48;
+const OFF_FIRST_BYTES: usize = 49;
+const OFF_LAST_LEN: usize = 51;
+const OFF_LAST_BYTES: usize = 52;
+const OFF_RESERVED_54: usize = 54;
+const OFF_CHECKSUM: usize = 56;
+const OFF_HEADER_CHECKSUM: usize = 64;
+
 /// Limits and validation behavior for concat APIs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Options {
@@ -51,37 +73,37 @@ impl Options {
 
     /// Set maximum decoded bytes allowed for one fragment.
     #[must_use]
-    pub const fn max_fragment_input_len(mut self, limit: usize) -> Self {
+    pub const fn with_max_fragment_input_len(mut self, limit: usize) -> Self {
         self.input_ceiling = limit;
         self
     }
 
     /// Set maximum encoded payload bytes allowed for one fragment.
     #[must_use]
-    pub const fn max_fragment_payload_len(mut self, limit: usize) -> Self {
+    pub const fn with_max_fragment_payload_len(mut self, limit: usize) -> Self {
         self.payload_budget = limit;
         self
     }
 
     /// Set maximum decoded bytes allowed across an assembled stream.
     #[must_use]
-    pub const fn max_assembled_input_len(mut self, limit: usize) -> Self {
+    pub const fn with_max_assembled_input_len(mut self, limit: usize) -> Self {
         self.assembled_cap = limit;
         self
     }
 
     /// Return maximum decoded bytes allowed for one fragment.
-    pub const fn max_fragment_input_len_value(&self) -> usize {
+    pub const fn max_fragment_input_len(&self) -> usize {
         self.input_ceiling
     }
 
     /// Return maximum encoded payload bytes allowed for one fragment.
-    pub const fn max_fragment_payload_len_value(&self) -> usize {
+    pub const fn max_fragment_payload_len(&self) -> usize {
         self.payload_budget
     }
 
     /// Return maximum decoded bytes allowed across an assembled stream.
-    pub const fn max_assembled_input_len_value(&self) -> usize {
+    pub const fn max_assembled_input_len(&self) -> usize {
         self.assembled_cap
     }
 }
@@ -133,7 +155,7 @@ impl ConcatSpec {
 
     /// Set input mode hint.
     #[must_use]
-    pub const fn mode(mut self, mode: Mode) -> Self {
+    pub const fn with_mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
         self
     }
@@ -143,8 +165,8 @@ impl ConcatSpec {
     /// # Errors
     ///
     /// Returns an error when `block_bits` is outside the Brotli range.
-    pub fn block_bits(mut self, block_bits: Option<u8>) -> Result<Self> {
-        self.options()?.block_bits(block_bits)?;
+    pub fn with_block_bits(mut self, block_bits: Option<u8>) -> Result<Self> {
+        self.options()?.with_block_bits(block_bits)?;
         self.block_bits = block_bits;
         Ok(self)
     }
@@ -155,7 +177,7 @@ impl ConcatSpec {
     }
 
     /// Return configured input mode.
-    pub const fn mode_value(&self) -> Mode {
+    pub const fn mode(&self) -> Mode {
         self.mode
     }
 
@@ -165,7 +187,7 @@ impl ConcatSpec {
     }
 
     /// Return configured meta-block bits.
-    pub const fn block_bits_value(&self) -> Option<u8> {
+    pub const fn block_bits(&self) -> Option<u8> {
         self.block_bits
     }
 
@@ -186,19 +208,19 @@ impl ConcatSpec {
             ));
         }
         let options = BrotliOptions::default()
-            .quality(self.quality.get())?
-            .window_bits(self.window_bits)?
-            .block_bits(self.block_bits)?
-            .mode(self.mode);
+            .with_quality(self.quality.get())?
+            .with_window_bits(self.window_bits)?
+            .with_block_bits(self.block_bits)?
+            .with_mode(self.mode);
         Ok(options)
     }
 }
 
 const fn mode_wire_value(mode: Mode) -> u8 {
     match mode {
-        Mode::Generic => 0,
         Mode::Text => 1,
         Mode::Font => 2,
+        _ => 0,
     }
 }
 
@@ -440,8 +462,8 @@ impl ConcatAssembler {
     /// # Errors
     ///
     /// Returns an error if the fragment does not match this assembler.
-    pub fn push(&mut self, fragment: &ConcatFragment) -> Result<&mut Self> {
-        validate_fragment_for_spec(&self.spec, fragment, &self.options)?;
+    pub fn push(&mut self, fragment: ConcatFragment) -> Result<&mut Self> {
+        validate_fragment_for_spec(&self.spec, &fragment, &self.options)?;
         validate_assembled_input_len(
             self.fragments
                 .iter()
@@ -449,7 +471,7 @@ impl ConcatAssembler {
                 .chain(core::iter::once(fragment.metadata.input_len)),
             self.options.assembled_cap,
         )?;
-        self.fragments.push(fragment.clone());
+        self.fragments.push(fragment);
         Ok(self)
     }
 
@@ -458,9 +480,9 @@ impl ConcatAssembler {
     /// # Errors
     ///
     /// Returns an error if any fragment does not match this assembler.
-    pub fn push_all<'a, I>(&mut self, fragments: I) -> Result<&mut Self>
+    pub fn push_all<I>(&mut self, fragments: I) -> Result<&mut Self>
     where
-        I: IntoIterator<Item = &'a ConcatFragment>,
+        I: IntoIterator<Item = ConcatFragment>,
     {
         for fragment in fragments {
             self.push(fragment)?;
@@ -719,33 +741,33 @@ fn decode_header(header: &[u8]) -> Result<FragmentMetadata> {
     if &header[..8] != MAGIC {
         return Err(BurliError::Format("invalid concat fragment magic"));
     }
-    if checksum64(&header[..64]) != read_u64(header, 64)? {
+    if checksum64(&header[..OFF_HEADER_CHECKSUM]) != read_u64(header, OFF_HEADER_CHECKSUM)? {
         return Err(BurliError::Format(
             "concat fragment header checksum mismatch",
         ));
     }
-    let version_major = header[8];
-    let version_minor = header[9];
+    let version_major = header[OFF_VERSION_MAJOR];
+    let version_minor = header[OFF_VERSION_MINOR];
     if version_major != VERSION_MAJOR {
         return Err(BurliError::Format("unsupported concat fragment version"));
     }
-    if read_u16(header, 10)? != HEADER_LEN as u16 {
+    if read_u16(header, OFF_HEADER_LEN)? != HEADER_LEN as u16 {
         return Err(BurliError::Format(
             "unsupported concat fragment header length",
         ));
     }
-    if read_u16(header, 22)? != 0 || read_u16(header, 54)? != 0 {
+    if read_u16(header, OFF_RESERVED_22)? != 0 || read_u16(header, OFF_RESERVED_54)? != 0 {
         return Err(BurliError::Format(
             "concat fragment reserved bytes are non-zero",
         ));
     }
 
-    let block_bits = match header[19] {
+    let block_bits = match header[OFF_BLOCK_BITS] {
         0 => None,
         bits if (MIN_BLOCK_BITS..=MAX_BLOCK_BITS).contains(&bits) => Some(bits),
         _ => return Err(BurliError::Format("invalid concat fragment block bits")),
     };
-    let large_window = match header[20] {
+    let large_window = match header[OFF_LARGE_WINDOW] {
         0 => false,
         1 => true,
         _ => {
@@ -754,36 +776,48 @@ fn decode_header(header: &[u8]) -> Result<FragmentMetadata> {
             ));
         }
     };
-    let window_bits = header[18];
+    let window_bits = header[OFF_WINDOW_BITS];
     if !(MIN_WINDOW_BITS..=MAX_WINDOW_BITS).contains(&window_bits) {
         return Err(BurliError::InvalidWindowBits(window_bits));
     }
 
     let mut first_bytes = [0; 2];
-    first_bytes.copy_from_slice(&header[49..51]);
+    first_bytes.copy_from_slice(&header[OFF_FIRST_BYTES..OFF_LAST_LEN]);
     let mut last_bytes = [0; 2];
-    last_bytes.copy_from_slice(&header[52..54]);
+    last_bytes.copy_from_slice(&header[OFF_LAST_BYTES..OFF_RESERVED_54]);
 
     Ok(FragmentMetadata {
         version_major,
         version_minor,
         spec: ConcatSpec {
-            quality: Quality::new(header[16])?,
-            mode: mode_from_wire(header[17])?,
+            quality: Quality::new(header[OFF_QUALITY])?,
+            mode: mode_from_wire(header[OFF_MODE])?,
             window_bits,
             block_bits,
             large_window,
-            dictionary_policy: dictionary_policy_from_wire(header[21])?,
+            dictionary_policy: dictionary_policy_from_wire(header[OFF_DICTIONARY_POLICY])?,
         },
-        input_len: read_usize(header, 24, "concat fragment input length exceeds usize")?,
-        payload_len: read_usize(header, 32, "concat fragment payload length exceeds usize")?,
-        payload_bit_len: read_usize(header, 40, "concat fragment bit length exceeds usize")?,
+        input_len: read_usize(
+            header,
+            OFF_INPUT_LEN,
+            "concat fragment input length exceeds usize",
+        )?,
+        payload_len: read_usize(
+            header,
+            OFF_PAYLOAD_LEN,
+            "concat fragment payload length exceeds usize",
+        )?,
+        payload_bit_len: read_usize(
+            header,
+            OFF_PAYLOAD_BIT_LEN,
+            "concat fragment bit length exceeds usize",
+        )?,
         first_bytes,
-        first_len: header[48],
+        first_len: header[OFF_FIRST_LEN],
         last_bytes,
-        last_len: header[51],
-        checksum: read_u64(header, 56)?,
-        flags: read_u32(header, 12)?,
+        last_len: header[OFF_LAST_LEN],
+        checksum: read_u64(header, OFF_CHECKSUM)?,
+        flags: read_u32(header, OFF_FLAGS)?,
     })
 }
 
@@ -949,7 +983,7 @@ mod tests {
 
         let mut encoded = Vec::new();
         ConcatAssembler::new(&spec, &Options::new())
-            .push_all(&fragments)
+            .push_all(fragments)
             .unwrap()
             .finish(&mut encoded)
             .unwrap();
@@ -1065,7 +1099,7 @@ mod tests {
 
     #[test]
     fn options_limit_encoded_fragment_input() {
-        let options = Options::new().max_fragment_input_len(3);
+        let options = Options::new().with_max_fragment_input_len(3);
 
         assert!(matches!(
             encode_fragment(b"four", &spec(1), &options),
@@ -1081,7 +1115,7 @@ mod tests {
         let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let bytes = fragment.to_bytes(&Options::new()).unwrap();
         let options =
-            Options::new().max_fragment_payload_len(fragment.metadata().payload_len() - 1);
+            Options::new().with_max_fragment_payload_len(fragment.metadata().payload_len() - 1);
 
         assert!(matches!(
             ConcatFragment::from_bytes(&bytes, &options),
@@ -1095,7 +1129,8 @@ mod tests {
     fn options_limit_parsed_fragment_decoded_len_before_decode() {
         let fragment = encode_fragment(b"payload", &spec(1), &Options::new()).unwrap();
         let bytes = fragment.to_bytes(&Options::new()).unwrap();
-        let options = Options::new().max_fragment_input_len(fragment.metadata().input_len() - 1);
+        let options =
+            Options::new().with_max_fragment_input_len(fragment.metadata().input_len() - 1);
 
         assert!(matches!(
             ConcatFragment::from_bytes(&bytes, &options),
@@ -1111,7 +1146,7 @@ mod tests {
         let spec = spec(2);
         let first = encode_fragment(b"first", &spec, &Options::new()).unwrap();
         let second = encode_fragment(b"second", &spec, &Options::new()).unwrap();
-        let options = Options::new().max_assembled_input_len(10);
+        let options = Options::new().with_max_assembled_input_len(10);
         let mut output = b"prefix".to_vec();
 
         assert!(matches!(

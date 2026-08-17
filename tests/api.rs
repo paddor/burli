@@ -15,10 +15,10 @@ fn validates_quality() {
 
 #[test]
 fn validates_window_bits() {
-    assert!(Options::default().window_bits(10).is_ok());
-    assert!(Options::default().window_bits(24).is_ok());
+    assert!(Options::default().with_window_bits(10).is_ok());
+    assert!(Options::default().with_window_bits(24).is_ok());
     assert_eq!(
-        Options::default().window_bits(25),
+        Options::default().with_window_bits(25),
         Err(BurliError::InvalidWindowBits(25))
     );
 }
@@ -142,7 +142,7 @@ fn raw_dictionary_owns_and_exposes_bytes() {
 fn decode_options_limit_output_without_mutating_vec() {
     let input = b"too large";
     let encoded = burli::compress(input, 0).unwrap();
-    let options = burli::decode::Options::new().max_output_size(4);
+    let options = burli::decode::Options::new().with_max_output_size(4);
     let mut decoded = b"prefix".to_vec();
 
     assert_eq!(
@@ -166,7 +166,7 @@ fn decode_options_limit_output_without_mutating_vec() {
 fn stateful_decode_options_limit_output() {
     let input = b"too large";
     let encoded = burli::compress(input, 0).unwrap();
-    let options = burli::decode::Options::new().max_output_size(4);
+    let options = burli::decode::Options::new().with_max_output_size(4);
     let mut decompressor = burli::Decompressor::with_options(&options);
 
     assert_eq!(decompressor.options(), options);
@@ -246,7 +246,7 @@ fn stream_decoder_with_limit_reports_invalid_data() {
 #[cfg(feature = "std")]
 fn stream_decoder_with_options_reports_invalid_data() {
     let encoded = burli::compress(b"too large", 0).unwrap();
-    let options = burli::decode::Options::new().max_output_size(4);
+    let options = burli::decode::Options::new().with_max_output_size(4);
     let mut decoder = burli::StreamDecoder::with_options(encoded.as_slice(), &options);
     let mut decoded = Vec::new();
 
@@ -279,9 +279,9 @@ fn stream_decoder_emits_before_consuming_full_input() {
         })
         .collect::<Vec<_>>();
     let options = Options::default()
-        .quality(0)
+        .with_quality(0)
         .unwrap()
-        .block_bits(Some(16))
+        .with_block_bits(Some(16))
         .unwrap();
     let encoded = burli::compress_with_options(&input, &options).unwrap();
     let cursor = Cursor::new(encoded.as_slice());
@@ -350,11 +350,11 @@ fn q2_dictionary_after_split_meta_block_uses_global_base() {
         input.push((index * 37 + 11) as u8);
     }
     let options = Options::default()
-        .quality(2)
+        .with_quality(2)
         .unwrap()
-        .window_bits(10)
+        .with_window_bits(10)
         .unwrap()
-        .block_bits(Some(16))
+        .with_block_bits(Some(16))
         .unwrap();
     let encoded = burli::compress_with_options(&input, &options).unwrap();
 
@@ -368,9 +368,9 @@ fn q4_q5_dictionary_after_split_meta_block_uses_global_base() {
 
     for quality in 4..=5 {
         let options = Options::default()
-            .quality(quality)
+            .with_quality(quality)
             .unwrap()
-            .window_bits(10)
+            .with_window_bits(10)
             .unwrap();
         let encoded = burli::compress_with_options(&input, &options).unwrap();
 
@@ -391,11 +391,11 @@ fn stream_encoder_dictionary_after_split_meta_block_uses_global_base() {
         input.push((index * 37 + 11) as u8);
     }
     let options = Options::default()
-        .quality(2)
+        .with_quality(2)
         .unwrap()
-        .window_bits(10)
+        .with_window_bits(10)
         .unwrap()
-        .block_bits(Some(16))
+        .with_block_bits(Some(16))
         .unwrap();
     let mut encoder = burli::StreamEncoder::with_options(Vec::new(), options).unwrap();
 

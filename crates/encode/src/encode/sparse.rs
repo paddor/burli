@@ -1,6 +1,8 @@
 use alloc::{vec, vec::Vec};
 
-use super::{INITIAL_LAST_DISTANCE, MAX_META_BLOCK_SIZE, Token, match_len, read_u64_le, tune};
+use super::{
+    INITIAL_LAST_DISTANCE, MAX_META_BLOCK_SIZE, Token, literal_only, match_len, read_u64_le, tune,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Decision {
@@ -162,21 +164,6 @@ pub(super) fn collect_tokens(
     tokens
 }
 
-fn literal_only(input_len: usize) -> Vec<Token> {
-    if input_len == 0 {
-        return Vec::new();
-    }
-    vec![Token {
-        insert_start: 0,
-        insert_len: input_len,
-        copy_len: 0,
-        copy_len_code: 0,
-        distance: 0,
-        distance_code: None,
-        use_last_distance: false,
-    }]
-}
-
 fn sample(input: &[u8]) -> Sample {
     const TABLE_BITS: usize = 12;
     const TABLE_SIZE: usize = 1 << TABLE_BITS;
@@ -210,6 +197,7 @@ fn sample(input: &[u8]) -> Sample {
             miss_streak += 1;
             max_miss_streak = max_miss_streak.max(miss_streak);
         }
+        debug_assert!(u16::try_from(pos).is_ok());
         table[key] = pos as u16;
         pos += tune::LOW_COMPRESS_SAMPLE_STEP;
     }
