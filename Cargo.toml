@@ -4,7 +4,7 @@ exclude = ["bench", "fuzz", "jsr"]
 
 [package]
 name = "burli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Fast, memory-safe Rust Brotli codec"
@@ -22,9 +22,9 @@ nightly = ["burli-core/nightly", "burli-encode/nightly", "burli-decode/nightly"]
 paranoid = ["burli-core/paranoid", "burli-encode/paranoid", "burli-decode/paranoid"]
 
 [dependencies]
-burli-core = { version = "0.2.0", path = "crates/core", default-features = false }
-burli-encode = { version = "0.2.0", path = "crates/encode", default-features = false }
-burli-decode = { version = "0.2.0", path = "crates/decode", default-features = false }
+burli-core = { version = "0.3.0", path = "crates/core", default-features = false }
+burli-encode = { version = "0.3.0", path = "crates/encode", default-features = false }
+burli-decode = { version = "0.3.0", path = "crates/decode", default-features = false }
 
 [lints]
 workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "burli-decode"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.89"
 description = "Brotli decoder for burli"
@@ -22,7 +22,7 @@ nightly = ["burli-core/nightly"]
 paranoid = ["burli-core/paranoid"]
 
 [dependencies]
-burli-core = { version = "0.2.0", path = "../core", default-features = false }
+burli-core = { version = "0.3.0", path = "../core", default-features = false }
 
 [dev-dependencies]
 burli = { path = "../.." }
