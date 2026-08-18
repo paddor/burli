@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.3.0] - 2026-08-18
+
+- Remove the unused `simd` feature and `fearless_simd` dependency.
+
 ## [0.2.0] - 2026-08-17
 
 - Rename the options API and deprecate `DecompressContext`.

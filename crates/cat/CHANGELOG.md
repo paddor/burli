@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.2.1] - 2026-08-18
+
+- Update burli dependencies to `0.3.0` after the SIMD API removal.
+
 ## [0.2.0] - 2026-08-17
 
 - Rename the options API and update fragment assembly to accept owned fragments.
