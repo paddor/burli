@@ -124,12 +124,6 @@ may still contain unread bits and keeps only the decoded window history needed
 for future backward copies. Reads return decoded bytes as soon as a meta-block
 produces output.
 
-## SIMD
-
-SIMD dispatch is wired through features and shared primitive modules. Current
-hot paths are still mostly scalar. `paranoid` keeps the same feature surface and
-must continue to build with `forbid(unsafe_code)`.
-
 ## Unsafe Boundary
 
 Unsafe code is allowed only in small primitives with local contracts and
