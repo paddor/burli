@@ -68,6 +68,19 @@ all publishable crates. Do not add a crates.io token secret.
 4. **Update changelogs manually.** Each publishable crate has a
    `CHANGELOG.md`; keep release entries curated by hand.
 
+The JSR package is released separately from crates.io. Update the version in
+`jsr/deno.json` and `jsr/wasm/Cargo.toml`, then run the following before
+pushing the release commit:
+
+```bash
+cd jsr
+bash build.sh
+deno test --allow-read
+```
+
+The `jsr-publish` workflow repeats these checks and publishes on pushes to
+`main` using JSR trusted publishing through GitHub Actions OIDC.
+
 ## Kani
 
 Requires Kani:

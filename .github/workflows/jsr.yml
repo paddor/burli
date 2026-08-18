@@ -1,0 +1,35 @@
+name: jsr-publish
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - ".github/workflows/jsr.yml"
+      - "Cargo.toml"
+      - "crates/**"
+      - "jsr/**"
+      - "src/**"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - run: cargo install wasm-pack
+      - run: cd jsr && bash build.sh
+      - run: cd jsr && deno test --allow-read
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: cd jsr && npx --yes jsr publish

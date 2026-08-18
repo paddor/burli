@@ -17,6 +17,9 @@ all Bürli crates.
 loops, reusable contexts for repeated work, and `std::io` streaming wrappers
 when needed.
 
+**JavaScript and TypeScript.** The Brotli codec is available as
+[`@paddor/burli`](https://jsr.io/@paddor/burli), compiled to WebAssembly.
+
 ## Performance
 
 ![Brotli pipeline benchmark](https://raw.githubusercontent.com/paddor/burli/main/doc/charts/x86_64/summary.svg)

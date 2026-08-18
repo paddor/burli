@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/core", "crates/encode", "crates/decode", "crates/cat"]
-exclude = ["bench", "fuzz"]
+exclude = ["bench", "fuzz", "jsr"]
 
 [package]
 name = "burli"
@@ -12,7 +12,7 @@ license = "MIT"
 repository = "https://github.com/paddor/burli"
 categories = ["compression"]
 keywords = ["brotli", "compression", "decompression", "web"]
-include = ["/src/**/*", "/README.md", "/CHANGELOG.md", "/LICENSE", "/DESIGN.md", "/SAFETY.md", "/SECURITY.md"]
+include = ["/src/**/*", "/README.md", "/CHANGELOG.md", "/LICENSE", "/DESIGN.md", "/SAFETY.md", "/SECURITY.md", "!jsr/**"]
 
 [features]
 default = ["std"]

@@ -7,4 +7,9 @@ target/
 corpus/
 .chart_hw
 /fuzz/artifacts/
+/jsr/src/pkg/
+/jsr/src/pkg-tmp/
+/jsr/wasm/target/
+/jsr/wasm/Cargo.lock
+/jsr/deno.lock
 Cargo.lock
