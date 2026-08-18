@@ -1,0 +1,11 @@
+{
+  "name": "@paddor/burli",
+  "version": "0.2.0",
+  "license": "MIT",
+  "description": "Pure Rust Brotli codec compiled to WebAssembly. Compress and decompress Brotli data in JavaScript and TypeScript.",
+  "exports": "./src/mod.ts",
+  "publish": {
+    "include": ["src/", "deno.json", "LICENSE", "README.md"],
+    "exclude": ["src/mod_test.ts", "src/pkg/package.json", "!src/pkg/"]
+  }
+}
