@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.3.0] - 2026-08-18
+
+- Remove the unused SIMD feature and configuration API.
+- Add the `@paddor/burli` JSR package for JavaScript and TypeScript.
+
 ## [0.2.0] - 2026-08-17
 
 - Rename the options API to idiomatic Rust names and mark mode enums non-exhaustive.
