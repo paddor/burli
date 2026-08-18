@@ -3,7 +3,7 @@
 ## [0.2.0] - 2026-08-17
 
 - Rename the options API to idiomatic Rust names.
-- Mark `Mode` and `SimdMode` non-exhaustive for future extension.
+- Mark `Mode` non-exhaustive for future extension.
 - Harden bit validation and sparse hash table bounds checks.
 
 ## [0.1.0] - 2026-08-16

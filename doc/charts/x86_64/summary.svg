@@ -30,13 +30,13 @@ google-brotli
 </text>
 <rect x="293" y="250" width="80" height="63" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="293" y="234" width="80" height="16" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="293" y="208" width="80" height="26" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="293" y="207" width="80" height="27" opacity="1" fill="#F87171" stroke="none"/>
 <text x="333" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
 burli
 </text>
 <rect x="377" y="248" width="80" height="65" opacity="1" fill="#F472B6" stroke="none"/>
 <rect x="377" y="232" width="80" height="16" opacity="1" fill="#C05A92" stroke="none"/>
-<rect x="377" y="206" width="80" height="26" opacity="1" fill="#F472B6" stroke="none"/>
+<rect x="377" y="205" width="80" height="27" opacity="1" fill="#F472B6" stroke="none"/>
 <text x="417" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
 burli paranoid
 </text>
