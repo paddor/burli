@@ -215,5 +215,4 @@ Benchmark corpus:
 Measurement rules:
 
 - profile before optimizing
-- compare scalar and SIMD paths separately
 - compare `paranoid` builds separately when the default build gains unsafe code

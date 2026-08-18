@@ -63,19 +63,6 @@ pub enum Mode {
     Font,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-#[non_exhaustive]
-/// SIMD dispatch policy.
-pub enum SimdMode {
-    /// Use runtime dispatch when available.
-    #[default]
-    Auto,
-    /// Prefer SIMD paths when available.
-    Enabled,
-    /// Force scalar paths.
-    Disabled,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Brotli encode options.
 pub struct Options {
@@ -83,7 +70,6 @@ pub struct Options {
     window_bits: u8,
     block_bits: Option<u8>,
     mode: Mode,
-    simd: SimdMode,
     size_hint: Option<usize>,
     disable_literal_context_modeling: bool,
 }
@@ -95,7 +81,6 @@ impl Default for Options {
             window_bits: DEFAULT_WINDOW_BITS,
             block_bits: None,
             mode: Mode::Generic,
-            simd: SimdMode::Auto,
             size_hint: None,
             disable_literal_context_modeling: false,
         }
@@ -176,18 +161,6 @@ impl Options {
     /// Return the input mode hint.
     pub const fn mode(&self) -> Mode {
         self.mode
-    }
-
-    /// Set the SIMD dispatch policy.
-    #[must_use]
-    pub const fn with_simd(mut self, value: SimdMode) -> Self {
-        self.simd = value;
-        self
-    }
-
-    /// Return the SIMD dispatch policy.
-    pub const fn simd(&self) -> SimdMode {
-        self.simd
     }
 
     /// Set an input-size hint for callers that cannot pass the full slice yet.

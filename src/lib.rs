@@ -14,9 +14,7 @@ extern crate alloc;
 
 pub use burli_core::error;
 pub use burli_core::format;
-pub use burli_core::{
-    BurliError, CompressError, DecompressError, Mode, Options, Quality, Result, SimdMode,
-};
+pub use burli_core::{BurliError, CompressError, DecompressError, Mode, Options, Quality, Result};
 
 #[doc(hidden)]
 pub use burli_encode as encode;

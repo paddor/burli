@@ -15,4 +15,4 @@ pub mod format;
 pub mod options;
 
 pub use error::{BurliError, CompressError, DecompressError, Result};
-pub use options::{Mode, Options, Quality, SimdMode};
+pub use options::{Mode, Options, Quality};

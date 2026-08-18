@@ -35,7 +35,6 @@ Encoder is lower risk but still must:
 
 - avoid unchecked math overflow;
 - keep input indexing guarded;
-- keep SIMD scalar-equivalent;
 - keep unsupported q6..q11 paths explicit until implemented.
 
 ## Upstream bug classes to prevent
