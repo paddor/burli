@@ -15,11 +15,12 @@ keywords = ["brotli", "compression", "decompression", "web"]
 include = ["/src/**/*", "/README.md", "/CHANGELOG.md", "/LICENSE", "/DESIGN.md", "/SAFETY.md", "/SECURITY.md"]
 
 [features]
-default = ["std"]
+default = ["std", "simd"]
 std = ["alloc", "burli-core/std", "burli-encode/std", "burli-decode/std"]
 alloc = ["burli-core/alloc", "burli-encode/alloc", "burli-decode/alloc"]
+simd = ["burli-encode/simd"]
 nightly = ["burli-core/nightly", "burli-encode/nightly", "burli-decode/nightly"]
-paranoid = ["burli-core/paranoid", "burli-encode/paranoid", "burli-decode/paranoid"]
+paranoid = ["simd", "burli-core/paranoid", "burli-encode/paranoid", "burli-decode/paranoid"]
 
 [dependencies]
 burli-core = { version = "0.2.0", path = "crates/core", default-features = false }

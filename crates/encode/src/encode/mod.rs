@@ -6,6 +6,9 @@ use burli_core::{
     format::MIN_BLOCK_BITS,
 };
 
+#[cfg(feature = "simd")]
+use fearless_simd::{Level, Simd, dispatch, prelude::*};
+
 mod load;
 mod q0;
 mod q1;
@@ -1575,6 +1578,20 @@ fn read_u32_le(input: &[u8], pos: usize) -> u32 {
 
 #[inline(always)]
 fn match_len(input: &[u8], previous: usize, pos: usize, max_len: usize) -> usize {
+    #[cfg(feature = "simd")]
+    if max_len >= 128 {
+        #[cfg(any(feature = "std", target_arch = "wasm32"))]
+        let level = Level::new();
+        #[cfg(not(any(feature = "std", target_arch = "wasm32")))]
+        let level = Level::baseline();
+        return dispatch!(level, simd => match_len_simd(simd, input, previous, pos, max_len));
+    }
+
+    match_len_scalar(input, previous, pos, max_len)
+}
+
+#[inline(always)]
+fn match_len_scalar(input: &[u8], previous: usize, pos: usize, max_len: usize) -> usize {
     let mut len = 0;
     if max_len >= 8 {
         let diff = read_u64_le(input, previous) ^ read_u64_le(input, pos);
@@ -1600,6 +1617,35 @@ fn match_len(input: &[u8], previous: usize, pos: usize, max_len: usize) -> usize
         len += 8;
     }
     while len < max_len && previous_bytes[len] == pos_bytes[len] {
+        len += 1;
+    }
+    len
+}
+
+#[cfg(feature = "simd")]
+#[inline(always)]
+fn match_len_simd<S: Simd>(
+    simd: S,
+    input: &[u8],
+    previous: usize,
+    pos: usize,
+    max_len: usize,
+) -> usize {
+    let width = S::u8s::N;
+    let vector_len = max_len / width * width;
+    let mut len = 0;
+    while len < vector_len {
+        let previous_bytes =
+            S::u8s::from_slice(simd, &input[previous + len..previous + len + width]);
+        let pos_bytes = S::u8s::from_slice(simd, &input[pos + len..pos + len + width]);
+        let equal = previous_bytes.simd_eq(pos_bytes);
+        if !equal.all_true() {
+            return len + equal.to_bitmask().trailing_ones() as usize;
+        }
+        len += width;
+    }
+
+    while len < max_len && input[previous + len] == input[pos + len] {
         len += 1;
     }
     len
@@ -3890,6 +3936,14 @@ mod tests {
             .unwrap()
         );
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+    }
+
+    #[test]
+    fn long_match_length_matches_scalar_path() {
+        let mut input = vec![b'a'; 320];
+        input[197] = b'b';
+        assert_eq!(match_len(&input, 0, 64, 256), 133);
+        assert_eq!(match_len_scalar(&input, 0, 64, 256), 133);
     }
 
     #[test]
