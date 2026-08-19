@@ -1043,35 +1043,63 @@ mod tests {
 
     #[test]
     fn rfc7932_parts_do_not_leak_prior_history() {
-        let spec = spec(5);
-        let options = spec.options().unwrap();
         let first_a = b"part-a-prefix-".repeat(4096);
         let first_b = b"part-b-prefix-".repeat(4096);
         let second = first_a.clone();
 
-        let mut expected_second = BitWriter::new();
-        burli_encode::encode_concat_fragment_into_writer(
-            &second,
-            &options,
-            &mut expected_second,
-            true,
-        )
-        .unwrap();
-        burli_encode::write_concat_stream_trailer(&mut expected_second).unwrap();
-        let expected_second = expected_second.into_bytes();
+        for quality in 0..=5 {
+            let spec = spec(quality);
+            let options = spec.options().unwrap();
+            let mut expected_second = BitWriter::new();
+            burli_encode::encode_concat_fragment_into_writer(
+                &second,
+                &options,
+                &mut expected_second,
+                true,
+            )
+            .unwrap();
+            burli_encode::write_concat_stream_trailer(&mut expected_second).unwrap();
+            let expected_second = expected_second.into_bytes();
 
-        for first in [&first_a[..], &first_b[..]] {
-            let mut prefix = BitWriter::new();
-            burli_encode::write_concat_stream_header(&mut prefix, &options).unwrap();
-            burli_encode::encode_concat_fragment_into_writer(first, &options, &mut prefix, true)
+            for first in [&first_a[..], &first_b[..]] {
+                let mut prefix = BitWriter::new();
+                burli_encode::write_concat_stream_header(&mut prefix, &options).unwrap();
+                burli_encode::encode_concat_fragment_into_writer(
+                    first,
+                    &options,
+                    &mut prefix,
+                    true,
+                )
                 .unwrap();
-            assert_eq!(prefix.written_bits() % 8, 0);
-            let prefix = prefix.into_bytes();
+                assert_eq!(prefix.written_bits() % 8, 0);
+                let prefix = prefix.into_bytes();
 
-            let mut assembled = Vec::new();
-            assemble_rfc7932_parts(&spec, &[first, &second], &mut assembled).unwrap();
-            assert_eq!(&assembled[prefix.len()..], expected_second.as_slice());
+                let mut assembled = Vec::new();
+                assemble_rfc7932_parts(&spec, &[first, &second], &mut assembled).unwrap();
+                assert_eq!(&assembled[prefix.len()..], expected_second.as_slice());
+            }
         }
+    }
+
+    #[test]
+    fn rfc7932_parts_handle_empty_and_tiny_boundaries() {
+        let long = b"local history ".repeat(256);
+        let inputs = [
+            b"".as_slice(),
+            b"x".as_slice(),
+            b"".as_slice(),
+            b"yz".as_slice(),
+            b"".as_slice(),
+            long.as_slice(),
+        ];
+        let mut encoded = Vec::new();
+
+        assemble_rfc7932_parts(&spec(5), &inputs, &mut encoded).unwrap();
+
+        let expected = inputs.concat();
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), expected);
+        #[cfg(feature = "std")]
+        assert_eq!(decode_with_rust_brotli(&encoded), expected);
     }
 
     #[test]
