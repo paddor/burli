@@ -29,6 +29,7 @@ jobs:
         run: |
           sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
             -exec sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' {} +
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
           timeout --foreground 180s sudo apt-get \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \
@@ -61,6 +62,7 @@ jobs:
         run: |
           sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
             -exec sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' {} +
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
           timeout --foreground 180s sudo apt-get \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \
@@ -83,6 +85,7 @@ jobs:
         run: |
           sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
             -exec sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' {} +
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
           timeout --foreground 180s sudo apt-get \
             -o Acquire::Retries=3 \
             -o Acquire::http::Timeout=30 \
