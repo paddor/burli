@@ -639,7 +639,14 @@ fn validate_fragment_parts(
 /// part, and ends on a byte boundary. The returned stream is standard Brotli;
 /// no Burli-specific wrapper is added.
 ///
-/// This function does not create or manage threads.
+/// Inputs are concatenated in order. Empty inputs are valid parts. Existing
+/// bytes in `output` are preserved and the assembled stream is appended only
+/// after encoding succeeds. This function does not create or manage threads.
+///
+/// # Errors
+///
+/// Returns an error when the spec uses unsupported encoder options or when a
+/// part cannot be encoded.
 #[cfg(feature = "alloc")]
 pub fn assemble_rfc7932_parts(
     spec: &ConcatSpec,

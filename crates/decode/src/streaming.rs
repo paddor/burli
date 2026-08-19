@@ -30,6 +30,9 @@ pub struct StreamDecoder<R> {
 
 /// Buffered input returned when a stream decoder cannot safely unwrap its
 /// reader without losing bytes.
+///
+/// The buffered bytes precede the wrapped reader's future bytes. Consume them
+/// first when reconstructing the unread input stream.
 pub struct IntoInnerError<R> {
     inner: R,
     buffered: Vec<u8>,
@@ -141,8 +144,10 @@ impl<R: Read> StreamDecoder<R> {
 
     /// Return the wrapped reader after the Brotli stream is fully consumed.
     ///
-    /// Returns buffered bytes separately when the decoder read ahead. This
-    /// prevents trailing input from disappearing.
+    /// Returns buffered bytes separately when the decoder read ahead or when
+    /// decoding is incomplete. This prevents trailing input from
+    /// disappearing. On error, call [`IntoInnerError::into_parts`] and consume
+    /// the returned bytes before reading from the wrapped reader.
     pub fn into_inner(self) -> Result<R, IntoInnerError<R>> {
         if self.state == State::Done {
             let first_unread = self.bit_pos.div_ceil(8);

@@ -82,12 +82,17 @@ pub fn decompress(input: &[u8]) -> Result<alloc::vec::Vec<u8>> {
     burli_decode::decompress(input)
 }
 
-/// Validate a complete Brotli stream without retaining decoded output.
+/// Validate a complete Brotli stream without materializing decoded output.
+///
+/// This checks Brotli syntax, Huffman codes, literal context state, copy
+/// lengths, backward-reference bounds, static-dictionary references, and
+/// stream padding. Match bytes are not copied; only bounded decoder state is
+/// retained.
 ///
 /// # Errors
 ///
 /// Returns an error for malformed streams, unsupported large-window streams,
-/// or invalid trailing padding.
+/// invalid backward references, or invalid trailing padding.
 #[cfg(feature = "alloc")]
 pub fn validate(input: &[u8]) -> Result<()> {
     burli_decode::validate(input)
