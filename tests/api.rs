@@ -328,6 +328,17 @@ fn validate_accepts_valid_stream_without_output() {
 }
 
 #[test]
+fn validate_preserves_history_across_meta_blocks() {
+    let input = [vec![b'P'], b"PPPP".repeat(8192)].concat();
+    let mut encoder = rust_brotli::CompressorReader::new(input.as_slice(), 4096, 5, 22);
+    let mut encoded = Vec::new();
+    encoder.read_to_end(&mut encoded).unwrap();
+
+    assert_eq!(burli::decompress(&encoded).unwrap(), input);
+    burli::validate(&encoded).unwrap();
+}
+
+#[test]
 fn validate_rejects_truncated_stream() {
     let encoded = burli::compress(b"validate me", 1).unwrap();
     assert!(burli::validate(&encoded[..encoded.len() - 1]).is_err());

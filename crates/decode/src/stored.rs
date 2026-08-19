@@ -133,6 +133,9 @@ pub(crate) fn validate(input: &[u8]) -> Result<(), DecompressError> {
     let window_bits = read_window_bits(&mut reader)?;
     let window_size = (1_usize << window_bits) - 16;
     let mut distances = DistanceRing::new();
+    // Keep only sliding-window history. Delay compaction until the largest
+    // legal meta-block so validation does not repeatedly move the window.
+    let mut output = Vec::with_capacity(window_size.min(MAX_META_BLOCK_SIZE));
     let mut output_base = 0_usize;
 
     loop {
@@ -151,27 +154,35 @@ pub(crate) fn validate(input: &[u8]) -> Result<(), DecompressError> {
             }
             MetaBlockHeader::Uncompressed { len } => {
                 reader.read_zero_padding_to_byte()?;
-                let _ = reader.read_aligned_bytes(len)?;
-                output_base = output_base
-                    .checked_add(len)
-                    .ok_or(BurliError::Format("Brotli output length overflow"))?;
+                let bytes = reader.read_aligned_bytes(len)?;
+                output.extend_from_slice(bytes);
             }
             MetaBlockHeader::Compressed { len, is_last } => {
-                crate::compressed::validate_meta_block(
+                crate::compressed::decode_meta_block_with_base(
                     &mut reader,
-                    len,
-                    output_base,
-                    window_size,
+                    &mut output,
+                    MetaBlockDecodeParams {
+                        output_base,
+                        len,
+                        max_output_size: usize::MAX,
+                        window_bits,
+                        raw_dictionary: RawDictionary::empty(),
+                    },
                     &mut distances,
                 )?;
-                output_base = output_base
-                    .checked_add(len)
-                    .ok_or(BurliError::Format("Brotli output length overflow"))?;
                 if is_last {
                     finish_stream(&reader)?;
                     return Ok(());
                 }
             }
+        }
+
+        if output.len() > MAX_META_BLOCK_SIZE {
+            let keep_from = output.len() - window_size;
+            output.drain(..keep_from);
+            output_base = output_base
+                .checked_add(keep_from)
+                .ok_or(BurliError::Format("Brotli output length overflow"))?;
         }
     }
 }
