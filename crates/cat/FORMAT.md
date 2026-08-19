@@ -6,6 +6,18 @@ them into one normal Brotli stream.
 This file specifies the serialized on-disk / network representation of one
 fragment. It is binary, not ASCII and not JSON.
 
+## RFC 7932 self-contained parts
+
+`assemble_rfc7932_parts` provides a standard Brotli stream mode based on RFC
+7932 sections 11.2 and 11.3. Each input part starts a fresh local encoding
+state, cannot copy from an earlier part, and ends with an empty metadata
+meta-block that aligns the next part to a byte boundary. The final stream
+trailer is written only once.
+
+This mode has no Burli-specific fragment header. Use the existing serialized
+fragment format when checksums, per-fragment limits, or durable sidecar
+metadata are required.
+
 Multi-byte integers are little-endian. All offsets below are byte offsets from
 the start of the serialized fragment.
 

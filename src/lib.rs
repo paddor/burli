@@ -12,12 +12,7 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
-pub use burli_core::error;
-pub use burli_core::format;
 pub use burli_core::{BurliError, CompressError, DecompressError, Mode, Options, Quality, Result};
-
-#[doc(hidden)]
-pub use burli_encode as encode;
 
 /// Decode-specific API surface.
 pub mod decode {
@@ -85,6 +80,22 @@ pub fn compress_into_slice(input: &[u8], output: &mut [u8], quality: u8) -> Resu
 #[cfg(feature = "alloc")]
 pub fn decompress(input: &[u8]) -> Result<alloc::vec::Vec<u8>> {
     burli_decode::decompress(input)
+}
+
+/// Validate a complete Brotli stream without materializing decoded output.
+///
+/// This checks Brotli syntax, Huffman codes, literal context state, copy
+/// lengths, backward-reference bounds, static-dictionary references, and
+/// stream padding. Match bytes are not copied; only bounded decoder state is
+/// retained.
+///
+/// # Errors
+///
+/// Returns an error for malformed streams, unsupported large-window streams,
+/// invalid backward references, or invalid trailing padding.
+#[cfg(feature = "alloc")]
+pub fn validate(input: &[u8]) -> Result<()> {
+    burli_decode::validate(input)
 }
 
 /// Decompress a complete Brotli stream with explicit [`decode::Options`].
@@ -230,6 +241,8 @@ pub fn decompress_into_slice_with_options(
 #[cfg(feature = "alloc")]
 #[allow(deprecated)]
 pub use burli_decode::context::{DecompressContext, Decompressor};
+#[cfg(feature = "std")]
+pub use burli_decode::streaming::IntoInnerError;
 #[cfg(feature = "std")]
 pub use burli_decode::streaming::StreamDecoder;
 #[cfg(feature = "alloc")]

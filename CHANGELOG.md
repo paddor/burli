@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Add `burli::validate` for bounded-memory Brotli validation.
+- Preserve read-ahead bytes from `StreamDecoder` through `into_inner` errors.
+- Hide internal module re-exports from the root API.
+- Add RFC 7932 self-contained-part assembly to `burli-cat`.
+
 ## [0.3.0] - 2026-08-18
 
 - Remove the unused SIMD feature and configuration API.

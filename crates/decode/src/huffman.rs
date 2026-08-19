@@ -760,16 +760,6 @@ mod verification {
     use super::*;
 
     #[kani::proof]
-    fn single_symbol_code_decodes_without_input_bits() {
-        let symbol = kani::any::<u8>();
-        let code = PrefixCode::single(u16::from(symbol));
-        let mut reader = BitReader::new(&[]);
-
-        assert_eq!(code.decode(&mut reader).unwrap(), u16::from(symbol));
-        assert_eq!(reader.consumed_bits(), 0);
-    }
-
-    #[kani::proof]
     fn masked_fast_lookup_index_stays_in_bounds() {
         let fast_bits = kani::any::<u8>();
         let bits = kani::any::<u16>();

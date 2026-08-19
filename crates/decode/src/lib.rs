@@ -41,6 +41,21 @@ pub fn decompress(input: &[u8]) -> Result<alloc::vec::Vec<u8>, DecompressError> 
     decompress_with_options(input, &Options::new())
 }
 
+/// Validate a complete Brotli stream without materializing decoded output.
+///
+/// Validation parses literal and command data and checks reference legality,
+/// but does not expand match copies or retain the decoded stream. Use this
+/// when integrity matters but the decompressed bytes are not needed.
+///
+/// # Errors
+///
+/// Returns an error for malformed streams, unsupported large-window streams,
+/// invalid backward references, or invalid trailing padding.
+#[cfg(feature = "alloc")]
+pub fn validate(input: &[u8]) -> Result<(), DecompressError> {
+    stored::validate(input)
+}
+
 /// Decompress a complete Brotli stream with explicit [`Options`].
 ///
 /// # Errors

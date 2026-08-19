@@ -121,7 +121,7 @@ pub(crate) fn append_lookup(
     Ok(())
 }
 
-#[cfg(any(test, kani))]
+#[cfg(test)]
 pub(crate) fn lookup(
     distance: usize,
     max_allowed_distance: usize,
@@ -226,7 +226,7 @@ mod verification {
         let len = usize::from(kBrotliMinDictionaryWordLength) - 1;
 
         assert!(matches!(
-            lookup(1, 0, len),
+            lookup_word(1, 0, len),
             Err(BurliError::Format("invalid Brotli dictionary word length"))
         ));
     }

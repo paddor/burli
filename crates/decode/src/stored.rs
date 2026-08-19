@@ -20,7 +20,7 @@ pub(crate) enum MetaBlockHeader {
     Compressed { len: usize, is_last: bool },
 }
 
-#[cfg(any(test, kani))]
+#[cfg(test)]
 pub fn decompress_with_limit(
     input: &[u8],
     max_output_size: usize,
@@ -126,6 +126,65 @@ pub(crate) fn decompress_with_raw_dictionary_and_limit(
     };
     decompress_into_empty_with_limit(input, max_output_size, &mut output, raw_dictionary)?;
     Ok(output)
+}
+
+pub(crate) fn validate(input: &[u8]) -> Result<(), DecompressError> {
+    let mut reader = BitReader::new(input);
+    let window_bits = read_window_bits(&mut reader)?;
+    let window_size = (1_usize << window_bits) - 16;
+    let mut distances = DistanceRing::new();
+    // Keep only sliding-window history. Delay compaction until the largest
+    // legal meta-block so validation does not repeatedly move the window.
+    let mut output = Vec::with_capacity(window_size.min(MAX_META_BLOCK_SIZE));
+    let mut output_base = 0_usize;
+
+    loop {
+        match read_meta_block_header(&mut reader)? {
+            MetaBlockHeader::LastEmpty => {
+                finish_stream(&reader)?;
+                return Ok(());
+            }
+            MetaBlockHeader::Metadata { len, is_last } => {
+                reader.read_zero_padding_to_byte()?;
+                let _ = reader.read_aligned_bytes(len)?;
+                if is_last {
+                    finish_stream(&reader)?;
+                    return Ok(());
+                }
+            }
+            MetaBlockHeader::Uncompressed { len } => {
+                reader.read_zero_padding_to_byte()?;
+                let bytes = reader.read_aligned_bytes(len)?;
+                output.extend_from_slice(bytes);
+            }
+            MetaBlockHeader::Compressed { len, is_last } => {
+                crate::compressed::decode_meta_block_with_base(
+                    &mut reader,
+                    &mut output,
+                    MetaBlockDecodeParams {
+                        output_base,
+                        len,
+                        max_output_size: usize::MAX,
+                        window_bits,
+                        raw_dictionary: RawDictionary::empty(),
+                    },
+                    &mut distances,
+                )?;
+                if is_last {
+                    finish_stream(&reader)?;
+                    return Ok(());
+                }
+            }
+        }
+
+        if output.len() > MAX_META_BLOCK_SIZE {
+            let keep_from = output.len() - window_size;
+            output.drain(..keep_from);
+            output_base = output_base
+                .checked_add(keep_from)
+                .ok_or(BurliError::Format("Brotli output length overflow"))?;
+        }
+    }
 }
 
 pub(crate) fn decompress_into_empty_with_limit(

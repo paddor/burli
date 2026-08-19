@@ -633,6 +633,42 @@ fn validate_fragment_parts(
     Ok(())
 }
 
+/// Encode independent input parts into one RFC 7932 self-contained stream.
+///
+/// Each part starts from local Brotli history, cannot refer to an earlier
+/// part, and ends on a byte boundary. The returned stream is standard Brotli;
+/// no Burli-specific wrapper is added.
+///
+/// Inputs are concatenated in order. Empty inputs are valid parts. Existing
+/// bytes in `output` are preserved and the assembled stream is appended only
+/// after encoding succeeds. This function does not create or manage threads.
+///
+/// # Errors
+///
+/// Returns an error when the spec uses unsupported encoder options or when a
+/// part cannot be encoded.
+#[cfg(feature = "alloc")]
+pub fn assemble_rfc7932_parts(
+    spec: &ConcatSpec,
+    inputs: &[&[u8]],
+    output: &mut Vec<u8>,
+) -> Result<()> {
+    let brotli_options = spec.options()?;
+    let mut writer = BitWriter::new();
+    burli_encode::write_concat_stream_header(&mut writer, &brotli_options)?;
+    for input in inputs {
+        burli_encode::encode_concat_fragment_into_writer(
+            input,
+            &brotli_options,
+            &mut writer,
+            true,
+        )?;
+    }
+    burli_encode::write_concat_stream_trailer(&mut writer)?;
+    output.extend(writer.into_bytes());
+    Ok(())
+}
+
 #[cfg(feature = "alloc")]
 fn validate_decoded_summary(
     metadata: &FragmentMetadata,
@@ -987,6 +1023,65 @@ mod tests {
             .unwrap()
             .finish(&mut encoded)
             .unwrap();
+
+        let expected = inputs.concat();
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), expected);
+        #[cfg(feature = "std")]
+        assert_eq!(decode_with_rust_brotli(&encoded), expected);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn assembles_rfc7932_self_contained_parts() {
+        let inputs = [
+            b"first part ".repeat(4096),
+            b"second part ".repeat(4096),
+            b"third part".repeat(4096),
+        ];
+        let views = inputs.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut encoded = Vec::new();
+
+        assemble_rfc7932_parts(&spec(5), &views, &mut encoded).unwrap();
+
+        let expected = inputs.concat();
+        assert_eq!(decode_with_rust_brotli(&encoded), expected);
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), expected);
+    }
+
+    #[test]
+    fn rfc7932_parts_do_not_leak_prior_history() {
+        let first_a = b"part-a-prefix-".repeat(4096);
+        let first_b = b"part-b-prefix-".repeat(4096);
+        let second = b"second-part-local-history-".repeat(4096);
+
+        for quality in 0..=5 {
+            let spec = spec(quality);
+
+            for first in [&first_a[..], &first_b[..]] {
+                let mut assembled = Vec::new();
+                assemble_rfc7932_parts(&spec, &[first, &second], &mut assembled).unwrap();
+                let expected = [first, &second[..]].concat();
+                assert_eq!(burli_decode::decompress(&assembled).unwrap(), expected);
+                #[cfg(feature = "std")]
+                assert_eq!(decode_with_rust_brotli(&assembled), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn rfc7932_parts_handle_empty_and_tiny_boundaries() {
+        let long = b"local history ".repeat(256);
+        let inputs = [
+            b"".as_slice(),
+            b"x".as_slice(),
+            b"".as_slice(),
+            b"yz".as_slice(),
+            b"".as_slice(),
+            long.as_slice(),
+        ];
+        let mut encoded = Vec::new();
+
+        assemble_rfc7932_parts(&spec(5), &inputs, &mut encoded).unwrap();
 
         let expected = inputs.concat();
         assert_eq!(burli_decode::decompress(&encoded).unwrap(), expected);

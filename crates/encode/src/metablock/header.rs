@@ -29,3 +29,11 @@ pub(crate) fn write_last_empty_meta_block(writer: &mut BitWriter) -> Result<(), 
     writer.write_bits(1, 1)?;
     writer.write_bits(1, 1)
 }
+
+pub(crate) fn write_empty_metadata_meta_block(writer: &mut BitWriter) -> Result<(), CompressError> {
+    writer.write_bits(1, 0)?;
+    writer.write_bits(2, 3)?;
+    writer.write_bits(1, 0)?;
+    writer.write_bits(2, 0)?;
+    writer.align_to_byte()
+}

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add RFC 7932 self-contained-part assembly with local history and byte
+  boundaries.
+
 ## [0.2.1] - 2026-08-18
 
 - Update burli dependencies to `0.3.0` after the SIMD API removal.
