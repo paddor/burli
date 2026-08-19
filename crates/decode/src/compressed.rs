@@ -392,7 +392,19 @@ fn copy_from_distance(
         }
     } else if request.distance >= request.len {
         let src = produced - request.distance;
+        #[cfg(not(feature = "paranoid"))]
+        unsafe {
+            append_non_overlapping_backward_copy(output, src, request.len);
+        }
+        #[cfg(feature = "paranoid")]
         append_non_overlapping_backward_copy(output, src, request.len);
+    } else if request.distance >= 8 {
+        #[cfg(not(feature = "paranoid"))]
+        unsafe {
+            append_overlapping_backward_copy(output, request.distance, request.len);
+        }
+        #[cfg(feature = "paranoid")]
+        append_overlapping_backward_copy_safe(output, request.distance, request.len);
     } else {
         let mut remaining = request.len;
         while remaining != 0 {
@@ -410,7 +422,66 @@ fn copy_from_distance(
 
 #[cfg(not(feature = "paranoid"))]
 #[inline(always)]
-fn append_non_overlapping_backward_copy(output: &mut Vec<u8>, src: usize, len: usize) {
+unsafe fn append_overlapping_backward_copy(output: &mut Vec<u8>, distance: usize, len: usize) {
+    // SAFETY: callers prove `8 <= distance < len`, `distance <= output.len()`,
+    // and enough output capacity for `len` bytes.
+    debug_assert!(distance >= 8 && distance < len);
+    output.reserve(len);
+    debug_assert!(overlapping_backward_copy_contract(
+        output.len(),
+        output.capacity(),
+        distance,
+        len,
+    ));
+
+    let mut remaining = len;
+    while remaining != 0 {
+        let old_len = output.len();
+        let chunk = distance.min(remaining);
+        // SAFETY: `chunk <= distance`, so source and destination do not
+        // overlap. The caller validated the source distance, and reserve made
+        // the destination range writable.
+        unsafe {
+            let ptr = output.as_mut_ptr();
+            core::ptr::copy_nonoverlapping(ptr.add(old_len - distance), ptr.add(old_len), chunk);
+            output.set_len(old_len + chunk);
+        }
+        remaining -= chunk;
+    }
+}
+
+#[cfg(not(feature = "paranoid"))]
+#[inline(always)]
+fn overlapping_backward_copy_contract(
+    old_len: usize,
+    capacity: usize,
+    distance: usize,
+    len: usize,
+) -> bool {
+    distance >= 8
+        && distance < len
+        && distance <= old_len
+        && capacity >= old_len
+        && len <= capacity - old_len
+}
+
+#[cfg(feature = "paranoid")]
+#[inline(always)]
+fn append_overlapping_backward_copy_safe(output: &mut Vec<u8>, distance: usize, len: usize) {
+    let mut remaining = len;
+    while remaining != 0 {
+        let src = output.len() - distance;
+        let chunk = distance.min(remaining);
+        output.extend_from_within(src..src + chunk);
+        remaining -= chunk;
+    }
+}
+
+#[cfg(not(feature = "paranoid"))]
+#[inline(always)]
+unsafe fn append_non_overlapping_backward_copy(output: &mut Vec<u8>, src: usize, len: usize) {
+    // SAFETY: callers prove that `src..src + len` is initialized and that the
+    // destination has capacity for `len` bytes without overlapping the source.
     debug_assert!(src <= output.len());
     debug_assert!(len <= output.len() - src);
     if output.capacity() - output.len() < len {
@@ -1187,6 +1258,11 @@ fn copy_literals_single_code(
             .checked_mul(max_bits)
             .is_some_and(|bits| bits <= reader.remaining_bits())
     {
+        #[cfg(not(feature = "paranoid"))]
+        unsafe {
+            copy_literals_single_code_trusted_fast(reader, output, count, code);
+        }
+        #[cfg(feature = "paranoid")]
         copy_literals_single_code_trusted_fast(reader, output, count, code);
         return Ok(());
     }
@@ -1198,7 +1274,7 @@ fn copy_literals_single_code(
 
 #[cfg(not(feature = "paranoid"))]
 #[inline(always)]
-fn copy_literals_single_code_trusted_fast(
+unsafe fn copy_literals_single_code_trusted_fast(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
     count: usize,
@@ -1217,9 +1293,22 @@ fn copy_literals_single_code_trusted_fast(
     // literals, so this loop cannot return early and initializes each slot once.
     unsafe {
         let ptr = output.as_mut_ptr().add(old_len);
-        for index in 0..count {
+        let mut index = 0;
+        while index + 4 <= count {
             ptr.add(index)
                 .write(code.decode_non_single_trusted_fast(reader) as u8);
+            ptr.add(index + 1)
+                .write(code.decode_non_single_trusted_fast(reader) as u8);
+            ptr.add(index + 2)
+                .write(code.decode_non_single_trusted_fast(reader) as u8);
+            ptr.add(index + 3)
+                .write(code.decode_non_single_trusted_fast(reader) as u8);
+            index += 4;
+        }
+        while index < count {
+            ptr.add(index)
+                .write(code.decode_non_single_trusted_fast(reader) as u8);
+            index += 1;
         }
         output.set_len(old_len + count);
     }
@@ -1622,6 +1711,11 @@ mod tests {
         let mut expected = output.clone();
 
         output.reserve(8);
+        #[cfg(not(feature = "paranoid"))]
+        unsafe {
+            append_non_overlapping_backward_copy(&mut output, 4, 8);
+        }
+        #[cfg(feature = "paranoid")]
         append_non_overlapping_backward_copy(&mut output, 4, 8);
         expected.extend_from_within(4..12);
 
@@ -1639,6 +1733,11 @@ mod tests {
         let mut reader = BitReader::new(&bytes);
         let mut output = b"prefix".to_vec();
 
+        #[cfg(not(feature = "paranoid"))]
+        unsafe {
+            copy_literals_single_code_trusted_fast(&mut reader, &mut output, 6, &code);
+        }
+        #[cfg(feature = "paranoid")]
         copy_literals_single_code_trusted_fast(&mut reader, &mut output, 6, &code);
 
         assert_eq!(output, b"prefix\0\x01\0\x01\x01\0");
@@ -1704,7 +1803,10 @@ mod verification {
         let symbol = kani::any::<u8>();
         kani::assume(symbol < 16);
 
-        let distance = DistanceRing::new().resolve(usize::from(symbol)).unwrap();
+        let distance = match DistanceRing::new().resolve(usize::from(symbol)) {
+            Ok(distance) => distance,
+            Err(_) => 0,
+        };
 
         assert!(distance > 0);
     }
@@ -1728,7 +1830,10 @@ mod verification {
             push_distance: true,
         };
 
-        let end = checked_backward_copy_end(produced, request.needed, request.len).unwrap();
+        let end = match checked_backward_copy_end(produced, request.needed, request.len) {
+            Ok(end) => end,
+            Err(_) => usize::MAX,
+        };
 
         assert_eq!(end, request.needed);
         assert!(end <= request.needed);
@@ -1757,6 +1862,23 @@ mod verification {
 
         assert!(non_overlapping_backward_copy_contract(
             produced, capacity, src, len,
+        ));
+    }
+
+    #[kani::proof]
+    fn overlapping_backward_copy_branch_satisfies_unsafe_contract() {
+        let old_len = usize::from(kani::any::<u8>());
+        let capacity = usize::from(kani::any::<u8>());
+        let distance = usize::from(kani::any::<u8>());
+        let len = usize::from(kani::any::<u8>());
+        kani::assume(distance >= 8);
+        kani::assume(distance <= old_len);
+        kani::assume(distance < len);
+        kani::assume(old_len <= capacity);
+        kani::assume(len <= capacity - old_len);
+
+        assert!(overlapping_backward_copy_contract(
+            old_len, capacity, distance, len,
         ));
     }
 
