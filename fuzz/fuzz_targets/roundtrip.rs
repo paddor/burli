@@ -8,6 +8,7 @@ use libfuzzer_sys::fuzz_target;
 fuzz_target!(|input: &[u8]| {
     for quality in 0..=5 {
         let encoded = burli::compress(input, quality).unwrap();
+        burli::validate(&encoded).unwrap();
         let decoded = burli::decompress(&encoded).unwrap();
         assert_eq!(decoded, input);
 
@@ -16,6 +17,7 @@ fuzz_target!(|input: &[u8]| {
             stream_encoder.write_all(chunk).unwrap();
         }
         let stream_encoded = stream_encoder.finish().unwrap();
+        burli::validate(&stream_encoded).unwrap();
         assert_eq!(burli::decompress(&stream_encoded).unwrap(), input);
 
         let mut decoder = rust_brotli::Decompressor::new(encoded.as_slice(), 4096);
