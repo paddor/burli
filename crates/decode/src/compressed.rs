@@ -147,6 +147,217 @@ pub(crate) fn decode_meta_block_with_base_and_policy(
     )
 }
 
+/// Validate one compressed meta-block without materializing decoded bytes.
+pub(crate) fn validate_meta_block(
+    reader: &mut BitReader<'_>,
+    len: usize,
+    output_base: usize,
+    window_size: usize,
+    distances: &mut DistanceRing,
+) -> Result<(), DecompressError> {
+    let mut header = read_header(reader)?;
+    let literal_codes =
+        read_prefix_codes(reader, header.literal_tree_count(), LITERAL_ALPHABET_SIZE)?;
+    let command_codes = read_prefix_codes(reader, header.commands.types(), COMMAND_ALPHABET_SIZE)?;
+    let distance_codes = read_prefix_codes(
+        reader,
+        header.distance_tree_count(),
+        header.distance_alphabet_size,
+    )?;
+    let command_codes_all_non_single = command_codes
+        .iter()
+        .all(|code| code.single_symbol().is_none());
+    let distance_codes_all_non_single = distance_codes
+        .iter()
+        .all(|code| code.single_symbol().is_none());
+    let single_command_block = header.commands.types() == 1;
+    let single_distance_block = header.distances.types() == 1;
+    let single_distance_tree = distance_codes.len() == 1;
+    let single_literal_block = header.literals.types() == 1;
+    let single_literal_code = if single_literal_block && literal_codes.len() == 1 {
+        Some(&literal_codes[0])
+    } else {
+        None
+    };
+    let no_postfix_distances = header.npostfix == 0 && header.ndirect == 0;
+    let mut produced = 0_usize;
+    let mut previous = (0_u8, 0_u8);
+
+    while produced < len {
+        let command_block_type = if single_command_block {
+            0
+        } else {
+            header.commands.current_type_multi(reader)?
+        };
+        let command = read_command(
+            reader,
+            &command_codes[command_block_type],
+            command_codes_all_non_single,
+        )?;
+        if !single_command_block {
+            header.commands.consume_one_multi();
+        }
+
+        if command.insert_len != 0 {
+            let end = produced
+                .checked_add(command.insert_len)
+                .ok_or(BurliError::Format("Brotli literal run length overflow"))?;
+            if end > len {
+                return Err(BurliError::Format(
+                    "Brotli literal run exceeds meta-block size",
+                ));
+            }
+            validate_literals(
+                reader,
+                command.insert_len,
+                &literal_codes,
+                &mut header,
+                single_literal_code,
+                &mut previous,
+            )?;
+            produced = end;
+        }
+        if produced == len {
+            break;
+        }
+
+        if command.reuse_last_distance {
+            // Symbol zero reuses the ring entry and does not update it.
+        }
+        let distance_block_type = if command.reuse_last_distance || single_distance_block {
+            0
+        } else {
+            let block_type = header.distances.current_type(reader)?;
+            header.distances.consume_one_multi();
+            block_type
+        };
+        let distance_symbol = if command.reuse_last_distance {
+            0
+        } else {
+            let tree_index = if single_distance_tree {
+                0
+            } else {
+                header.distance_context_map[distance_block_type * 4 + command.distance_context]
+            };
+            decode_prefix_symbol(
+                reader,
+                &distance_codes[tree_index],
+                distance_codes_all_non_single,
+            )? as usize
+        };
+        let distance = if no_postfix_distances {
+            read_distance_no_postfix_with_ring(reader, distance_symbol, distances)?
+        } else {
+            read_distance(
+                reader,
+                distance_symbol,
+                header.npostfix,
+                header.ndirect,
+                distances,
+            )?
+        };
+        let global_produced = output_base
+            .checked_add(produced)
+            .ok_or(BurliError::Format("Brotli output length overflow"))?;
+        let max_allowed_distance = window_size.min(global_produced);
+        if distance <= max_allowed_distance {
+            if distance == 0 {
+                return Err(BurliError::Format("invalid Brotli zero distance"));
+            }
+            let end = produced
+                .checked_add(command.copy_len)
+                .ok_or(BurliError::Format("Brotli copy length overflow"))?;
+            if distance > global_produced || end > len {
+                return Err(BurliError::Format("invalid Brotli backward copy"));
+            }
+            produced = end;
+            if distance_symbol != 0 {
+                distances.push(distance);
+            }
+        } else {
+            let copied_len = crate::dictionary::validate_lookup(
+                distance,
+                max_allowed_distance,
+                command.copy_len,
+            )?;
+            let end = produced
+                .checked_add(copied_len)
+                .ok_or(BurliError::Format("Brotli dictionary copy length overflow"))?;
+            if end > len {
+                return Err(BurliError::Format(
+                    "Brotli dictionary copy exceeds meta-block size",
+                ));
+            }
+            produced = end;
+        }
+    }
+    Ok(())
+}
+
+fn validate_literals(
+    reader: &mut BitReader<'_>,
+    count: usize,
+    literal_codes: &[PrefixCode],
+    header: &mut CompressedHeader,
+    single_literal_code: Option<&PrefixCode>,
+    previous: &mut (u8, u8),
+) -> Result<(), DecompressError> {
+    let single_block = header.literals.types() == 1;
+    if single_block {
+        if let Some(code) = single_literal_code {
+            if let Some(symbol) = code.single_symbol() {
+                let literal = symbol as u8;
+                for _ in 0..count {
+                    *previous = (literal, previous.0);
+                }
+                return Ok(());
+            }
+            let max_bits = usize::from(code.max_bits());
+            if max_bits != 0
+                && count
+                    .checked_mul(max_bits)
+                    .is_some_and(|bits| bits <= reader.remaining_bits())
+            {
+                let mut remaining = count;
+                while remaining >= 4 {
+                    let first = read_literal_trusted(reader, code);
+                    let second = read_literal_trusted(reader, code);
+                    let third = read_literal_trusted(reader, code);
+                    let fourth = read_literal_trusted(reader, code);
+                    *previous = (fourth, third);
+                    remaining -= 4;
+                    let _ = (first, second);
+                }
+                while remaining != 0 {
+                    let literal = read_literal_trusted(reader, code);
+                    *previous = (literal, previous.0);
+                    remaining -= 1;
+                }
+                return Ok(());
+            }
+        }
+    }
+    for _ in 0..count {
+        let block_type = if single_block {
+            0
+        } else {
+            let value = header.literals.current_type_multi(reader)?;
+            header.literals.consume_one_multi();
+            value
+        };
+        let context = literal_context(*previous, header, block_type);
+        let tree_index = if single_block && single_literal_code.is_some() {
+            0
+        } else {
+            header.literal_context_map[block_type * 64 + context]
+        };
+        let code = single_literal_code.unwrap_or(&literal_codes[tree_index]);
+        let literal = read_literal(reader, code)?;
+        *previous = (literal, previous.0);
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn decode_meta_block_body(

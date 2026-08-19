@@ -265,7 +265,7 @@ fn stream_decoder_empty_read_does_not_consume_input() {
     let mut empty = [];
 
     assert_eq!(decoder.read(&mut empty).unwrap(), 0);
-    assert_eq!(decoder.into_inner().position(), 0);
+    assert!(decoder.into_inner().is_err());
 }
 
 #[test]
@@ -291,7 +291,23 @@ fn stream_decoder_emits_before_consuming_full_input() {
     assert_eq!(decoder.read(&mut decoded).unwrap(), 1);
 
     assert_eq!(decoded[0], input[0]);
-    assert!((decoder.into_inner().position() as usize) < encoded.len());
+    assert!(decoder.into_inner().is_err());
+}
+
+#[test]
+#[cfg(feature = "std")]
+fn stream_decoder_returns_read_ahead_trailing_bytes() {
+    let mut encoded = burli::compress(b"payload", 1).unwrap();
+    encoded.extend_from_slice(b"trailing");
+    let mut decoder = burli::StreamDecoder::new(Cursor::new(encoded));
+    let mut decoded = Vec::new();
+
+    decoder.read_to_end(&mut decoded).unwrap();
+    assert_eq!(decoded, b"payload");
+
+    let error = decoder.into_inner().unwrap_err();
+    let (_, buffered) = error.into_parts();
+    assert_eq!(buffered, b"trailing");
 }
 
 #[test]
@@ -303,6 +319,18 @@ fn q0_output_decodes_with_rust_brotli() {
 
     decoder.read_to_end(&mut decoded).unwrap();
     assert_eq!(decoded, input);
+}
+
+#[test]
+fn validate_accepts_valid_stream_without_output() {
+    let encoded = burli::compress(&b"validate me".repeat(1024), 5).unwrap();
+    burli::validate(&encoded).unwrap();
+}
+
+#[test]
+fn validate_rejects_truncated_stream() {
+    let encoded = burli::compress(b"validate me", 1).unwrap();
+    assert!(burli::validate(&encoded[..encoded.len() - 1]).is_err());
 }
 
 #[test]

@@ -111,6 +111,17 @@ pub fn encode_concat_fragment_with_options(
 
 #[doc(hidden)]
 #[cfg(feature = "alloc")]
+pub fn encode_concat_fragment_into_writer(
+    input: &[u8],
+    options: &Options,
+    writer: &mut burli_core::bits::BitWriter,
+    byte_align: bool,
+) -> Result<bool, CompressError> {
+    encode::encode_concat_fragment_into_writer(input, options, writer, byte_align)
+}
+
+#[doc(hidden)]
+#[cfg(feature = "alloc")]
 pub fn write_concat_stream_header(
     writer: &mut burli_core::bits::BitWriter,
     options: &Options,

@@ -128,6 +128,54 @@ pub(crate) fn decompress_with_raw_dictionary_and_limit(
     Ok(output)
 }
 
+pub(crate) fn validate(input: &[u8]) -> Result<(), DecompressError> {
+    let mut reader = BitReader::new(input);
+    let window_bits = read_window_bits(&mut reader)?;
+    let window_size = (1_usize << window_bits) - 16;
+    let mut distances = DistanceRing::new();
+    let mut output_base = 0_usize;
+
+    loop {
+        match read_meta_block_header(&mut reader)? {
+            MetaBlockHeader::LastEmpty => {
+                finish_stream(&reader)?;
+                return Ok(());
+            }
+            MetaBlockHeader::Metadata { len, is_last } => {
+                reader.read_zero_padding_to_byte()?;
+                let _ = reader.read_aligned_bytes(len)?;
+                if is_last {
+                    finish_stream(&reader)?;
+                    return Ok(());
+                }
+            }
+            MetaBlockHeader::Uncompressed { len } => {
+                reader.read_zero_padding_to_byte()?;
+                let _ = reader.read_aligned_bytes(len)?;
+                output_base = output_base
+                    .checked_add(len)
+                    .ok_or(BurliError::Format("Brotli output length overflow"))?;
+            }
+            MetaBlockHeader::Compressed { len, is_last } => {
+                crate::compressed::validate_meta_block(
+                    &mut reader,
+                    len,
+                    output_base,
+                    window_size,
+                    &mut distances,
+                )?;
+                output_base = output_base
+                    .checked_add(len)
+                    .ok_or(BurliError::Format("Brotli output length overflow"))?;
+                if is_last {
+                    finish_stream(&reader)?;
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn decompress_into_empty_with_limit(
     input: &[u8],
     max_output_size: usize,

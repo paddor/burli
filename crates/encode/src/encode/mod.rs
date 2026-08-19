@@ -266,6 +266,14 @@ pub(crate) fn encode_concat_fragment_with_options(
     input: &[u8],
     options: &Options,
 ) -> Result<(Vec<u8>, usize, bool), CompressError> {
+    encode_concat_fragment_with_options_inner(input, options, false)
+}
+
+fn encode_concat_fragment_with_options_inner(
+    input: &[u8],
+    options: &Options,
+    byte_align: bool,
+) -> Result<(Vec<u8>, usize, bool), CompressError> {
     if options.quality() > MAX_LITERAL_ONLY_QUALITY {
         return Err(BurliError::Unsupported(
             "only q0..q5 Brotli concat fragments are implemented yet",
@@ -276,6 +284,29 @@ pub(crate) fn encode_concat_fragment_with_options(
     }
 
     let mut writer = BitWriter::with_capacity(max_literal_only_size(input.len()));
+    let has_copy = encode_concat_fragment_into_writer(input, options, &mut writer, byte_align)?;
+    let bit_len = writer.written_bits();
+    Ok((writer.into_bytes(), bit_len, has_copy))
+}
+
+pub(crate) fn encode_concat_fragment_into_writer(
+    input: &[u8],
+    options: &Options,
+    writer: &mut BitWriter,
+    byte_align: bool,
+) -> Result<bool, CompressError> {
+    if options.quality() > MAX_LITERAL_ONLY_QUALITY {
+        return Err(BurliError::Unsupported(
+            "only q0..q5 Brotli concat fragments are implemented yet",
+        ));
+    }
+    if input.is_empty() {
+        if byte_align {
+            crate::metablock::write_empty_metadata_meta_block(writer)?;
+        }
+        return Ok(false);
+    }
+
     let mut workspace = Workspace::default();
     workspace.reset_stream();
     let plan = EncoderPlan::from_options(input.len(), options)?;
@@ -283,7 +314,7 @@ pub(crate) fn encode_concat_fragment_with_options(
 
     for chunk in input.chunks(plan.block_size) {
         has_copy |= write_concat_meta_block(
-            &mut writer,
+            writer,
             chunk,
             plan.max_backward_distance.min(chunk.len()),
             options.quality(),
@@ -291,8 +322,10 @@ pub(crate) fn encode_concat_fragment_with_options(
         )?;
     }
 
-    let bit_len = writer.written_bits();
-    Ok((writer.into_bytes(), bit_len, has_copy))
+    if byte_align {
+        crate::metablock::write_empty_metadata_meta_block(writer)?;
+    }
+    Ok(has_copy)
 }
 
 pub(crate) fn write_stream_header_to_writer(

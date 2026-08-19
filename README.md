@@ -52,6 +52,9 @@ let compressed = compressor.compress(input)?;
 
 let mut decompressor = burli::Decompressor::new();
 let original = decompressor.decompress(&compressed)?;
+
+// Validate without retaining decoded output
+burli::validate(&compressed)?;
 ```
 
 ### Streaming

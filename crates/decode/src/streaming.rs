@@ -28,6 +28,20 @@ pub struct StreamDecoder<R> {
     state: State,
 }
 
+/// Buffered input returned when a stream decoder cannot safely unwrap its
+/// reader without losing bytes.
+pub struct IntoInnerError<R> {
+    inner: R,
+    buffered: Vec<u8>,
+}
+
+impl<R> IntoInnerError<R> {
+    /// Recover the wrapped reader and bytes already read into the decoder.
+    pub fn into_parts(self) -> (R, Vec<u8>) {
+        (self.inner, self.buffered)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum State {
     Reading,
@@ -125,9 +139,26 @@ impl<R: Read> StreamDecoder<R> {
         decoder
     }
 
-    /// Return the wrapped reader.
-    pub fn into_inner(self) -> R {
-        self.inner
+    /// Return the wrapped reader after the Brotli stream is fully consumed.
+    ///
+    /// Returns buffered bytes separately when the decoder read ahead. This
+    /// prevents trailing input from disappearing.
+    pub fn into_inner(self) -> Result<R, IntoInnerError<R>> {
+        if self.state == State::Done {
+            let first_unread = self.bit_pos.div_ceil(8);
+            if first_unread >= self.encoded.len() {
+                return Ok(self.inner);
+            }
+            return Err(IntoInnerError {
+                inner: self.inner,
+                buffered: self.encoded[first_unread..].to_vec(),
+            });
+        }
+
+        Err(IntoInnerError {
+            inner: self.inner,
+            buffered: self.encoded[self.bit_pos / 8..].to_vec(),
+        })
     }
 
     /// Return current decode options.
@@ -205,7 +236,7 @@ impl<R: Read> StreamDecoder<R> {
 
         match header {
             MetaBlockHeader::LastEmpty => {
-                stored::finish_stream(&reader)?;
+                finish_stream_prefix(&reader)?;
                 self.bit_pos = reader.consumed_bits();
                 self.state = State::Done;
                 Ok(DecodeStep::Done)
@@ -293,6 +324,14 @@ impl<R: Read> StreamDecoder<R> {
         self.compact_output();
         count
     }
+}
+
+fn finish_stream_prefix(reader: &BitReader<'_>) -> Result<(), DecompressError> {
+    let padding = (8 - (reader.consumed_bits() % 8)) % 8;
+    if padding != 0 && reader.peek_bits(padding as u8)? != 0 {
+        return Err(BurliError::Format("non-zero trailing Brotli padding"));
+    }
+    Ok(())
 }
 
 impl<R: Read> Read for StreamDecoder<R> {

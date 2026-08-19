@@ -121,6 +121,16 @@ pub(crate) fn append_lookup(
     Ok(())
 }
 
+pub(crate) fn validate_lookup(
+    distance: usize,
+    max_allowed_distance: usize,
+    copy_len: usize,
+) -> Result<usize, DecompressError> {
+    let (word, transform_index) = lookup_word(distance, max_allowed_distance, copy_len)?;
+    transformed_dictionary_word_len(word.len(), transform_index)
+        .ok_or(BurliError::Format("invalid Brotli dictionary transform"))
+}
+
 #[cfg(test)]
 pub(crate) fn lookup(
     distance: usize,
