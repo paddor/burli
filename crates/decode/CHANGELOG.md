@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-19
+
+- Add bounded-memory Brotli stream validation.
+- Preserve read-ahead bytes from `StreamDecoder` through `into_inner` errors.
+- Improve decoder fast paths.
+
 ## [0.3.0] - 2026-08-18
 
 - Remove the unused `simd` feature and `fearless_simd` dependency.

@@ -2,10 +2,13 @@
 
 ## [Unreleased]
 
-- Add `burli::validate` for bounded-memory Brotli validation.
+## [0.3.1] - 2026-08-19
+
+- Add bounded-memory `burli::validate` for Brotli stream validation.
+- Add RFC 7932 self-contained-part assembly through `burli-cat`.
 - Preserve read-ahead bytes from `StreamDecoder` through `into_inner` errors.
 - Hide internal module re-exports from the root API.
-- Add RFC 7932 self-contained-part assembly to `burli-cat`.
+- Improve decoder fast paths and refresh benchmark charts.
 
 ## [0.3.0] - 2026-08-18
 

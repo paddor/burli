@@ -27,7 +27,14 @@ jobs:
       - name: install C Brotli libs (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
+          sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
+            -exec sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' {} +
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          timeout --foreground 180s sudo apt-get \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            update
           sudo apt-get install -y libbrotli-dev
       - name: install C Brotli libs (macOS)
         if: runner.os == 'macOS'
@@ -53,7 +60,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: install C Brotli libs
         run: |
-          sudo apt-get update
+          sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
+            -exec sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' {} +
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          timeout --foreground 180s sudo apt-get \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            update
           sudo apt-get install -y libbrotli-dev
       - run: cargo test --workspace --all-targets --features paranoid
       - run: cargo clippy --workspace --all-targets --features paranoid -- -D warnings
@@ -69,7 +83,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: install C Brotli libs
         run: |
-          sudo apt-get update
+          sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
+            -exec sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' {} +
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          timeout --foreground 180s sudo apt-get \
+            -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 \
+            update
           sudo apt-get install -y libbrotli-dev
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
