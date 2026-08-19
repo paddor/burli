@@ -1,6 +1,6 @@
 {
   "name": "@paddor/burli",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "license": "MIT",
   "description": "Pure Rust Brotli codec compiled to WebAssembly. Compress and decompress Brotli data in JavaScript and TypeScript.",
   "exports": "./src/mod.ts",
