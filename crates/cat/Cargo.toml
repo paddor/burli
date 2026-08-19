@@ -1,6 +1,6 @@
 [package]
 name = "burli-cat"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.89"
 description = "Concat fragments for burli Brotli streams"
@@ -22,8 +22,8 @@ paranoid = ["burli-core/paranoid", "burli-encode/paranoid", "burli-decode/parano
 
 [dependencies]
 burli-core = { version = "0.3.0", path = "../core", default-features = false }
-burli-encode = { version = "0.3.0", path = "../encode", default-features = false }
-burli-decode = { version = "0.3.0", path = "../decode", default-features = false }
+burli-encode = { version = "0.3.1", path = "../encode", default-features = false }
+burli-decode = { version = "0.3.1", path = "../decode", default-features = false }
 
 [dev-dependencies]
 rust-brotli = { package = "brotli", version = "8.0.4" }
