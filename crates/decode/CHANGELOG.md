@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 - Reject invalid window bits in the concat payload decoder.
+- Preserve following input after every streaming decoder termination shape.
 
 ## [0.3.1] - 2026-08-19
 
