@@ -9,7 +9,8 @@ use std::io::{self, Write};
 ///
 /// The encoder keeps match-finder workspace and bit-writer capacity while it
 /// accepts chunks. Call [`finish`](Self::finish) to write the final empty
-/// meta-block and recover the wrapped writer.
+/// meta-block and recover the wrapped writer. [`flush`](Write::flush) makes
+/// pending input decodable without ending the stream.
 pub struct StreamEncoder<W> {
     inner: W,
     options: Options,
@@ -147,6 +148,13 @@ impl<W: Write> Write for StreamEncoder<W> {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.write_buffered_chunk()?;
+        if !self.writer.written_bits().is_multiple_of(8) {
+            // A metadata block aligns the stream without terminating it.
+            crate::metablock::write_empty_metadata_meta_block(&mut self.writer)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            self.write_full_bytes()?;
+        }
         self.inner.flush()
     }
 }
@@ -154,7 +162,40 @@ impl<W: Write> Write for StreamEncoder<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{Read, Write};
+
+    #[test]
+    fn stream_encoder_flush_exposes_pending_bytes() {
+        for quality in 0..=5 {
+            let mut encoder = StreamEncoder::new(Vec::new(), quality).unwrap();
+            let mut expected = Vec::new();
+            for len in [0, 1, 7, 32, 4096, (1 << 16) + 7] {
+                let input: Vec<_> = b"hello hello streaming Brotli"
+                    .iter()
+                    .copied()
+                    .cycle()
+                    .take(len)
+                    .collect();
+                encoder.write_all(&input).unwrap();
+                expected.extend_from_slice(&input);
+                encoder.flush().unwrap();
+
+                assert!(!encoder.inner.is_empty());
+                let mut decoder =
+                    burli_decode::streaming::StreamDecoder::new(encoder.inner.as_slice());
+                let mut decoded = vec![0; expected.len()];
+                decoder.read_exact(&mut decoded).unwrap();
+                assert_eq!(decoded, expected, "q{quality}, len {len}");
+                assert!(burli_decode::decompress(&encoder.inner).is_err());
+
+                let before = encoder.inner.len();
+                encoder.flush().unwrap();
+                assert_eq!(encoder.inner.len(), before);
+            }
+            let encoded = encoder.finish().unwrap();
+            assert_eq!(burli_decode::decompress(&encoded).unwrap(), expected);
+        }
+    }
 
     #[test]
     fn stream_encoder_keeps_only_tail_buffer() {

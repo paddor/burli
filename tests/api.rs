@@ -9,6 +9,25 @@ mod fixtures;
 const LOCAL_CORPUS_RATIO_SAMPLE_LIMIT: u64 = 1024 * 1024;
 
 #[test]
+#[cfg(feature = "std")]
+fn flushed_streams_decode_with_rust_brotli() {
+    let input = b"flush small Brotli chunks without ending the stream ".repeat(16);
+    for quality in 0..=5 {
+        let mut encoder = burli::StreamEncoder::new(Vec::new(), quality).unwrap();
+        encoder.flush().unwrap();
+        for chunk in input.chunks(13) {
+            encoder.write_all(chunk).unwrap();
+            encoder.flush().unwrap();
+        }
+        let encoded = encoder.finish().unwrap();
+        let mut decoder = rust_brotli::Decompressor::new(encoded.as_slice(), 4096);
+        let mut decoded = Vec::new();
+        decoder.read_to_end(&mut decoded).unwrap();
+        assert_eq!(decoded, input);
+    }
+}
+
+#[test]
 fn valid_unused_huffman_trees() {
     for (unused_literal, unused_distance) in
         [(false, false), (true, false), (false, true), (true, true)]
