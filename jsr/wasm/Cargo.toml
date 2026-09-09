@@ -2,7 +2,7 @@
 
 [package]
 name = "burli-wasm"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "WebAssembly bindings for burli"
 repository = "https://github.com/paddor/burli"

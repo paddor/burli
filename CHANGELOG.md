@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-10
+
 - Fix JSR package initialization after `deno bundle` by importing WASM and
   its generated bindings through the module graph.
 - Reject invalid window bits in concat payload decoding.
@@ -10,6 +12,8 @@
 - Make streaming encoder flushes emit pending input without ending the stream.
 - Retain partial encoder output across write and flush errors so retries
   preserve the compressed stream.
+
+- Bump the JSR/WASM package to `0.3.2`.
 
 ## [0.3.1] - 2026-08-19
 

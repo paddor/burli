@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-09-10
+
+- Update `burli-encode` and `burli-decode` to `0.3.2` for streaming and
+  concat payload decoding fixes.
+
 ## [0.2.2] - 2026-08-19
 
 - Add RFC 7932 self-contained-part assembly with local history and byte
