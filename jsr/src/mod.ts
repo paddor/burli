@@ -27,13 +27,17 @@
  * ```
  */
 
-import {
-  compress as wasmCompress,
-  Compressor as WasmCompressor,
-  decompress as wasmDecompress,
-  Decompressor as WasmDecompressor,
-  initSync,
-} from "./pkg/burli_wasm.js";
+import * as wasmBindings from "./pkg/burli_wasm_bg.js";
+import type * as Wasm from "./pkg/burli_wasm.js";
+
+// Use generated types for the bindings, including dynamically added methods
+// such as Symbol.dispose. The type-only import does not initialize WASM.
+const {
+  compress: wasmCompress,
+  Compressor: WasmCompressor,
+  decompress: wasmDecompress,
+  Decompressor: WasmDecompressor,
+} = wasmBindings as unknown as typeof Wasm;
 
 /** Default Brotli encoder quality. */
 export const DEFAULT_QUALITY = 5;
@@ -73,20 +77,26 @@ function maxDecompressedSize(options?: DecompressOptions): number | undefined {
 let initialized = false;
 let initialization: Promise<void> | undefined;
 
-/** Initialize the WASM module. Must be called before compression or decoding. */
+function finishInitialization(wasm: Record<string, unknown>): void {
+  // A synchronous caller may have initialized while the import was pending.
+  if (initialized) return;
+  wasmBindings.__wbg_set_wasm(wasm);
+  // wasm-bindgen emits this initializer when the module needs startup work.
+  if (typeof wasm.__wbindgen_start === "function") wasm.__wbindgen_start();
+  initialized = true;
+}
+
+/**
+ * Initialize the WASM module. Must be called before compression or decoding.
+ */
 export function init(): Promise<void> {
   if (initialized) return Promise.resolve();
   if (initialization) return initialization;
 
   initialization = (async () => {
-    const wasmUrl = new URL("./pkg/burli_wasm_bg.wasm", import.meta.url);
-    const response = await fetch(wasmUrl);
-    if (!response.ok) {
-      throw new Error(`failed to load Bürli WASM: ${response.status}`);
-    }
-    const bytes = await response.arrayBuffer();
-    initSync({ module: new WebAssembly.Module(bytes) });
-    initialized = true;
+    // Literal imports let bundlers include WASM and its generated JS bindings.
+    const wasm = await import("./pkg/burli_wasm_bg.wasm");
+    finishInitialization(wasm);
   })().catch((error) => {
     initialization = undefined;
     throw error;
@@ -97,8 +107,11 @@ export function init(): Promise<void> {
 /** Initialize synchronously from preloaded WASM bytes. */
 export function initSyncFromBytes(bytes: BufferSource): void {
   if (initialized) return;
-  initSync({ module: new WebAssembly.Module(bytes) });
-  initialized = true;
+  const module = new WebAssembly.Module(bytes);
+  const instance = new WebAssembly.Instance(module, {
+    "./burli_wasm_bg.js": wasmBindings,
+  });
+  finishInitialization(instance.exports);
 }
 
 /** Compress a Brotli stream. */
@@ -117,9 +130,9 @@ export function decompress(
   return wasmDecompress(input, maxDecompressedSize(options));
 }
 
-const compressorInner = new WeakMap<Compressor, WasmCompressor>();
+const compressorInner = new WeakMap<Compressor, Wasm.Compressor>();
 
-function getCompressorInner(compressor: Compressor): WasmCompressor {
+function getCompressorInner(compressor: Compressor): Wasm.Compressor {
   const inner = compressorInner.get(compressor);
   if (!inner) throw new TypeError("invalid or freed Compressor");
   return inner;
@@ -150,9 +163,9 @@ export class Compressor {
   }
 }
 
-const decompressorInner = new WeakMap<Decompressor, WasmDecompressor>();
+const decompressorInner = new WeakMap<Decompressor, Wasm.Decompressor>();
 
-function getDecompressorInner(decompressor: Decompressor): WasmDecompressor {
+function getDecompressorInner(decompressor: Decompressor): Wasm.Decompressor {
   const inner = decompressorInner.get(decompressor);
   if (!inner) throw new TypeError("invalid or freed Decompressor");
   return inner;

@@ -75,8 +75,12 @@ pushing the release commit:
 ```bash
 cd jsr
 bash build.sh
-deno test --allow-read
+deno task test
 ```
+
+Use Deno 2.8.3 or newer for the `deno bundle` tests. They cover bundled
+roundtrips, synchronous bytes, and initialization races. Bundled default
+initialization runs without file or network permissions.
 
 The `jsr-publish` workflow repeats these checks and publishes on pushes to
 `main` using JSR trusted publishing through GitHub Actions OIDC.
