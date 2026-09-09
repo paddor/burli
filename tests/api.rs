@@ -4,7 +4,38 @@ use std::io::{Cursor, Write};
 
 use burli::{BurliError, Options, Quality};
 
+mod fixtures;
+
 const LOCAL_CORPUS_RATIO_SAMPLE_LIMIT: u64 = 1024 * 1024;
+
+#[test]
+fn valid_unused_huffman_trees() {
+    for (unused_literal, unused_distance) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let encoded = fixtures::literal_with_unused_trees(unused_literal, unused_distance);
+        assert_eq!(burli::decompress_with_limit(&encoded, 1).unwrap(), b"A");
+        burli::validate(&encoded).unwrap();
+        let mut slice = [0];
+        assert_eq!(
+            burli::decompress_into_slice(&encoded, &mut slice).unwrap(),
+            1
+        );
+        assert_eq!(&slice, b"A");
+        assert_eq!(
+            burli::Decompressor::new().decompress(&encoded).unwrap(),
+            b"A"
+        );
+
+        #[cfg(feature = "std")]
+        {
+            let mut decoder = burli::StreamDecoder::new(encoded.as_slice());
+            let mut decoded = Vec::new();
+            decoder.read_to_end(&mut decoded).unwrap();
+            assert_eq!(decoded, b"A");
+        }
+    }
+}
 
 #[test]
 fn validates_quality() {

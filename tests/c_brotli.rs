@@ -1,6 +1,7 @@
 #![cfg(feature = "std")]
 
 mod common;
+mod fixtures;
 
 use std::{
     ffi::c_int,
@@ -100,6 +101,23 @@ unsafe extern "C" {
         next_out: *mut *mut u8,
         total_out: *mut usize,
     ) -> c_int;
+}
+
+#[test]
+fn unused_huffman_trees_match_c_decoder() {
+    for (unused_literal, unused_distance) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let encoded = fixtures::literal_with_unused_trees(unused_literal, unused_distance);
+        assert_eq!(c_brotli_decompress(&encoded, 1).unwrap(), b"A");
+        assert_burli_decodes(&encoded, b"A", "unused Huffman trees");
+        for chunk in [1, 2, encoded.len()] {
+            assert_stream_decodes(&encoded, b"A", "unused Huffman trees", chunk);
+        }
+        for cut in 0..encoded.len() {
+            assert_decode_error_without_panic(&encoded[..cut], "truncated Huffman trees");
+        }
+    }
 }
 
 #[test]
