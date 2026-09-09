@@ -8,15 +8,19 @@ use std::io::{self, Write};
 /// `std::io::Write` Brotli stream encoder.
 ///
 /// The encoder keeps match-finder workspace and bit-writer capacity while it
-/// accepts chunks. Call [`finish`](Self::finish) to write the final empty
-/// meta-block and recover the wrapped writer. [`flush`](Write::flush) makes
-/// pending input decodable without ending the stream.
+/// accepts chunks. It buffers up to one meta-block of input, so a write may
+/// accept only part of the supplied slice. Call [`finish`](Self::finish) to
+/// write the final empty meta-block and recover the wrapped writer.
+/// [`flush`](Write::flush) makes pending input decodable without ending the
+/// stream.
 pub struct StreamEncoder<W> {
     inner: W,
     options: Options,
     writer: BitWriter,
     workspace: crate::encode::Workspace,
     buffered: Vec<u8>,
+    pending_output: Vec<u8>,
+    pending_pos: usize,
     block_size: usize,
     input_pos: usize,
 }
@@ -54,6 +58,8 @@ impl<W: Write> StreamEncoder<W> {
             writer,
             workspace: crate::encode::Workspace::default(),
             buffered: Vec::new(),
+            pending_output: Vec::new(),
+            pending_pos: 0,
             block_size: 1_usize << block_bits,
             input_pos: 0,
         })
@@ -91,6 +97,10 @@ impl<W: Write> StreamEncoder<W> {
         if input.is_empty() {
             return Ok(());
         }
+        let next_input_pos = self
+            .input_pos
+            .checked_add(input.len())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Brotli input overflow"))?;
         let result = if self.options.quality() == 0 {
             crate::metablock::write_uncompressed_meta_block(&mut self.writer, input)
         } else {
@@ -104,10 +114,7 @@ impl<W: Write> StreamEncoder<W> {
             )
         };
         result.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        self.input_pos = self
-            .input_pos
-            .checked_add(input.len())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Brotli input overflow"))?;
+        self.input_pos = next_input_pos;
         self.write_full_bytes()
     }
 
@@ -116,38 +123,64 @@ impl<W: Write> StreamEncoder<W> {
             return Ok(());
         }
         let chunk = core::mem::take(&mut self.buffered);
-        self.write_meta_block(&chunk, self.input_pos == 0)
+        let allow_shortcuts = self.input_pos == 0 && chunk.len() < self.block_size;
+        self.write_meta_block(&chunk, allow_shortcuts)
     }
 
     fn write_full_bytes(&mut self) -> io::Result<()> {
-        let bytes = self.writer.take_full_bytes();
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        self.inner.write_all(&bytes)
+        self.write_pending_output()?;
+        self.pending_output = self.writer.take_full_bytes();
+        self.write_pending_output()
     }
 
     fn write_final_bytes(&mut self) -> io::Result<()> {
-        let bytes = core::mem::take(&mut self.writer).into_bytes();
-        if bytes.is_empty() {
-            return Ok(());
+        self.write_pending_output()?;
+        self.pending_output = core::mem::take(&mut self.writer).into_bytes();
+        self.write_pending_output()
+    }
+
+    fn write_pending_output(&mut self) -> io::Result<()> {
+        while self.pending_pos < self.pending_output.len() {
+            match self.inner.write(&self.pending_output[self.pending_pos..]) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "failed to write compressed Brotli stream",
+                    ));
+                }
+                Ok(count) => self.pending_pos += count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
         }
-        self.inner.write_all(&bytes)
+        self.pending_output.clear();
+        self.pending_pos = 0;
+        Ok(())
     }
 }
 
 impl<W: Write> Write for StreamEncoder<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.buffered.extend_from_slice(buf);
-        while self.buffered.len() >= self.block_size {
-            let tail = self.buffered.split_off(self.block_size);
-            let chunk = core::mem::replace(&mut self.buffered, tail);
-            self.write_meta_block(&chunk, false)?;
+        if buf.is_empty() {
+            return Ok(0);
         }
-        Ok(buf.len())
+        // Complete earlier writes before accepting any new input. An error
+        // therefore always leaves the caller's current slice unconsumed.
+        self.write_full_bytes()?;
+        if self.buffered.len() == self.block_size {
+            self.write_buffered_chunk()?;
+        }
+        let count = buf.len().min(self.block_size - self.buffered.len());
+        self.input_pos
+            .checked_add(self.buffered.len())
+            .and_then(|pos| pos.checked_add(count))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Brotli input overflow"))?;
+        self.buffered.extend_from_slice(&buf[..count]);
+        Ok(count)
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.write_full_bytes()?;
         self.write_buffered_chunk()?;
         if !self.writer.written_bits().is_multiple_of(8) {
             // A metadata block aligns the stream without terminating it.
