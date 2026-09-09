@@ -34,6 +34,9 @@ pub(crate) fn decompress_concat_payload_with_limit(
     window_bits: u8,
     max_output_size: usize,
 ) -> Result<(Vec<u8>, bool), DecompressError> {
+    if !(MIN_WINDOW_BITS..=MAX_WINDOW_BITS).contains(&window_bits) {
+        return Err(BurliError::InvalidWindowBits(window_bits));
+    }
     if payload_bit_len > input.len().saturating_mul(8) {
         return Err(BurliError::Format(
             "concat fragment bit length exceeds payload",
@@ -364,6 +367,48 @@ pub(crate) fn finish_stream(reader: &BitReader<'_>) -> Result<(), DecompressErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concat_payload_checks_window_bits() {
+        let mut writer = burli_core::bits::BitWriter::new();
+        for (width, value) in [
+            (1, 0),
+            (2, 0),
+            (16, 0),
+            (1, 0), // One-byte compressed block.
+            (3, 0),
+            (6, 0),
+            (2, 0),
+            (2, 0), // Single block types and trees.
+            (2, 1),
+            (2, 0),
+            (8, u64::from(b'A')), // Literal tree.
+            (2, 1),
+            (2, 0),
+            (10, 8), // Insert one literal.
+            (2, 1),
+            (2, 0),
+            (6, 0), // Unused distance tree.
+        ] {
+            writer.write_bits(width, value).unwrap();
+        }
+        let bit_len = writer.written_bits();
+        let payload = writer.into_bytes();
+
+        for window_bits in 0..=u8::MAX {
+            let result =
+                crate::decompress_concat_payload_with_limit(&payload, bit_len, window_bits, 1);
+            if (MIN_WINDOW_BITS..=MAX_WINDOW_BITS).contains(&window_bits) {
+                assert_eq!(result.unwrap(), (b"A".to_vec(), false));
+            } else {
+                assert_eq!(result, Err(BurliError::InvalidWindowBits(window_bits)));
+                assert_eq!(
+                    crate::decompress_concat_payload_with_limit(&[], 0, window_bits, 0),
+                    Err(BurliError::InvalidWindowBits(window_bits)),
+                );
+            }
+        }
+    }
 
     #[test]
     fn decodes_empty_stream() {

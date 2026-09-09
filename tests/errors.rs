@@ -173,3 +173,150 @@ fn fragmented_stream_encoder_round_trips_all_scoped_qualities() {
         assert_eq!(rust_brotli_decoded, input);
     }
 }
+
+#[cfg(feature = "std")]
+mod stream_write_retries {
+    use std::io::{self, Read, Write};
+
+    struct FaultWriter {
+        bytes: Vec<u8>,
+        fail_at: usize,
+        failures: usize,
+        kind: io::ErrorKind,
+        flush_failures: usize,
+    }
+
+    impl Write for FaultWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.bytes.len() == self.fail_at && self.failures != 0 {
+                self.failures -= 1;
+                return if self.kind == io::ErrorKind::WriteZero {
+                    Ok(0)
+                } else {
+                    Err(self.kind.into())
+                };
+            }
+            let before_failure = if self.failures == 0 {
+                usize::MAX
+            } else {
+                self.fail_at - self.bytes.len()
+            };
+            let count = buf.len().min(before_failure).min(97);
+            self.bytes.extend_from_slice(&buf[..count]);
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.flush_failures != 0 {
+                self.flush_failures -= 1;
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            Ok(())
+        }
+    }
+
+    fn assert_retryable(error: &io::Error) {
+        assert!(matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::WriteZero
+        ));
+    }
+
+    fn write_with_retries(encoder: &mut burli::StreamEncoder<FaultWriter>, mut input: &[u8]) {
+        let mut failures = 0;
+        while !input.is_empty() {
+            match encoder.write(input) {
+                Ok(count) => {
+                    assert!(count > 0);
+                    input = &input[count..];
+                }
+                Err(error) => {
+                    assert_retryable(&error);
+                    failures += 1;
+                    assert!(failures <= 4, "writer stopped making progress");
+                }
+            }
+        }
+    }
+
+    fn flush_with_retries(encoder: &mut burli::StreamEncoder<FaultWriter>) {
+        for _ in 0..8 {
+            match encoder.flush() {
+                Ok(()) => return,
+                Err(error) => assert_retryable(&error),
+            }
+        }
+        panic!("flush stopped making progress");
+    }
+
+    #[test]
+    fn writes_and_flushes_resume_after_partial_output() {
+        for quality in 0..=5 {
+            for len in [31, (1 << 16) * 2 + 31] {
+                let input: Vec<_> = b"retry partial streaming writes "
+                    .iter()
+                    .copied()
+                    .cycle()
+                    .take(len)
+                    .collect();
+                let mut baseline = burli::StreamEncoder::new(Vec::new(), quality).unwrap();
+                baseline.write_all(&input).unwrap();
+                baseline.flush().unwrap();
+                let expected = baseline.finish().unwrap();
+
+                for fail_at in [0, 1, expected.len() / 2, expected.len() - 2] {
+                    for kind in [
+                        io::ErrorKind::WouldBlock,
+                        io::ErrorKind::Interrupted,
+                        io::ErrorKind::WriteZero,
+                    ] {
+                        let sink = FaultWriter {
+                            bytes: Vec::new(),
+                            fail_at,
+                            failures: 2,
+                            kind,
+                            flush_failures: 1,
+                        };
+                        let mut encoder = burli::StreamEncoder::new(sink, quality).unwrap();
+                        write_with_retries(&mut encoder, &input);
+                        flush_with_retries(&mut encoder);
+                        let sink = encoder.finish().unwrap();
+                        assert_eq!(sink.failures, 0, "failure point not reached");
+                        assert_eq!(
+                            sink.bytes, expected,
+                            "q{quality}, len {len}, offset {fail_at}, {kind:?}"
+                        );
+                        assert_eq!(burli::decompress(&sink.bytes).unwrap(), input);
+                        let mut reference =
+                            rust_brotli::Decompressor::new(sink.bytes.as_slice(), 4096);
+                        let mut decoded = Vec::new();
+                        reference.read_to_end(&mut decoded).unwrap();
+                        assert_eq!(decoded, input);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finish_drains_output_retained_after_failed_flush() {
+        for quality in 0..=5 {
+            let input = b"finish after a partial flush";
+            let sink = FaultWriter {
+                bytes: Vec::new(),
+                fail_at: 1,
+                failures: 1,
+                kind: io::ErrorKind::WouldBlock,
+                flush_failures: 0,
+            };
+            let mut encoder = burli::StreamEncoder::new(sink, quality).unwrap();
+            encoder.write_all(input).unwrap();
+            assert_eq!(
+                encoder.flush().unwrap_err().kind(),
+                io::ErrorKind::WouldBlock
+            );
+            let sink = encoder.finish().unwrap();
+            assert_eq!(burli::decompress(&sink.bytes).unwrap(), input);
+        }
+    }
+}

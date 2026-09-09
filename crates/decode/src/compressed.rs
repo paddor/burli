@@ -118,11 +118,11 @@ pub(crate) fn decode_meta_block_with_base_and_policy(
     let mut header = read_header(reader)?;
 
     let literal_codes =
-        read_prefix_codes(reader, header.literal_tree_count(), LITERAL_ALPHABET_SIZE)?;
+        read_prefix_codes(reader, header.literal_tree_count, LITERAL_ALPHABET_SIZE)?;
     let command_codes = read_prefix_codes(reader, header.commands.types(), COMMAND_ALPHABET_SIZE)?;
     let distance_codes = read_prefix_codes(
         reader,
-        header.distance_tree_count(),
+        header.distance_tree_count,
         header.distance_alphabet_size,
     )?;
     if distance_policy == DistancePolicy::LocalOnly && literal_codes.len() != 1 {
@@ -558,6 +558,8 @@ struct CompressedHeader {
     npostfix: u8,
     ndirect: usize,
     context_modes: Vec<u8>,
+    literal_tree_count: usize,
+    distance_tree_count: usize,
     literal_context_map: Vec<usize>,
     distance_context_map: Vec<usize>,
     distance_alphabet_size: usize,
@@ -664,16 +666,6 @@ impl BlockCategory {
     }
 }
 
-impl CompressedHeader {
-    fn literal_tree_count(&self) -> usize {
-        self.literal_context_map.iter().copied().max().unwrap_or(0) + 1
-    }
-
-    fn distance_tree_count(&self) -> usize {
-        self.distance_context_map.iter().copied().max().unwrap_or(0) + 1
-    }
-}
-
 fn uniform_literal_context_mode(header: &CompressedHeader) -> Option<u8> {
     let (&first, rest) = header.context_modes.split_first()?;
     rest.iter().all(|&mode| mode == first).then_some(first)
@@ -705,6 +697,8 @@ fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, Decompres
         npostfix,
         ndirect,
         context_modes,
+        literal_tree_count: literal_trees,
+        distance_tree_count: distance_trees,
         literal_context_map,
         distance_context_map,
         distance_alphabet_size,

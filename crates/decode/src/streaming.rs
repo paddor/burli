@@ -250,7 +250,7 @@ impl<R: Read> StreamDecoder<R> {
                 reader.read_zero_padding_to_byte()?;
                 let _metadata = reader.read_aligned_bytes(len)?;
                 if is_last {
-                    stored::finish_stream(&reader)?;
+                    finish_stream_prefix(&reader)?;
                     self.state = State::Done;
                 }
                 self.bit_pos = reader.consumed_bits();
@@ -304,7 +304,7 @@ impl<R: Read> StreamDecoder<R> {
                     &mut distances,
                 )?;
                 if is_last {
-                    stored::finish_stream(&reader)?;
+                    finish_stream_prefix(&reader)?;
                     self.state = State::Done;
                 }
                 self.output = output;
@@ -375,6 +375,65 @@ impl<R: Read> Read for StreamDecoder<R> {
 mod tests {
     use super::*;
     use burli_core::Options;
+
+    // One literal 'A' in a final compressed block, with two padding bits.
+    const FINAL_COMPRESSED: &[u8] = &[0x02, 0, 0, 0, 0x44, 0x50, 0x20, 0x10, 0];
+
+    struct Chunked<R> {
+        inner: R,
+        chunk: usize,
+    }
+
+    impl<R: Read> Read for Chunked<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let count = buf.len().min(self.chunk);
+            self.inner.read(&mut buf[..count])
+        }
+    }
+
+    #[test]
+    fn final_blocks_preserve_following_data() {
+        for (encoded, expected) in [
+            (FINAL_COMPRESSED, b"A".as_slice()),
+            (&[0x1a][..], b"".as_slice()), // Final empty metadata block.
+            (&[0x06][..], b"".as_slice()), // Final empty block.
+        ] {
+            assert_eq!(crate::decompress(encoded).unwrap(), expected);
+            let mut input = encoded.to_vec();
+            input.extend_from_slice(b"next frame");
+            assert!(crate::decompress(&input).is_err());
+
+            for chunk in [1, 2, input.len()] {
+                let source = Chunked {
+                    inner: input.as_slice(),
+                    chunk,
+                };
+                let mut decoder = StreamDecoder::new(source);
+                let mut output = Vec::new();
+                decoder.read_to_end(&mut output).unwrap();
+                assert_eq!(output, expected);
+                let (mut inner, mut unread) = match decoder.into_inner() {
+                    Ok(inner) => (inner, Vec::new()),
+                    Err(error) => error.into_parts(),
+                };
+                inner.read_to_end(&mut unread).unwrap();
+                assert_eq!(unread, b"next frame");
+            }
+        }
+    }
+
+    #[test]
+    fn final_blocks_still_reject_nonzero_padding() {
+        for encoded in [FINAL_COMPRESSED, &[0x06]] {
+            let mut input = encoded.to_vec();
+            *input.last_mut().unwrap() |= 0x80;
+            input.extend_from_slice(b"next frame");
+            let mut decoder = StreamDecoder::new(input.as_slice());
+            let error = decoder.read_to_end(&mut Vec::new()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(error.to_string(), "non-zero trailing Brotli padding");
+        }
+    }
 
     #[test]
     fn decoder_retains_only_window_history_after_drain() {

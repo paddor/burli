@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Reject invalid window bits in concat payload decoding.
+- Decode streams with declared Huffman trees that their context maps do not use.
+- Preserve following input after every streaming decoder termination shape.
+- Make streaming encoder flushes emit pending input without ending the stream.
+- Retain partial encoder output across write and flush errors so retries
+  preserve the compressed stream.
+
 ## [0.3.1] - 2026-08-19
 
 - Add bounded-memory `burli::validate` for Brotli stream validation.

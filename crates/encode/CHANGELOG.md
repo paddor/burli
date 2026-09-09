@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Make streaming encoder flushes emit pending input without ending the stream.
+- Retain partial output across stream write and flush errors for correct retries.
+
 ## [0.3.1] - 2026-08-19
 
 - Improve encoder quality-level paths and streaming allocation behavior.
