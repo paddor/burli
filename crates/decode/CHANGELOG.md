@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Reject invalid window bits in the concat payload decoder.
+
 ## [0.3.1] - 2026-08-19
 
 - Add bounded-memory Brotli stream validation.
