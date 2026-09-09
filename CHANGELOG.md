@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix JSR package initialization after `deno bundle` by importing WASM and
+  its generated bindings through the module graph.
 - Reject invalid window bits in concat payload decoding.
 - Decode streams with declared Huffman trees that their context maps do not use.
 - Preserve following input after every streaming decoder termination shape.

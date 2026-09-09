@@ -10,7 +10,7 @@ mkdir -p "$PKG"
 
 echo "==> Building WASM..."
 cd wasm
-wasm-pack build --target web --release --out-dir "../$TMP"
+RUSTFLAGS="" wasm-pack build --target bundler --release --out-dir "../$TMP"
 cd ..
 
 # wasm-pack appends a blank line to the package license.
@@ -18,7 +18,7 @@ awk 'NF { last = NR } { lines[NR] = $0 } END { for (i = 1; i <= last; i++) print
   LICENSE > LICENSE.tmp
 mv LICENSE.tmp LICENSE
 
-cp "$TMP/burli_wasm.js" "$PKG/"
+cp "$TMP/"*.js "$PKG/"
 cp "$TMP/burli_wasm.d.ts" "$PKG/"
 cp "$TMP/burli_wasm_bg.wasm.d.ts" "$PKG/"
 mv "$TMP/burli_wasm_bg.wasm" "$PKG/"
