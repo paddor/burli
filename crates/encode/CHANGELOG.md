@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-10
+
 - Make streaming encoder flushes emit pending input without ending the stream.
 - Retain partial output across stream write and flush errors for correct retries.
 

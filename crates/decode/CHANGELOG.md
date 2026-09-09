@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-10
+
 - Reject invalid window bits in the concat payload decoder.
 - Preserve following input after every streaming decoder termination shape.
 - Read all declared Huffman trees, including trees unused by the context maps.

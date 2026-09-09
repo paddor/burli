@@ -49,28 +49,34 @@ BURLI_GOOGLE_BROTLI_FRAGMENTED_EXHAUSTIVE=1 \
 
 `release-plz` runs on every push to `main`
 (`.github/workflows/release.yml`). It opens or updates a release PR,
-creates annotated tags after the release PR merges, publishes to crates.io,
-and creates GitHub releases. Configuration lives in `release-plz.toml`.
+creates annotated tags after merge, publishes to crates.io, and creates
+GitHub releases. Configuration lives in `release-plz.toml`.
 
-Publishing uses crates.io trusted publishing through GitHub Actions OIDC for
-all publishable crates. Do not add a crates.io token secret.
+Publishing uses crates.io trusted publishing through GitHub Actions OIDC.
+Do not add a crates.io token secret.
 
 ### Steps
 
-1. **Review the release-plz PR.** Verify semver bumps and crate order.
+1. **Review the release-plz PR.** Verify semver bumps and dependency versions
+   for every affected crate.
 
-2. **Run any needed release audit.** Use the Kani and fuzz commands below when
-   the release risk warrants an extended audit.
+2. **Curate changelogs.** Insert a new `## [x.y.z]` section immediately below
+   `## [Unreleased]` for each bumped crate and place its release notes there.
+   Never rename or modify an existing versioned section.
 
-3. **Merge the release PR.** release-plz tags and publishes configured crates
-   to crates.io automatically.
+3. **Bump the WASM package.** Update `jsr/deno.json` and
+   `jsr/wasm/Cargo.toml`.
 
-4. **Update changelogs manually.** Each publishable crate has a
-   `CHANGELOG.md`; keep release entries curated by hand.
+4. **Build and verify.** Run the JSR commands below and any additional release
+   audit warranted by the changes.
 
-The JSR package is released separately from crates.io. Update the version in
-`jsr/deno.json` and `jsr/wasm/Cargo.toml`, then run the following before
-pushing the release commit:
+5. **Merge the release PR after CI passes.** Monitor `release-plz` for crate
+   publication and `.github/workflows/jsr.yml` for JSR publication.
+   JSR rejects duplicate versions.
+
+6. **Confirm publication.** Verify every intended crate version on crates.io
+   and the new package version on each JavaScript registry. Run roundtrips
+   against the published packages, including a bundled JSR roundtrip.
 
 ```bash
 cd jsr
@@ -78,12 +84,9 @@ bash build.sh
 deno task test
 ```
 
-Use Deno 2.8.3 or newer for the `deno bundle` tests. They cover bundled
-roundtrips, synchronous bytes, and initialization races. Bundled default
-initialization runs without file or network permissions.
-
-The `jsr-publish` workflow repeats these checks and publishes on pushes to
-`main` using JSR trusted publishing through GitHub Actions OIDC.
+Use Deno 2.8.3 or newer for the bundled tests. They cover standalone bundles,
+synchronous bytes, and initialization races. Bundled default initialization
+runs without file or network permissions.
 
 ## Kani
 
