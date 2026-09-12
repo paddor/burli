@@ -1,4 +1,4 @@
-use alloc::{vec, vec::Vec};
+use alloc::vec::Vec;
 
 use burli_core::dictionary::{
     kBrotliDictionary, kBrotliDictionaryOffsetsByLength, kBrotliDictionarySizeBitsByLength,
@@ -41,12 +41,16 @@ struct SearchParams {
 #[derive(Clone, Debug)]
 pub(super) struct Workspace {
     dist_cache: [usize; 4],
+    counts: Vec<u32>,
+    buckets: Vec<u32>,
 }
 
 impl Default for Workspace {
     fn default() -> Self {
         Self {
             dist_cache: [INITIAL_LAST_DISTANCE, 11, 15, 16],
+            counts: Vec::new(),
+            buckets: Vec::new(),
         }
     }
 }
@@ -54,6 +58,14 @@ impl Default for Workspace {
 impl Workspace {
     pub(super) fn reset(&mut self) {
         self.dist_cache = [INITIAL_LAST_DISTANCE, 11, 15, 16];
+    }
+
+    fn reset_tables(&mut self, bucket_size: usize, block_size: usize) {
+        self.counts.resize(bucket_size, 0);
+        self.counts.fill(0);
+        self.buckets
+            .resize(bucket_size.saturating_mul(block_size), NO_POSITION);
+        self.buckets.fill(NO_POSITION);
     }
 }
 
@@ -127,8 +139,8 @@ fn collect_with_params<
 
     let bucket_size = 1 << BUCKET_BITS;
     let block_size = 1 << BLOCK_BITS;
-    let mut counts = vec![0_u32; bucket_size];
-    let mut buckets = vec![NO_POSITION; bucket_size * block_size];
+    workspace.reset_tables(bucket_size, block_size);
+    let (counts, buckets) = (&mut workspace.counts, &mut workspace.buckets);
     let mut tokens = Vec::new();
     let mut pos = 0_usize;
     let mut insert_start = 0_usize;
@@ -142,8 +154,8 @@ fn collect_with_params<
         let Some(mut found) =
             find_match::<BUCKET_BITS, BLOCK_BITS, HASH_LEN, HASH_READ_LEN, SKIP_DICT_AFTER_MATCH>(
                 input,
-                &mut counts,
-                &mut buckets,
+                counts,
+                buckets,
                 pos,
                 max_len,
                 dist_cache,
@@ -163,14 +175,7 @@ fn collect_with_params<
                     HASH_LEN,
                     HASH_READ_LEN,
                     SPARSE_SKIP_MULTIPLIER,
-                >(
-                    input,
-                    &mut counts,
-                    &mut buckets,
-                    pos,
-                    pos_end,
-                    apply_sparse_search,
-                );
+                >(input, counts, buckets, pos, pos_end, apply_sparse_search);
             }
             continue;
         };
@@ -188,8 +193,8 @@ fn collect_with_params<
                 SKIP_DICT_AFTER_MATCH,
             >(
                 input,
-                &mut counts,
-                &mut buckets,
+                counts,
+                buckets,
                 lazy_pos,
                 lazy_max_len,
                 dist_cache,
@@ -233,8 +238,8 @@ fn collect_with_params<
         }
         store_range::<BUCKET_BITS, BLOCK_BITS, HASH_LEN, HASH_READ_LEN>(
             input,
-            &mut counts,
-            &mut buckets,
+            counts,
+            buckets,
             pos + 2,
             (pos + found.len).min(store_end),
         );
@@ -534,4 +539,26 @@ fn hash14(input: &[u8], pos: usize) -> u32 {
 
 fn last_distance_penalty(index: usize) -> usize {
     39 + ((0x1ca10_usize >> (index & 0x0e)) & 0x0e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_keeps_hash_tables_across_collections() {
+        let first = b"function demo(){return demo_value;} ".repeat(4_096);
+        let second = b"abcdefghijklmnopqrstuvwxyz0123456789".repeat(2_049);
+        let mut workspace = Workspace::default();
+
+        collect(&first, 0, 1 << 22, &mut workspace);
+        let capacities = (workspace.counts.capacity(), workspace.buckets.capacity());
+
+        collect(&second, 0, 1 << 22, &mut workspace);
+
+        assert_eq!(
+            capacities,
+            (workspace.counts.capacity(), workspace.buckets.capacity())
+        );
+    }
 }
