@@ -7,6 +7,8 @@
   `buffer`, and `buffered_bits` for decoder hot loops.
 - Flush `BitWriter` bytes with one fixed 8-byte append instead of a
   variable-length copy.
+- Add hidden `BitWriter::write_bits_batch_trusted_fits`, which writes many
+  bit fields with the writer state kept in locals.
 
 ## [0.3.0] - 2026-08-18
 

@@ -7,6 +7,17 @@
 - Track the decoder's distance ring across meta-blocks. Collectors that
   emit last-distance codes started from stale state after a meta-block
   written by another collector, which corrupted the decoded output.
+- Detect low-compressibility input below 64 KiB with a branch-free sampler
+  that rejects text on its first samples. q0 stores such input without
+  building a workspace. q1 to q5 store it below a size that shrinks with
+  the quality, from 32 KiB at q1 to 512 B at q5, and write 256 KiB
+  literal-only meta-blocks above. Blocks of 64 KiB and more are sampled
+  across their whole length for this route.
+- Write static code-length headers in one pass.
+- Build Huffman code lengths from packed frequency-symbol keys with a radix
+  sort and a branch-free two-queue merge. Output is unchanged.
+- Write literal-only meta-blocks four literals per bit write, and count
+  bytes in eight interleaved tables.
 
 ## [0.3.2] - 2026-09-10
 

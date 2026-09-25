@@ -14,6 +14,15 @@
   meta-blocks could emit distance codes that pointed at the wrong distance.
 - Benchmark small inputs as 64 distinct Silesia slices per size, from 512 B
   to 1 MiB. `small_decode.svg` also shows each decoder on its own output.
+- Encode low-compressibility binary input much faster. q0 stores it at
+  every size, not only from 64 KiB up. q1 to q5 store it below 32 KiB,
+  16 KiB, 4 KiB, 1 KiB, and 512 B, and write literal-only meta-blocks
+  from there. On Silesia `x-ray` this runs at 470 to 700 MB/s from 16 KiB
+  up instead of 26 to 870 MB/s. Stored inputs grow by up to about 20%.
+  Silesia `sao` grows by up to 13% at q4 and q5, where matching found
+  some repeats.
+- Build Huffman codes faster, which speeds up small inputs at every quality
+  by up to 30%. Output is unchanged.
 
 ## [0.3.2] - 2026-09-10
 
