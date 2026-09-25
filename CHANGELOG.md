@@ -6,6 +6,7 @@
   batched single-tree literals.
 - Read compressed input through a 64-bit bit buffer refilled one word at a
   time.
+- Speed up `paranoid` decoding with safe chunked match copies.
 
 ## [0.3.2] - 2026-09-10
 

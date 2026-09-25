@@ -13,7 +13,6 @@ const CHUNKED_COPY_MIN_DISTANCE: usize = 8;
 /// Spare output capacity the chunked backward copy may overwrite.
 const COPY_CHUNK_SLACK: usize = 16;
 /// Longer non-overlapping copies go through `memcpy`.
-#[cfg(not(feature = "paranoid"))]
 const CHUNKED_COPY_MAX_DISJOINT_LEN: usize = 64;
 
 #[derive(Clone, Debug)]
@@ -419,16 +418,18 @@ fn copy_from_distance(
 
     checked_backward_copy_end(produced, request.needed, request.len)?;
 
-    #[cfg(not(feature = "paranoid"))]
     if request.distance >= 8
         && (request.len <= CHUNKED_COPY_MAX_DISJOINT_LEN || request.distance < request.len)
         && output.capacity() - produced >= request.len + COPY_CHUNK_SLACK
     {
         // SAFETY: `8 <= distance <= produced` was checked above, and the
         // capacity check covers the rounded-up chunk overshoot.
+        #[cfg(not(feature = "paranoid"))]
         unsafe {
             append_backward_copy_chunked(output, request.distance, request.len);
         }
+        #[cfg(feature = "paranoid")]
+        append_backward_copy_chunked(output, request.distance, request.len);
         if request.push_distance {
             distances.push(request.distance);
         }
@@ -520,6 +521,31 @@ unsafe fn append_backward_copy_chunked(output: &mut Vec<u8>, distance: usize, le
         }
         output.set_len(old_len + len);
     }
+}
+
+/// Safe form of the chunked copy. Each fixed-size chunk goes through
+/// `extend_from_slice`, which compiles to one store instead of a `memcpy`
+/// call. `truncate` then drops the overshoot. The caller's capacity check
+/// keeps the overshoot from reallocating.
+#[cfg(feature = "paranoid")]
+#[inline(always)]
+fn append_backward_copy_chunked(output: &mut Vec<u8>, distance: usize, len: usize) {
+    let end = output.len() + len;
+    let mut src = output.len() - distance;
+    if distance >= 16 {
+        while output.len() < end {
+            let chunk: [u8; 16] = output[src..src + 16].try_into().unwrap();
+            output.extend_from_slice(&chunk);
+            src += 16;
+        }
+    } else {
+        while output.len() < end {
+            let chunk: [u8; 8] = output[src..src + 8].try_into().unwrap();
+            output.extend_from_slice(&chunk);
+            src += 8;
+        }
+    }
+    output.truncate(end);
 }
 
 #[cfg(not(feature = "paranoid"))]
