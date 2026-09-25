@@ -4,6 +4,8 @@
 
 - Decode faster: two-level Huffman tables, chunked short match copies, and
   batched single-tree literals.
+- Read compressed input through a 64-bit bit buffer refilled one word at a
+  time.
 
 ## [0.3.2] - 2026-09-10
 

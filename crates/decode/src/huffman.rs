@@ -267,20 +267,57 @@ impl PrefixCode {
     ) -> Result<u16, DecompressError> {
         debug_assert!(self.single_symbol.is_none());
 
-        if reader.has_bits(self.max_bits) {
-            return Ok(self.decode_non_single_trusted_fast(reader));
+        // After the fill, either `max_bits` bits are buffered or all remaining
+        // input is, with zeros above it. Both give the right table entry.
+        reader.fill(self.max_bits);
+        let lookup = self.lookup(reader.buffer());
+        let len = lookup.len();
+        debug_assert!(len != 0);
+        if u32::from(len) > reader.buffered_bits() {
+            return Err(BurliError::Format("unexpected end of Brotli input"));
         }
-
-        self.decode_non_single_with_padded_lookup(reader)
+        reader.drop_bits_trusted(len);
+        Ok(lookup.value())
     }
 
+    /// Decodes one symbol. The caller proves that the input holds
+    /// `max_bits` bits.
     #[inline(always)]
     pub(crate) fn decode_non_single_trusted_fast(&self, reader: &mut BitReader<'_>) -> u16 {
         debug_assert!(self.single_symbol.is_none());
         debug_assert!(reader.has_bits(self.max_bits));
 
-        let bits = reader.peek_bits_trusted_with_mask(self.max_bits, u64::MAX);
-        let lookup = self.lookup(bits);
+        reader.fill(self.max_bits);
+        let lookup = self.lookup(reader.buffer());
+        debug_assert!(lookup.len() != 0);
+        reader.drop_bits_trusted(lookup.len());
+        lookup.value()
+    }
+
+    /// Decodes one symbol, single-symbol codes included, right after
+    /// [`BitReader::refill`]. The refill buffers `max_bits` bits or all
+    /// remaining input, so only a truncated code fails.
+    #[inline(always)]
+    pub(crate) fn decode_refilled(
+        &self,
+        reader: &mut BitReader<'_>,
+    ) -> Result<u16, DecompressError> {
+        let lookup = self.lookup(reader.buffer());
+        let len = lookup.len();
+        if u32::from(len) > reader.buffered_bits() {
+            return Err(BurliError::Format("unexpected end of Brotli input"));
+        }
+        reader.drop_bits_trusted(len);
+        Ok(lookup.value())
+    }
+
+    /// Decodes one symbol from the buffered bits without refilling. The
+    /// caller proves that the buffer holds `max_bits` bits or all remaining
+    /// input, and that the input holds this symbol's code.
+    #[inline(always)]
+    pub(crate) fn decode_non_single_buffered(&self, reader: &mut BitReader<'_>) -> u16 {
+        debug_assert!(self.single_symbol.is_none());
+        let lookup = self.lookup(reader.buffer());
         debug_assert!(lookup.len() != 0);
         reader.drop_bits_trusted(lookup.len());
         lookup.value()
@@ -325,32 +362,6 @@ impl PrefixCode {
         {
             self.table[index]
         }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn decode_non_single_with_padded_lookup(
-        &self,
-        reader: &mut BitReader<'_>,
-    ) -> Result<u16, DecompressError> {
-        let remaining = reader.remaining_bits();
-        if remaining == 0 {
-            return Err(BurliError::Format("unexpected end of Brotli input"));
-        }
-
-        let available = remaining.min(usize::from(self.max_bits));
-        let bits = reader.peek_bits(available as u8)?;
-        let lookup = self.lookup(bits);
-        let len = lookup.len();
-        if len == 0 {
-            return Err(BurliError::Format("invalid Brotli Huffman code"));
-        }
-        if usize::from(len) > remaining {
-            return Err(BurliError::Format("unexpected end of Brotli input"));
-        }
-
-        reader.drop_bits(len)?;
-        Ok(lookup.value())
     }
 }
 
@@ -495,6 +506,7 @@ fn read_complex_prefix_code(
 }
 
 fn read_code_length_code_len(reader: &mut BitReader<'_>) -> Result<u8, DecompressError> {
+    reader.fill(4);
     let available = reader.remaining_bits().min(4);
     if available < 2 {
         return Err(BurliError::Format("unexpected end of Brotli input"));
