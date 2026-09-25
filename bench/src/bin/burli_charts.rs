@@ -110,12 +110,23 @@ const SILESIA_GROUPS: &[(&str, &[&str])] = &[
 ];
 const SILESIA_BASELINE_CODECS: &[&str] = &["google-brotli", "rust-brotli", "mbrotli"];
 
-const SMALL_PREFIXES: &[&str] = &["bootstrap-js", "bootstrap-css", "json-citm"];
-const SMALL_SUFFIXES: &[&str] = &[
-    "_512", "_1k", "_2k", "_4k", "_8k", "_16k", "_32k", "_64k", "_128k",
+const SMALL_PREFIXES: &[&str] = &[
+    "silesia-dickens",
+    "silesia-nci",
+    "silesia-xml",
+    "silesia-x-ray",
 ];
-const SMALL_SIZES: &[usize] = &[512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072];
-const SIZE_LABELS: &[&str] = &["512", "1K", "2K", "4K", "8K", "16K", "32K", "64K", "128K"];
+const SMALL_SUFFIXES: &[&str] = &[
+    "_512", "_1k", "_2k", "_4k", "_8k", "_16k", "_32k", "_64k", "_128k", "_256k", "_512k", "_1m",
+];
+const SMALL_SIZES: &[usize] = &[
+    512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576,
+];
+const SIZE_LABELS: &[&str] = &[
+    "512", "1K", "2K", "4K", "8K", "16K", "32K", "64K", "128K", "256K", "512K", "1M",
+];
+const SMALL_X_MIN: f64 = 400.0;
+const SMALL_X_MAX: f64 = 1_200_000.0;
 
 #[derive(Clone)]
 struct CodecStyle {
@@ -2074,7 +2085,7 @@ fn draw_small_encode(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>>
     chart_header(
         &area,
         width,
-        "Encode Throughput vs Input Size (web corpus slices)",
+        "Encode Throughput vs Input Size (64 distinct Silesia slices per size)",
         cfg.hw_label.as_deref(),
         18,
     )?;
@@ -2105,8 +2116,8 @@ fn draw_small_encode(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>>
         draw_small_panel_frame(&area, prefix, x_left, x_right, p_top, p_bot)?;
         let map_x = |size: usize| {
             x_left
-                + ((size as f64).log10() - 400.0_f64.log10())
-                    / (160_000.0_f64.log10() - 400.0_f64.log10())
+                + ((size as f64).log10() - SMALL_X_MIN.log10())
+                    / (SMALL_X_MAX.log10() - SMALL_X_MIN.log10())
                     * (x_right - x_left)
         };
         let map_y = |mbs: f64| {
@@ -2248,15 +2259,36 @@ fn draw_small_decode(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>>
     let left = 90.0;
     let gap = 50.0;
     let total_h = SMALL_PREFIXES.len() as f64 * panel_h + (SMALL_PREFIXES.len() - 1) as f64 * gap;
-    let height = (top + total_h + 125.0) as u32;
+    let height = (top + total_h + 145.0) as u32;
     let path = output_path(out_dir, "small_decode.svg");
+    // Each codec decoding its own q5 output (small encode rows), drawn thin.
+    // Google C's thick line already decodes its own output.
+    let own_codecs = cfg
+        .small_decode_codecs
+        .iter()
+        .copied()
+        .filter(|codec| *codec != "google-brotli")
+        .collect::<Vec<_>>();
+    let own_data = load_small_data(cfg, &own_codecs);
+    require_named_quality_rows(
+        &own_data,
+        &own_codecs,
+        &small_inputs,
+        &[DECODE_QUALITY],
+        "small decode (own output)",
+    )?;
+    let own_mbs = |codec: &str, name: &str| {
+        own_data.get(codec).and_then(|rows| {
+            rows.iter()
+                .find(|row| row.input == name && row.quality == DECODE_QUALITY)
+                .and_then(dec_mbs)
+        })
+    };
     let area = root(&path, width, height)?;
     chart_header(
         &area,
         width,
-        &format!(
-            "Decode Throughput vs Input Size (web corpus slices, q{DECODE_QUALITY}; Google C output)"
-        ),
+        &format!("Decode Throughput vs Input Size (64 distinct Silesia slices, q{DECODE_QUALITY})"),
         cfg.hw_label.as_deref(),
         18,
     )?;
@@ -2269,7 +2301,11 @@ fn draw_small_decode(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>>
         for codec in &cfg.small_decode_codecs {
             let rows = data.get(*codec).cloned().unwrap_or_default();
             for suffix in SMALL_SUFFIXES {
-                if let Some(v) = get_decode_mbs(&rows, &format!("{prefix}{suffix}")) {
+                let name = format!("{prefix}{suffix}");
+                for v in [get_decode_mbs(&rows, &name), own_mbs(codec, &name)]
+                    .into_iter()
+                    .flatten()
+                {
                     panel_max = panel_max.max(v);
                 }
             }
@@ -2281,8 +2317,8 @@ fn draw_small_decode(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>>
         draw_small_panel_frame(&area, prefix, x_left, x_right, p_top, p_bot)?;
         let map_x = |size: usize| {
             x_left
-                + ((size as f64).log10() - 400.0_f64.log10())
-                    / (160_000.0_f64.log10() - 400.0_f64.log10())
+                + ((size as f64).log10() - SMALL_X_MIN.log10())
+                    / (SMALL_X_MAX.log10() - SMALL_X_MIN.log10())
                     * (x_right - x_left)
         };
         let map_y = |mbs: f64| p_bot - (mbs / y_max) * (p_bot - p_top);
@@ -2324,8 +2360,31 @@ fn draw_small_decode(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>>
             for (x, y) in pts {
                 dot(&area, x, y, 3, style.color)?;
             }
+            if own_codecs.contains(codec) {
+                let pts = SMALL_SUFFIXES
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, suffix)| {
+                        own_mbs(codec, &format!("{prefix}{suffix}"))
+                            .map(|mbs| (map_x(SMALL_SIZES[i]), map_y(mbs)))
+                    })
+                    .collect::<Vec<_>>();
+                polyline(&area, &pts, style.color, 1, 0.6, false)?;
+            }
         }
     }
+    text(
+        &area,
+        format!(
+            "thick = decoding Google C's q{DECODE_QUALITY} output, thin = decoding its own q{DECODE_QUALITY} output"
+        ),
+        px(width as f64 / 2.0),
+        px(height as f64 - 14.0),
+        10,
+        MUTED,
+        HPos::Center,
+        false,
+    )?;
     vtext(&area, "decode MB/s", 20, px(top + total_h / 2.0), 11, TEXT)?;
     let legend_items = cfg
         .small_decode_codecs
@@ -2396,7 +2455,7 @@ fn draw_small_panel_frame(
     rect(area, x_left, p_top, x_right, p_bot, PANEL)?;
     text(
         area,
-        input_chart_label(prefix),
+        prefix.strip_prefix("silesia-").unwrap_or(prefix),
         px((x_left + x_right) / 2.0),
         px(p_top - 12.0),
         12,

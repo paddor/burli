@@ -169,8 +169,14 @@ Default timing is 30 ms per round, 3 rounds, 1 warmup. `--quick` uses one
 `--warmup`, or matching `BURLI_BENCH_*` env vars for focused work.
 
 `--chart-small-only` restricts small-input runs to the files and sizes used by
-the checked-in small charts. It avoids benchmarking every small slice of every
-corpus file.
+the checked-in small charts: Silesia `dickens`, `nci`, `xml`, and `x-ray`,
+from 512 B to 1 MiB. It avoids benchmarking every small slice of every corpus
+file.
+
+Each small input is up to 64 distinct consecutive slices of one size, and
+each timed pass walks all of them. Repeating one slice lets the branch
+predictor learn it and distorts results. Sizes and times in small rows are
+totals per pass.
 
 Default implementation set:
 
@@ -189,8 +195,8 @@ cargo run --manifest-path bench/Cargo.toml --bin burli_charts --release -- \
   scatter-silesia
 ```
 
-`all` renders the web charts. `scatter-silesia` is separate. With no output
-dir, charts go under `doc/charts/<arch>/`.
+`all` renders the web charts and both small-input charts. `scatter-silesia`
+is separate. With no output dir, charts go under `doc/charts/<arch>/`.
 
 Generated chart set:
 
@@ -202,8 +208,19 @@ Generated chart set:
 - `small_decode.svg`
 - `scatter_silesia.svg`
 
-`small_decode.svg` measures every decoder against the same Google Brotli C
-stream at quality 5.
+`small_decode.svg` draws every decoder on the same Google Brotli C stream at
+quality 5 (thick) and on its own quality 5 output (thin, from the small encode
+rows). The thick lines need the Google-stream decode rows. The paranoid lines
+need a paranoid small run:
+
+```bash
+cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
+  --impl google-brotli-burli,google-brotli-rust-brotli,google-brotli-mbrotli \
+  --qualities 5 --chart-small-only
+cargo run --manifest-path bench/Cargo.toml --example burli_bench --release \
+  --features paranoid -- --impl burli,google-brotli-burli --qualities 5 \
+  --chart-small-only
+```
 
 Review SVG diffs before committing. Only commit chart files that were
 intentionally refreshed.

@@ -12,6 +12,8 @@
 - Fix corrupt output when the encoder switches match finders between
   meta-blocks. Streaming at q1 to q5 and one-shot inputs split into several
   meta-blocks could emit distance codes that pointed at the wrong distance.
+- Benchmark small inputs as 64 distinct Silesia slices per size, from 512 B
+  to 1 MiB. `small_decode.svg` also shows each decoder on its own output.
 
 ## [0.3.2] - 2026-09-10
 
