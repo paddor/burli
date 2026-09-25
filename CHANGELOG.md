@@ -9,6 +9,9 @@
 - Speed up `paranoid` decoding with safe chunked match copies.
 - Encode faster: flush `BitWriter` bytes with one fixed 8-byte append, and
   emit token literals in pairs. Output is unchanged.
+- Fix corrupt output when the encoder switches match finders between
+  meta-blocks. Streaming at q1 to q5 and one-shot inputs split into several
+  meta-blocks could emit distance codes that pointed at the wrong distance.
 
 ## [0.3.2] - 2026-09-10
 

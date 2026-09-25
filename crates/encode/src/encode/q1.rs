@@ -6,8 +6,8 @@ use burli_core::{
 };
 
 use super::{
-    COMMAND_ALPHABET_SIZE, DenseSymbolCode, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE,
-    PrefixCodeScratch, append_pending_bits, match_len, read_u64_le, tune,
+    COMMAND_ALPHABET_SIZE, DenseSymbolCode, DistanceRing, LITERAL_ALPHABET_SIZE,
+    MAX_META_BLOCK_SIZE, PrefixCodeScratch, append_pending_bits, match_len, read_u64_le, tune,
     write_block_and_context_header,
     write_fast_dense_prefix_code_array_from_frequencies_with_scratch, write_meta_block_len,
     write_q1_internal_balanced_command_static_distance_prefix_codes,
@@ -25,6 +25,7 @@ const NO_POSITION_16: u16 = 0;
 const NO_LAST_DISTANCE: usize = usize::MAX;
 const INTERNAL_COMMAND_ALPHABET_SIZE: usize = 128;
 const INTERNAL_DISTANCE_REUSE_CODE: usize = 64;
+const INTERNAL_DISTANCE_CODE_BASE: usize = 80;
 const INTERNAL_NUM_EXTRA_BITS: [u8; INTERNAL_COMMAND_ALPHABET_SIZE] = [
     0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 12, 14, 24, 0, 0, 0, 0, 0, 0,
     0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9,
@@ -252,7 +253,7 @@ impl Batch {
         let nbits = log2_floor(d) - 1;
         let prefix = (d >> nbits) & 1;
         let offset = (2 + prefix) << nbits;
-        let code = 2 * (nbits - 1) + prefix + 80;
+        let code = 2 * (nbits - 1) + prefix + INTERNAL_DISTANCE_CODE_BASE;
         self.emit_command(code, d - offset);
     }
 
@@ -871,6 +872,29 @@ pub(super) fn write_q0_packed_literal_body(
 }
 
 impl Workspace {
+    /// Advance `ring` past the batch's explicit distances. Distance reuse
+    /// commands leave the ring as is.
+    pub(super) fn advance_distance_ring(&self, ring: &mut DistanceRing) {
+        let mut newest = [0; 4];
+        let mut count = 0;
+        for &command in self.batch.commands.iter().rev() {
+            let code = (command & 0xff) as usize;
+            if code < INTERNAL_DISTANCE_CODE_BASE {
+                continue;
+            }
+            // Invert `Batch::emit_distance`.
+            let nbits = (code - INTERNAL_DISTANCE_CODE_BASE) / 2 + 1;
+            let prefix = (code - INTERNAL_DISTANCE_CODE_BASE) & 1;
+            let extra = (command >> 8) as usize;
+            newest[count] = ((2 + prefix) << nbits) + extra - 3;
+            count += 1;
+            if count == newest.len() {
+                break;
+            }
+        }
+        ring.push_newest_first(&newest[..count]);
+    }
+
     fn write(
         &mut self,
         writer: &mut BitWriter,

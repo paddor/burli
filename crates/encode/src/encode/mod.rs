@@ -33,6 +33,8 @@ const STATIC_CODE_LENGTH_DEPTH: [u8; CODE_LENGTH_ALPHABET_SIZE] =
 const STATIC_CODE_LENGTH_BITS: [u16; CODE_LENGTH_ALPHABET_SIZE] =
     [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 15, 31, 0, 11, 7];
 
+const INITIAL_DISTANCE_RING: [usize; 4] = [INITIAL_LAST_DISTANCE, 11, 15, 16];
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Workspace {
     q0: q0::Workspace,
@@ -42,6 +44,78 @@ pub(crate) struct Workspace {
     q4: q4::Workspace,
     q5: q5::Workspace,
     token_prefix: PrefixCodeScratch,
+    distance_ring: DistanceRing,
+}
+
+/// The decoder's last four distances at the next meta-block boundary.
+///
+/// Brotli keeps this ring across meta-blocks. Collectors that emit
+/// ring-relative distance codes start from it, and every meta-block that
+/// writes copies advances it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DistanceRing([usize; 4]);
+
+impl Default for DistanceRing {
+    fn default() -> Self {
+        Self(INITIAL_DISTANCE_RING)
+    }
+}
+
+impl DistanceRing {
+    const fn last(self) -> usize {
+        self.0[0]
+    }
+
+    fn push(&mut self, distance: usize) {
+        self.0 = [distance, self.0[0], self.0[1], self.0[2]];
+    }
+
+    /// Push up to four distances, newest first.
+    fn push_newest_first(&mut self, newest: &[usize]) {
+        let count = newest.len().min(self.0.len());
+        let old = self.0;
+        self.0[..count].copy_from_slice(&newest[..count]);
+        self.0[count..].copy_from_slice(&old[..old.len() - count]);
+    }
+
+    /// Advance past `tokens` the way a decoder does. Copies that reuse the
+    /// last distance and static dictionary references leave the ring as is.
+    fn advance_tokens(
+        &mut self,
+        tokens: &[Token],
+        input_base: usize,
+        max_backward_distance: usize,
+    ) {
+        let mut newest = [0; 4];
+        let mut count = 0;
+        for token in tokens.iter().rev() {
+            if !token.is_copy() || token.use_last_distance || token.distance_code == Some(0) {
+                continue;
+            }
+            let pos = token.insert_start + token.insert_len;
+            if token.distance > input_base.saturating_add(pos).min(max_backward_distance) {
+                continue;
+            }
+            newest[count] = token.distance;
+            count += 1;
+            if count == newest.len() {
+                break;
+            }
+        }
+        self.push_newest_first(&newest[..count]);
+    }
+}
+
+/// Copy commands a meta-block writer emitted, for advancing the distance ring.
+enum Copies {
+    /// No copy commands.
+    None,
+    /// Copies from a token collector.
+    Tokens(Vec<Token>),
+    /// Copies from the q1 command batch in the workspace.
+    Q1Batch,
+    /// The writer advanced the ring itself.
+    Tracked,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -85,10 +159,17 @@ pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>,
 
 impl Workspace {
     fn reset_stream(&mut self) {
-        self.q2.reset();
-        self.q3.reset();
-        self.q4.reset();
-        self.q5.reset();
+        self.distance_ring = DistanceRing::default();
+        self.load_distance_ring();
+    }
+
+    /// Start every ring-relative collector from the decoder's ring.
+    fn load_distance_ring(&mut self) {
+        let ring = self.distance_ring.0;
+        self.q2.set_dist_cache(ring);
+        self.q3.set_dist_cache(ring);
+        self.q4.set_dist_cache(ring);
+        self.q5.set_dist_cache(ring);
     }
 }
 
@@ -494,10 +575,43 @@ impl EncoderPlan {
         allow_cross_collector_shortcuts: bool,
         workspace: &mut Workspace,
     ) -> Result<(), CompressError> {
+        workspace.load_distance_ring();
+        let copies = self.write_meta_block_copies(
+            writer,
+            input,
+            input_base,
+            allow_cross_collector_shortcuts,
+            workspace,
+        )?;
+        match copies {
+            Copies::None | Copies::Tracked => {}
+            Copies::Tokens(tokens) => {
+                workspace.distance_ring.advance_tokens(
+                    &tokens,
+                    input_base,
+                    self.max_backward_distance,
+                );
+            }
+            Copies::Q1Batch => workspace
+                .q1
+                .advance_distance_ring(&mut workspace.distance_ring),
+        }
+        Ok(())
+    }
+
+    fn write_meta_block_copies(
+        self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        input_base: usize,
+        allow_cross_collector_shortcuts: bool,
+        workspace: &mut Workspace,
+    ) -> Result<Copies, CompressError> {
         let local_max_backward_distance = self.max_backward_distance.min(input.len());
         let global_max_backward_distance = self.max_backward_distance;
         if input.len() < self.path.min_match_len() {
-            return write_compressed_literal_meta_block(writer, input);
+            write_compressed_literal_meta_block(writer, input)?;
+            return Ok(Copies::None);
         }
 
         if self.path == EncoderPath::FastOnePass {
@@ -511,23 +625,27 @@ impl EncoderPlan {
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     if input.len() <= 512 {
-                        return write_fast_compressed_literal_meta_block(writer, input);
+                        write_fast_compressed_literal_meta_block(writer, input)?;
+                        return Ok(Copies::None);
                     }
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return write_token_batches_with_symbol_limit(
+                write_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     tune::MAX_DELAYED_SYMBOLS,
-                );
+                )?;
+                return Ok(Copies::Tokens(tokens));
             }
 
             if input.len() > tune::Q0_DIRECT_MAX_INPUT {
                 let sparse_decision = sparse::decision(input);
                 if sparse_decision.store_uncompressed {
                     if sparse::q0_store_block(input_base, allow_cross_collector_shortcuts) {
-                        return crate::metablock::write_uncompressed_meta_block(writer, input);
+                        crate::metablock::write_uncompressed_meta_block(writer, input)?;
+                        return Ok(Copies::None);
                     }
                     let has_copy = {
                         let batch = q1::collect_with_64k_sparse_stride(
@@ -538,15 +656,17 @@ impl EncoderPlan {
                         batch.has_copy()
                     };
                     if !has_copy {
-                        return write_compressed_literal_meta_block(writer, input);
+                        write_compressed_literal_meta_block(writer, input)?;
+                        return Ok(Copies::None);
                     }
-                    return q0_write_collected(
+                    q0_write_collected(
                         writer,
                         input,
                         &mut workspace.q1,
                         self.q1_fast_literal_prefix,
                         q0_write_route(input.len(), sparse_decision.sample),
-                    );
+                    )?;
+                    return Ok(Copies::Q1Batch);
                 }
 
                 let has_copy = {
@@ -559,28 +679,37 @@ impl EncoderPlan {
                     batch.has_copy()
                 };
                 if !has_copy {
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return q0_write_collected(
+                q0_write_collected(
                     writer,
                     input,
                     &mut workspace.q1,
                     self.q1_fast_literal_prefix,
                     q0_write_route(input.len(), sparse_decision.sample),
-                );
+                )?;
+                return Ok(Copies::Q1Batch);
             }
 
             let has_copy = {
-                let batch = q0::collect(input, local_max_backward_distance, &mut workspace.q0)?;
+                let batch = q0::collect(
+                    input,
+                    local_max_backward_distance,
+                    &mut workspace.distance_ring,
+                    &mut workspace.q0,
+                )?;
                 batch.has_copy()
             };
             if !has_copy {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return q0::write(writer, input, input.len(), &mut workspace.q0);
+            q0::write(writer, input, input.len(), &mut workspace.q0)?;
+            return Ok(Copies::Tracked);
         }
 
-        if self.write_sparse_binary_meta_block(
+        if let Some(copies) = self.write_sparse_binary_meta_block(
             writer,
             input,
             input_base,
@@ -588,7 +717,7 @@ impl EncoderPlan {
             global_max_backward_distance,
             workspace,
         )? {
-            return Ok(());
+            return Ok(copies);
         }
 
         if self.path == EncoderPath::FastTwoPass {
@@ -599,15 +728,17 @@ impl EncoderPlan {
                     &mut workspace.q2,
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return write_recomputed_token_batches_with_symbol_limit(
+                write_recomputed_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     tune::Q1_DELAYED_SYMBOLS,
                     &mut workspace.token_prefix,
-                );
+                )?;
+                return Ok(Copies::Tokens(tokens));
             }
 
             if !allow_cross_collector_shortcuts {
@@ -618,15 +749,17 @@ impl EncoderPlan {
                         batch.has_copy()
                     };
                     if !has_copy {
-                        return write_compressed_literal_meta_block(writer, input);
+                        write_compressed_literal_meta_block(writer, input)?;
+                        return Ok(Copies::None);
                     }
-                    return q1::write(
+                    q1::write(
                         writer,
                         input,
                         input.len(),
                         &mut workspace.q1,
                         self.q1_fast_literal_prefix,
-                    );
+                    )?;
+                    return Ok(Copies::Q1Batch);
                 }
                 let tokens = if q1_large_markup_lazy_is_likely_safe(input) {
                     q2::collect_without_dictionary_one_lazy(
@@ -637,15 +770,17 @@ impl EncoderPlan {
                 } else if q1_no_cross_fast_writer_is_likely_safe(input) {
                     let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
                     if !batch.has_copy() {
-                        return write_compressed_literal_meta_block(writer, input);
+                        write_compressed_literal_meta_block(writer, input)?;
+                        return Ok(Copies::None);
                     }
-                    return q1::write(
+                    q1::write(
                         writer,
                         input,
                         input.len(),
                         &mut workspace.q1,
                         self.q1_fast_literal_prefix,
-                    );
+                    )?;
+                    return Ok(Copies::Q1Batch);
                 } else if q1_no_cross_one_lazy_is_likely_safe(input) {
                     q2::collect_without_dictionary_one_lazy(
                         input,
@@ -666,14 +801,16 @@ impl EncoderPlan {
                     )
                 };
                 if !tokens.iter().any(|token| token.is_copy()) {
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return write_token_batches_with_symbol_limit(
+                write_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     tune::Q1_DELAYED_SYMBOLS,
-                );
+                )?;
+                return Ok(Copies::Tokens(tokens));
             }
 
             let has_copy = {
@@ -689,15 +826,17 @@ impl EncoderPlan {
                 batch.has_copy()
             };
             if !has_copy {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return q1::write(
+            q1::write(
                 writer,
                 input,
                 input.len(),
                 &mut workspace.q1,
                 self.q1_fast_literal_prefix,
-            );
+            )?;
+            return Ok(Copies::Q1Batch);
         }
 
         if self.path == EncoderPath::StaticEntropy {
@@ -717,14 +856,16 @@ impl EncoderPlan {
                     q3::collect(input, local_max_backward_distance, &mut workspace.q3)
                 };
                 if !tokens.iter().any(|token| token.is_copy()) {
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return write_regular_token_batches_with_symbol_limit(
+                write_regular_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     tune::MAX_DELAYED_SYMBOLS,
-                );
+                )?;
+                return Ok(Copies::Tokens(tokens));
             }
 
             let tokens = if input.len() < tune::Q2_STATIC_NO_DICTIONARY_MAX_INPUT {
@@ -742,14 +883,16 @@ impl EncoderPlan {
                 )
             };
             if !tokens.iter().any(|token| token.is_copy()) {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return write_token_batches_with_symbol_limit(
+            write_token_batches_with_symbol_limit(
                 writer,
                 input,
                 &tokens,
                 tune::MAX_DELAYED_SYMBOLS,
-            );
+            )?;
+            return Ok(Copies::Tokens(tokens));
         }
 
         if self.path == EncoderPath::RegularNoSplit {
@@ -762,14 +905,16 @@ impl EncoderPlan {
                 q3::collect(input, local_max_backward_distance, &mut workspace.q3)
             };
             if !tokens.iter().any(|token| token.is_copy()) {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return write_regular_token_batches_with_symbol_limit(
+            write_regular_token_batches_with_symbol_limit(
                 writer,
                 input,
                 &tokens,
                 tune::MAX_DELAYED_SYMBOLS,
-            );
+            )?;
+            return Ok(Copies::Tokens(tokens));
         }
 
         if self.path == EncoderPath::RegularSplit {
@@ -781,14 +926,16 @@ impl EncoderPlan {
                     &mut workspace.q5,
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return write_regular_token_batches_with_symbol_limit(
+                write_regular_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     tune::Q5_DELAYED_SYMBOLS,
-                );
+                )?;
+                return Ok(Copies::Tokens(tokens));
             }
             let tokens = q4::collect(
                 input,
@@ -797,14 +944,16 @@ impl EncoderPlan {
                 &mut workspace.q4,
             );
             if !tokens.iter().any(|token| token.is_copy()) {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return write_regular_token_batches_with_symbol_limit(
+            write_regular_token_batches_with_symbol_limit(
                 writer,
                 input,
                 &tokens,
                 tune::Q4_DELAYED_SYMBOLS,
-            );
+            )?;
+            return Ok(Copies::Tokens(tokens));
         }
 
         if self.path == EncoderPath::ContextModeled {
@@ -815,14 +964,16 @@ impl EncoderPlan {
                 &mut workspace.q5,
             );
             if !tokens.iter().any(|token| token.is_copy()) {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return write_regular_token_batches_with_symbol_limit(
+            write_regular_token_batches_with_symbol_limit(
                 writer,
                 input,
                 &tokens,
                 tune::Q5_DELAYED_SYMBOLS,
-            );
+            )?;
+            return Ok(Copies::Tokens(tokens));
         }
 
         unreachable!("all scoped encoder paths are handled above")
@@ -836,10 +987,10 @@ impl EncoderPlan {
         local_max_backward_distance: usize,
         _global_max_backward_distance: usize,
         workspace: &mut Workspace,
-    ) -> Result<bool, CompressError> {
+    ) -> Result<Option<Copies>, CompressError> {
         let sparse_decision = sparse::decision(input);
         if !sparse_decision.store_uncompressed {
-            return Ok(false);
+            return Ok(None);
         }
 
         match self.path {
@@ -849,8 +1000,10 @@ impl EncoderPlan {
                     input,
                     local_max_backward_distance,
                     &mut workspace.q1,
+                    &mut workspace.distance_ring,
                     self.q1_fast_literal_prefix,
                 )?;
+                Ok(Some(Copies::Tracked))
             }
             EncoderPath::StaticEntropy => {
                 let tokens = sparse::collect_tokens(
@@ -860,7 +1013,7 @@ impl EncoderPlan {
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
-                    return Ok(true);
+                    return Ok(Some(Copies::None));
                 }
                 write_token_batches_with_symbol_limit(
                     writer,
@@ -868,6 +1021,7 @@ impl EncoderPlan {
                     &tokens,
                     tune::MAX_DELAYED_SYMBOLS,
                 )?;
+                Ok(Some(Copies::Tokens(tokens)))
             }
             EncoderPath::RegularNoSplit => {
                 let tokens = sparse::collect_tokens(
@@ -877,7 +1031,7 @@ impl EncoderPlan {
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
-                    return Ok(true);
+                    return Ok(Some(Copies::None));
                 }
                 write_regular_token_batches_with_symbol_limit(
                     writer,
@@ -885,6 +1039,7 @@ impl EncoderPlan {
                     &tokens,
                     tune::MAX_DELAYED_SYMBOLS,
                 )?;
+                Ok(Some(Copies::Tokens(tokens)))
             }
             EncoderPath::RegularSplit => {
                 let tokens = sparse::collect_tokens(
@@ -894,7 +1049,7 @@ impl EncoderPlan {
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
-                    return Ok(true);
+                    return Ok(Some(Copies::None));
                 }
                 write_regular_token_batches_with_symbol_limit(
                     writer,
@@ -902,6 +1057,7 @@ impl EncoderPlan {
                     &tokens,
                     tune::LOW_COMPRESS_DELAYED_SYMBOLS,
                 )?;
+                Ok(Some(Copies::Tokens(tokens)))
             }
             EncoderPath::ContextModeled => {
                 let tokens = sparse::collect_tokens(
@@ -911,7 +1067,7 @@ impl EncoderPlan {
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
-                    return Ok(true);
+                    return Ok(Some(Copies::None));
                 }
                 write_regular_token_batches_with_symbol_limit(
                     writer,
@@ -919,10 +1075,10 @@ impl EncoderPlan {
                     &tokens,
                     tune::LOW_COMPRESS_DELAYED_SYMBOLS,
                 )?;
+                Ok(Some(Copies::Tokens(tokens)))
             }
             EncoderPath::FastOnePass => unreachable!("q0 sparse path is handled separately"),
         }
-        Ok(true)
     }
 }
 
@@ -931,6 +1087,7 @@ fn write_split_q1_sparse_binary_meta_blocks(
     input: &[u8],
     local_max_backward_distance: usize,
     workspace: &mut q1::Workspace,
+    distance_ring: &mut DistanceRing,
     fast_literal_prefix: bool,
 ) -> Result<(), CompressError> {
     for (block_index, chunk) in input.chunks(tune::Q1_LOW_COMPRESS_BLOCK_SIZE).enumerate() {
@@ -953,6 +1110,7 @@ fn write_split_q1_sparse_binary_meta_blocks(
             continue;
         }
         q1::write(writer, chunk, chunk.len(), workspace, fast_literal_prefix)?;
+        workspace.advance_distance_ring(distance_ring);
     }
     Ok(())
 }

@@ -56,8 +56,8 @@ impl Default for Workspace {
 }
 
 impl Workspace {
-    pub(super) fn reset(&mut self) {
-        self.dist_cache = [INITIAL_LAST_DISTANCE, 11, 15, 16];
+    pub(super) const fn set_dist_cache(&mut self, dist_cache: [usize; 4]) {
+        self.dist_cache = dist_cache;
     }
 
     fn reset_tables(&mut self, bucket_size: usize, block_size: usize) {

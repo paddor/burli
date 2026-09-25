@@ -4,6 +4,9 @@
 
 - Emit token literals in pairs in the q2 to q5 writers, and store length and
   distance extra bits in 32-bit fields. Output is unchanged.
+- Track the decoder's distance ring across meta-blocks. Collectors that
+  emit last-distance codes started from stale state after a meta-block
+  written by another collector, which corrupted the decoded output.
 
 ## [0.3.2] - 2026-09-10
 
