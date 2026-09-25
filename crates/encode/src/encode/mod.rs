@@ -1660,7 +1660,7 @@ fn write_compressed_literal_meta_block(
     let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
     write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, command_symbol)?;
     write_simple_prefix_code_single(writer, 64, 0)?;
-    writer.write_bits_trusted(insert.extra_bits, insert.extra);
+    writer.write_bits_trusted(insert.extra_bits, u64::from(insert.extra));
     for &literal in input {
         write_literal(writer, &literal_code_map, literal)?;
     }
@@ -1693,7 +1693,7 @@ fn write_fast_compressed_literal_meta_block(
     )?;
     write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, command_symbol)?;
     write_simple_prefix_code_single(writer, 64, 0)?;
-    writer.write_bits_trusted(insert.extra_bits, insert.extra);
+    writer.write_bits_trusted(insert.extra_bits, u64::from(insert.extra));
     write_literals_dense(writer, input, &literal_code_map)?;
     Ok(())
 }
@@ -1808,7 +1808,7 @@ fn write_token_batch_recomputed_with_len(
             &mut pending_bits,
             &mut pending_width,
             insert.extra_bits,
-            insert.extra,
+            u64::from(insert.extra),
         );
         if let Some(copy) = copy {
             append_pending_bits(
@@ -1816,21 +1816,17 @@ fn write_token_batch_recomputed_with_len(
                 &mut pending_bits,
                 &mut pending_width,
                 copy.extra_bits,
-                copy.extra,
+                u64::from(copy.extra),
             );
         }
 
-        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            let literal_code = literal_code_map[usize::from(literal)];
-            debug_assert!(literal_code.len != u8::MAX);
-            append_pending_bits(
-                writer,
-                &mut pending_bits,
-                &mut pending_width,
-                literal_code.len,
-                u64::from(literal_code.bits),
-            );
-        }
+        q1::append_literal_span_bits_paired(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            &input[token.insert_start..token.insert_start + token.insert_len],
+            &literal_code_map,
+        );
 
         if let Some(distance) = prepared_token.distance {
             let distance_code = distance_code_map[usize::from(distance.symbol)];
@@ -1847,7 +1843,7 @@ fn write_token_batch_recomputed_with_len(
                 &mut pending_bits,
                 &mut pending_width,
                 distance.extra_bits,
-                distance.extra,
+                u64::from(distance.extra),
             );
         }
     }
@@ -1920,7 +1916,7 @@ fn write_static_entropy_token_batch(
             &mut pending_bits,
             &mut pending_width,
             insert.extra_bits,
-            insert.extra,
+            u64::from(insert.extra),
         );
         if let Some(copy) = copy {
             append_pending_bits(
@@ -1928,21 +1924,17 @@ fn write_static_entropy_token_batch(
                 &mut pending_bits,
                 &mut pending_width,
                 copy.extra_bits,
-                copy.extra,
+                u64::from(copy.extra),
             );
         }
 
-        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            let literal_code = literal_code_map[usize::from(literal)];
-            debug_assert!(literal_code.len != u8::MAX);
-            append_pending_bits(
-                writer,
-                &mut pending_bits,
-                &mut pending_width,
-                literal_code.len,
-                u64::from(literal_code.bits),
-            );
-        }
+        q1::append_literal_span_bits_paired(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            &input[token.insert_start..token.insert_start + token.insert_len],
+            &literal_code_map,
+        );
 
         if let Some(distance) = prepared_token.distance {
             let distance_code = static_distance_code(distance.symbol)?;
@@ -1958,7 +1950,7 @@ fn write_static_entropy_token_batch(
                 &mut pending_bits,
                 &mut pending_width,
                 distance.extra_bits,
-                distance.extra,
+                u64::from(distance.extra),
             );
         }
     }
@@ -2071,7 +2063,7 @@ fn write_prepared_token_batch_with_len(
             &mut pending_bits,
             &mut pending_width,
             insert.extra_bits,
-            insert.extra,
+            u64::from(insert.extra),
         );
         if let Some(copy) = copy {
             append_pending_bits(
@@ -2079,21 +2071,17 @@ fn write_prepared_token_batch_with_len(
                 &mut pending_bits,
                 &mut pending_width,
                 copy.extra_bits,
-                copy.extra,
+                u64::from(copy.extra),
             );
         }
 
-        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            let literal_code = literal_code_map[usize::from(literal)];
-            debug_assert!(literal_code.len != u8::MAX);
-            append_pending_bits(
-                writer,
-                &mut pending_bits,
-                &mut pending_width,
-                literal_code.len,
-                u64::from(literal_code.bits),
-            );
-        }
+        q1::append_literal_span_bits_paired(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            &input[token.insert_start..token.insert_start + token.insert_len],
+            &literal_code_map,
+        );
 
         if let Some(distance) = prepared_token.distance {
             let distance_code = distance_code_map[usize::from(distance.symbol)];
@@ -2110,7 +2098,7 @@ fn write_prepared_token_batch_with_len(
                 &mut pending_bits,
                 &mut pending_width,
                 distance.extra_bits,
-                distance.extra,
+                u64::from(distance.extra),
             );
         }
     }
@@ -3451,7 +3439,7 @@ fn append_pending_bits(
 struct InsertLengthCode {
     code: usize,
     extra_bits: u8,
-    extra: u64,
+    extra: u32,
 }
 
 fn insert_length_code(len: usize) -> Result<InsertLengthCode, CompressError> {
@@ -3476,7 +3464,7 @@ fn insert_length_code(len: usize) -> Result<InsertLengthCode, CompressError> {
     Ok(InsertLengthCode {
         code,
         extra_bits,
-        extra: (len - base) as u64,
+        extra: (len - base) as u32,
     })
 }
 
@@ -3504,7 +3492,7 @@ fn insert_length_prefix(code: usize) -> Result<(usize, u8), CompressError> {
 struct CopyLengthCode {
     code: usize,
     extra_bits: u8,
-    extra: u64,
+    extra: u32,
 }
 
 fn copy_length_code(len: usize) -> Result<CopyLengthCode, CompressError> {
@@ -3528,7 +3516,7 @@ fn copy_length_code(len: usize) -> Result<CopyLengthCode, CompressError> {
     Ok(CopyLengthCode {
         code,
         extra_bits,
-        extra: (len - base) as u64,
+        extra: (len - base) as u32,
     })
 }
 
@@ -3598,7 +3586,7 @@ fn command_symbol_for_insert_copy(
 struct DistanceCode {
     symbol: u16,
     extra_bits: u8,
-    extra: u64,
+    extra: u32,
 }
 
 fn distance_code(distance: usize) -> Result<DistanceCode, CompressError> {
@@ -3617,7 +3605,7 @@ fn distance_code(distance: usize) -> Result<DistanceCode, CompressError> {
     Ok(DistanceCode {
         symbol: (16 + 2 * (extra_bits - 1) + parity) as u16,
         extra_bits: extra_bits as u8,
-        extra: (d - base) as u64,
+        extra: (d - base) as u32,
     })
 }
 
@@ -4313,7 +4301,7 @@ mod verification {
         let command_symbol = command_symbol_for_insert(insert.code).unwrap();
 
         assert_eq!(base + insert.extra as usize, len);
-        assert!(insert.extra < (1_u64 << extra_bits));
+        assert!(u64::from(insert.extra) < (1_u64 << extra_bits));
         assert!(usize::from(command_symbol) < 704);
         assert_eq!(decode_insert_code(command_symbol), insert.code);
     }

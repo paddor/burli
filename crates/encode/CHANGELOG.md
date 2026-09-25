@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Emit token literals in pairs in the q2 to q5 writers, and store length and
+  distance extra bits in 32-bit fields. Output is unchanged.
+
 ## [0.3.2] - 2026-09-10
 
 - Make streaming encoder flushes emit pending input without ending the stream.

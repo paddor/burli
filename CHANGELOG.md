@@ -7,6 +7,8 @@
 - Read compressed input through a 64-bit bit buffer refilled one word at a
   time.
 - Speed up `paranoid` decoding with safe chunked match copies.
+- Encode faster: flush `BitWriter` bytes with one fixed 8-byte append, and
+  emit token literals in pairs. Output is unchanged.
 
 ## [0.3.2] - 2026-09-10
 

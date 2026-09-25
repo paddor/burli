@@ -111,9 +111,9 @@ impl Batch {
         self.records.push(Record {
             insert_start: token.insert_start as u32,
             insert_len: token.insert_len as u32,
-            insert_extra: insert.extra as u32,
-            copy_extra: copy.map_or(0, |copy| copy.extra as u32),
-            distance_extra: distance.map_or(0, |distance| distance.extra as u32),
+            insert_extra: insert.extra,
+            copy_extra: copy.map_or(0, |copy| copy.extra),
+            distance_extra: distance.map_or(0, |distance| distance.extra),
             meta: pack_record_meta(
                 u32::from(command_symbol),
                 distance_symbol,

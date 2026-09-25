@@ -415,13 +415,13 @@ impl BitWriter {
         if byte_count == 0 {
             return;
         }
-        let bytes = self.bit_buffer.to_le_bytes();
-        match byte_count {
-            1 => self.output.push(bytes[0]),
-            _ => self
-                .output
-                .extend_from_slice(&bytes[..usize::from(byte_count)]),
-        }
+        // A fixed 8-byte append compiles to one store. A variable-length
+        // append calls memcpy. `bit_count` never exceeds 63, so at most 7
+        // bytes are kept.
+        let len = self.output.len();
+        self.output
+            .extend_from_slice(&self.bit_buffer.to_le_bytes());
+        self.output.truncate(len + usize::from(byte_count));
         self.bit_buffer >>= byte_count * 8;
         self.bit_count -= byte_count * 8;
     }

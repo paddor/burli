@@ -588,7 +588,7 @@ fn append_literal_span_bits<const PACK_LITERALS: bool>(
 }
 
 #[inline(always)]
-fn append_literal_span_bits_paired(
+pub(super) fn append_literal_span_bits_paired(
     writer: &mut BitWriter,
     pending_bits: &mut u64,
     pending_width: &mut u8,
