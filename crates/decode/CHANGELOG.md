@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-25
+
 - Use two-level Huffman lookup tables with a 10-bit root.
 - Copy short backward matches in fixed 8- or 16-byte chunks.
 - Decode single-tree literals three per bit refill.
