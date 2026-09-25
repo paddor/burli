@@ -852,7 +852,7 @@ fn print_q0_store_stats(
         }
         let options = burli::Options::default().with_quality(quality)?;
         for input in inputs {
-            let stats = burli::encode::diagnostics::q0_store_stats(&input.data, &options)?;
+            let stats = burli_encode::diagnostics::q0_store_stats(&input.data, &options)?;
             println!(
                 "q0-store {}: blocks={} sampled={} candidates={} stored={}/{} \
                  stored_bytes={} sampled_positions={} sampled_load_bytes={} \

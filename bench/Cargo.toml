@@ -9,6 +9,7 @@ paranoid = ["burli/paranoid"]
 
 [dependencies]
 burli = { path = ".." }
+burli-encode = { path = "../crates/encode" }
 rust-brotli = { package = "brotli", version = "8.0.4" }
 libc = "0.2"
 plotters = { version = "0.3", default-features = false, features = ["svg_backend"] }
