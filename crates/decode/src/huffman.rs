@@ -4,7 +4,8 @@ use alloc::vec::Vec;
 use burli_core::{BurliError, DecompressError, bits::BitReader};
 
 const MAX_CODE_BITS: u8 = 15;
-const FAST_LOOKUP_BITS: u8 = 15;
+/// Index bits of the first-level table. Longer codes continue in a subtable.
+const ROOT_BITS: u8 = 10;
 const CODE_LENGTH_CODES: usize = 18;
 const CODE_LENGTH_ORDER: [usize; CODE_LENGTH_CODES] =
     [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -12,46 +13,49 @@ const CODE_LENGTH_PREFIX_LEN: [u8; 16] = [2, 2, 2, 3, 2, 2, 2, 4, 2, 2, 2, 3, 2,
 const CODE_LENGTH_PREFIX_VALUE: [u8; 16] = [0, 4, 3, 2, 0, 4, 3, 1, 0, 4, 3, 2, 0, 4, 3, 5];
 const REVERSE_BYTE: [u8; 256] = reverse_byte_table();
 
+/// Two-level canonical Huffman decoder.
+///
+/// `table` starts with `1 << min(max_bits, ROOT_BITS)` root entries. A root
+/// entry with `len > ROOT_BITS` points at a subtable of
+/// `1 << (len - ROOT_BITS)` entries that `table` holds after the root.
 #[derive(Clone, Debug)]
 pub(crate) struct PrefixCode {
-    fast: Vec<Lookup>,
-    fast_bits: u8,
-    fast_mask: u64,
+    table: Vec<Lookup>,
+    root_mask: u64,
     single_symbol: Option<u16>,
     max_bits: u8,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Entry {
-    symbol: u16,
-    len: u8,
-    code: u16,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Lookup(u16);
+struct Lookup(u32);
 
 impl Lookup {
     const EMPTY: Self = Self(0);
-    const SYMBOL_MASK: u16 = 0x0fff;
 
-    const fn new(symbol: u16, len: u8) -> Self {
-        Self(((len as u16) << 12) | symbol)
+    /// Leaf: `value` is the symbol and `len` the full code length. Root
+    /// pointer: `value` is the subtable offset and `len - ROOT_BITS` its
+    /// index bits.
+    const fn new(value: u16, len: u8) -> Self {
+        Self(((len as u32) << 16) | value as u32)
     }
 
     #[inline(always)]
-    const fn parts(self) -> (u16, u8) {
-        let raw = self.0;
-        (raw & Self::SYMBOL_MASK, (raw >> 12) as u8)
+    const fn value(self) -> u16 {
+        self.0 as u16
+    }
+
+    #[inline(always)]
+    const fn len(self) -> u8 {
+        (self.0 >> 16) as u8
     }
 }
 
 impl PrefixCode {
     pub(crate) fn single(symbol: u16) -> Self {
         Self {
-            fast: Vec::new(),
-            fast_bits: 0,
-            fast_mask: 0,
+            // One zero-length entry lets `lookup_bits` skip the single check.
+            table: vec![Lookup::new(symbol, 0)],
+            root_mask: 0,
             single_symbol: Some(symbol),
             max_bits: 0,
         }
@@ -106,37 +110,12 @@ impl PrefixCode {
             return Ok(Self::single(symbol as u16));
         }
 
-        let mut next_code = [0_u16; MAX_CODE_BITS as usize + 1];
-        let mut code = 0_u16;
-        for bits in 1..=MAX_CODE_BITS {
-            code = (code + counts[usize::from(bits - 1)]) << 1;
-            next_code[usize::from(bits)] = code;
-        }
-
-        let fast_bits = max_bits.min(FAST_LOOKUP_BITS);
-        let fast_mask = (1_u64 << fast_bits) - 1;
-        let mut fast = vec![Lookup::EMPTY; 1 << fast_bits];
-        for (symbol, &len) in lengths.iter().enumerate() {
-            if len == 0 {
-                continue;
-            }
-            let code = next_code[usize::from(len)];
-            next_code[usize::from(len)] += 1;
-            let entry = Entry {
-                symbol: symbol as u16,
-                len,
-                code,
-            };
-            fill_fast_lookup(&mut fast, fast_bits, entry);
-        }
-
-        Ok(Self {
-            fast,
-            fast_bits,
-            fast_mask,
-            single_symbol: None,
-            max_bits,
-        })
+        let symbols = lengths
+            .iter()
+            .enumerate()
+            .filter(|&(_, &len)| len != 0)
+            .map(|(symbol, &len)| (symbol as u16, len));
+        Ok(Self::from_complete_code(symbols, &counts, max_bits))
     }
 
     fn from_simple_lengths(symbol_lengths: &mut [(usize, u8)]) -> Result<Self, DecompressError> {
@@ -164,34 +143,97 @@ impl PrefixCode {
 
         validate_complete_counts(&counts)?;
 
-        let mut next_code = [0_u16; MAX_CODE_BITS as usize + 1];
+        let symbols = symbol_lengths
+            .iter()
+            .map(|&(symbol, len)| (symbol as u16, len));
+        Ok(Self::from_complete_code(symbols, &counts, max_bits))
+    }
+
+    /// Builds the lookup table for a validated complete code. `symbols`
+    /// yields `(symbol, len)` with `len != 0` in increasing symbol order.
+    fn from_complete_code(
+        symbols: impl Iterator<Item = (u16, u8)> + Clone,
+        counts: &[u16; MAX_CODE_BITS as usize + 1],
+        max_bits: u8,
+    ) -> Self {
+        debug_assert!((1..=MAX_CODE_BITS).contains(&max_bits));
+        let mut first_code = [0_u16; MAX_CODE_BITS as usize + 1];
         let mut code = 0_u16;
         for bits in 1..=MAX_CODE_BITS {
             code = (code + counts[usize::from(bits - 1)]) << 1;
-            next_code[usize::from(bits)] = code;
+            first_code[usize::from(bits)] = code;
         }
 
-        let fast_bits = max_bits.min(FAST_LOOKUP_BITS);
-        let fast_mask = (1_u64 << fast_bits) - 1;
-        let mut fast = vec![Lookup::EMPTY; 1 << fast_bits];
-        for &(symbol, len) in symbol_lengths.iter() {
+        let root_bits = max_bits.min(ROOT_BITS);
+        let root_size = 1_usize << root_bits;
+        let root_mask = (1_u64 << root_bits) - 1;
+
+        // A complete code covers every root slot. Each root prefix of a long
+        // code heads a complete subcode, so its subtable is covered as well.
+        let mut sub_bits = [0_u8; 1 << ROOT_BITS];
+        let mut table_size = root_size;
+        if max_bits > ROOT_BITS {
+            let mut next_code = first_code;
+            for (_, len) in symbols.clone() {
+                let code = next_code[usize::from(len)];
+                next_code[usize::from(len)] += 1;
+                if len > ROOT_BITS {
+                    let prefix = usize::from(reverse_low_bits(code, len)) & (root_size - 1);
+                    sub_bits[prefix] = sub_bits[prefix].max(len - ROOT_BITS);
+                }
+            }
+        }
+
+        let mut table = Vec::new();
+        if max_bits > ROOT_BITS {
+            for &bits in &sub_bits {
+                if bits != 0 {
+                    table_size += 1 << bits;
+                }
+            }
+        }
+        table.resize(table_size, Lookup::EMPTY);
+
+        if max_bits > ROOT_BITS {
+            let mut offset = root_size;
+            for (prefix, &bits) in sub_bits.iter().enumerate() {
+                if bits != 0 {
+                    table[prefix] = Lookup::new(offset as u16, ROOT_BITS + bits);
+                    offset += 1 << bits;
+                }
+            }
+        }
+
+        let mut next_code = first_code;
+        for (symbol, len) in symbols {
             let code = next_code[usize::from(len)];
             next_code[usize::from(len)] += 1;
-            let entry = Entry {
-                symbol: symbol as u16,
-                len,
-                code,
-            };
-            fill_fast_lookup(&mut fast, fast_bits, entry);
+            let reversed = usize::from(reverse_low_bits(code, len));
+            let entry = Lookup::new(symbol, len);
+            if len <= root_bits {
+                let mut index = reversed;
+                while index < root_size {
+                    table[index] = entry;
+                    index += 1 << len;
+                }
+            } else {
+                let pointer = table[reversed & (root_size - 1)];
+                let start = usize::from(pointer.value());
+                let size = 1_usize << (pointer.len() - ROOT_BITS);
+                let mut index = reversed >> ROOT_BITS;
+                while index < size {
+                    table[start + index] = entry;
+                    index += 1 << (len - ROOT_BITS);
+                }
+            }
         }
 
-        Ok(Self {
-            fast,
-            fast_bits,
-            fast_mask,
+        Self {
+            table,
+            root_mask,
             single_symbol: None,
             max_bits,
-        })
+        }
     }
 
     pub(crate) fn read(
@@ -225,13 +267,8 @@ impl PrefixCode {
     ) -> Result<u16, DecompressError> {
         debug_assert!(self.single_symbol.is_none());
 
-        if reader.has_bits(self.fast_bits) {
-            let index = reader.peek_bits_trusted_with_mask(self.fast_bits, self.fast_mask) as usize;
-            let lookup = self.fast_lookup(index);
-            let (symbol, len) = lookup.parts();
-            debug_assert!(len != 0);
-            reader.drop_bits_trusted(len);
-            return Ok(symbol);
+        if reader.has_bits(self.max_bits) {
+            return Ok(self.decode_non_single_trusted_fast(reader));
         }
 
         self.decode_non_single_with_padded_lookup(reader)
@@ -240,35 +277,53 @@ impl PrefixCode {
     #[inline(always)]
     pub(crate) fn decode_non_single_trusted_fast(&self, reader: &mut BitReader<'_>) -> u16 {
         debug_assert!(self.single_symbol.is_none());
-        debug_assert!(reader.has_bits(self.fast_bits));
+        debug_assert!(reader.has_bits(self.max_bits));
 
-        let index = reader.peek_bits_trusted_with_mask(self.fast_bits, self.fast_mask) as usize;
-        let lookup = self.fast_lookup(index);
-        let (symbol, len) = lookup.parts();
-        debug_assert!(len != 0);
-        reader.drop_bits_trusted(len);
-        symbol
+        let bits = reader.peek_bits_trusted_with_mask(self.max_bits, u64::MAX);
+        let lookup = self.lookup(bits);
+        debug_assert!(lookup.len() != 0);
+        reader.drop_bits_trusted(lookup.len());
+        lookup.value()
+    }
+
+    /// Decodes one symbol from the low bits of `bits` and returns it with its
+    /// code length. A single-symbol code consumes no bits. The caller checks
+    /// that the input holds `max_bits` bits.
+    #[inline(always)]
+    pub(crate) fn lookup_bits(&self, bits: u64) -> (u16, u8) {
+        let lookup = self.lookup(bits);
+        (lookup.value(), lookup.len())
+    }
+
+    /// Resolves the entry for the low bits of `bits`. Bits past the input end
+    /// must be zero.
+    #[inline(always)]
+    fn lookup(&self, bits: u64) -> Lookup {
+        let root = self.entry((bits & self.root_mask) as usize);
+        if root.len() <= ROOT_BITS {
+            return root;
+        }
+        let sub_mask = (1_usize << (root.len() - ROOT_BITS)) - 1;
+        self.entry(usize::from(root.value()) + ((bits >> ROOT_BITS) as usize & sub_mask))
     }
 
     #[inline(always)]
-    fn fast_lookup(&self, index: usize) -> Lookup {
-        debug_assert!(fast_lookup_index_contract(
-            self.fast.len(),
-            self.fast_bits,
-            index,
-        ));
+    fn entry(&self, index: usize) -> Lookup {
+        debug_assert!(index < self.table.len());
 
         #[cfg(not(feature = "paranoid"))]
         {
-            // SAFETY: every non-single PrefixCode builds `fast` with exactly
-            // `1 << fast_bits` slots. Callers derive `index` from a mask no
-            // wider than `fast_bits`, or from fewer padded bits at stream end.
-            unsafe { *self.fast.get_unchecked(index) }
+            // SAFETY: `single` builds a one-entry table with a zero root
+            // mask. `from_complete_code` builds all other tables. Root indexes are masked below `root_mask + 1`, which is
+            // the root size. A root pointer's offset plus its masked subtable
+            // index stays below the offset plus subtable size, and the builder
+            // sized `table` to hold every subtable.
+            unsafe { *self.table.get_unchecked(index) }
         }
 
         #[cfg(feature = "paranoid")]
         {
-            self.fast[index]
+            self.table[index]
         }
     }
 
@@ -283,10 +338,10 @@ impl PrefixCode {
             return Err(BurliError::Format("unexpected end of Brotli input"));
         }
 
-        let available = remaining.min(usize::from(self.fast_bits));
-        let index = reader.peek_bits(available as u8)? as usize;
-        let lookup = self.fast_lookup(index);
-        let (symbol, len) = lookup.parts();
+        let available = remaining.min(usize::from(self.max_bits));
+        let bits = reader.peek_bits(available as u8)?;
+        let lookup = self.lookup(bits);
+        let len = lookup.len();
         if len == 0 {
             return Err(BurliError::Format("invalid Brotli Huffman code"));
         }
@@ -295,13 +350,8 @@ impl PrefixCode {
         }
 
         reader.drop_bits(len)?;
-        Ok(symbol)
+        Ok(lookup.value())
     }
-}
-
-#[inline(always)]
-fn fast_lookup_index_contract(fast_len: usize, fast_bits: u8, index: usize) -> bool {
-    fast_bits <= FAST_LOOKUP_BITS && fast_len == (1_usize << fast_bits) && index < fast_len
 }
 
 fn validate_complete_counts(
@@ -318,20 +368,6 @@ fn validate_complete_counts(
         return Err(BurliError::Format("incomplete Brotli Huffman code"));
     }
     Ok(())
-}
-
-fn fill_fast_lookup(fast: &mut [Lookup], fast_bits: u8, entry: Entry) {
-    if entry.len > fast_bits || entry.symbol > Lookup::SYMBOL_MASK {
-        return;
-    }
-
-    let prefix = reverse_low_bits(entry.code, entry.len);
-    let step = 1_usize << entry.len;
-    let mut index = usize::from(prefix);
-    while index < fast.len() {
-        fast[index] = Lookup::new(entry.symbol, entry.len);
-        index += step;
-    }
 }
 
 fn reverse_low_bits(value: u16, width: u8) -> u16 {
@@ -760,15 +796,19 @@ mod verification {
     use super::*;
 
     #[kani::proof]
-    fn masked_fast_lookup_index_stays_in_bounds() {
-        let fast_bits = kani::any::<u8>();
-        let bits = kani::any::<u16>();
-        kani::assume(fast_bits <= FAST_LOOKUP_BITS);
+    fn masked_lookup_indexes_stay_in_their_table() {
+        let root_bits = kani::any::<u8>();
+        let pointer_len = kani::any::<u8>();
+        let offset = kani::any::<u16>();
+        let bits = kani::any::<u64>();
+        kani::assume(root_bits <= ROOT_BITS);
+        kani::assume(pointer_len > ROOT_BITS && pointer_len <= MAX_CODE_BITS);
 
-        let fast_len = 1_usize << fast_bits;
-        let mask = fast_len - 1;
-        let index = usize::from(bits) & mask;
+        let root_mask = (1_u64 << root_bits) - 1;
+        assert!(((bits & root_mask) as usize) < (1_usize << root_bits));
 
-        assert!(fast_lookup_index_contract(fast_len, fast_bits, index));
+        let sub_size = 1_usize << (pointer_len - ROOT_BITS);
+        let index = usize::from(offset) + ((bits >> ROOT_BITS) as usize & (sub_size - 1));
+        assert!(index < usize::from(offset) + sub_size);
     }
 }

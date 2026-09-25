@@ -139,6 +139,35 @@ impl<'a> BitReader<'a> {
         self.peek_bits_unchecked_with_mask(usize::from(width), mask)
     }
 
+    /// Returns upcoming bits with zeros past the input end. At least 57 bits
+    /// are valid when the input has them.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn peek_bits_padded(&self) -> u64 {
+        let byte_pos = self.bit_pos / 8;
+        let bit_offset = self.bit_pos % 8;
+        let value = match self
+            .input
+            .get(byte_pos..)
+            .and_then(<[u8]>::first_chunk::<8>)
+        {
+            Some(bytes) => u64::from_le_bytes(*bytes),
+            None => self.peek_bits_padded_tail(byte_pos),
+        };
+        value >> bit_offset
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn peek_bits_padded_tail(&self, byte_pos: usize) -> u64 {
+        let bytes = self.input.get(byte_pos..).unwrap_or_default();
+        let mut value = 0_u64;
+        for (index, &byte) in bytes.iter().take(8).enumerate() {
+            value |= u64::from(byte) << (index * 8);
+        }
+        value
+    }
+
     #[doc(hidden)]
     #[inline(always)]
     pub fn drop_bits_trusted(&mut self, width: u8) {

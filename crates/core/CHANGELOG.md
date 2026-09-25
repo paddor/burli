@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add hidden `BitReader::peek_bits_padded` for batched decoding.
+
 ## [0.3.0] - 2026-08-18
 
 - Remove the unused SIMD configuration API.

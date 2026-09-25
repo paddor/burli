@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Use two-level Huffman lookup tables with a 10-bit root.
+- Copy short backward matches in fixed 8- or 16-byte chunks.
+- Decode single-tree literals three per bit refill.
+
 ## [0.3.2] - 2026-09-10
 
 - Reject invalid window bits in the concat payload decoder.

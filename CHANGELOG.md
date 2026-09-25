@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Decode faster: two-level Huffman tables, chunked short match copies, and
+  batched single-tree literals.
+
 ## [0.3.2] - 2026-09-10
 
 - Fix JSR package initialization after `deno bundle` by importing WASM and
