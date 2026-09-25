@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-25
+
+- Update `burli-core` to `0.3.1` and `burli-encode` and `burli-decode`
+  to `0.3.3` for faster encoding and decoding and the encoder
+  distance-ring fix.
+
 ## [0.2.3] - 2026-09-10
 
 - Update `burli-encode` and `burli-decode` to `0.3.2` for streaming and

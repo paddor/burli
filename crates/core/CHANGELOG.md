@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-25
+
 - Add hidden `BitReader::peek_bits_padded` for batched decoding.
 - Buffer `BitReader` input in a 64-bit word. Add hidden `fill`, `refill`,
   `buffer`, and `buffered_bits` for decoder hot loops.

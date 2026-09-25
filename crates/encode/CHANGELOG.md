@@ -2,8 +2,12 @@
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-25
+
 - Emit token literals in pairs in the q2 to q5 writers, and store length and
   distance extra bits in 32-bit fields. Output is unchanged.
+- Keep q5 hash tables in the encoder workspace, so they keep their
+  allocation across meta-blocks and reused `Compressor` calls.
 - Track the decoder's distance ring across meta-blocks. Collectors that
   emit last-distance codes started from stale state after a meta-block
   written by another collector, which corrupted the decoded output.

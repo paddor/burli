@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-25
+
 - Decode faster: two-level Huffman tables, chunked short match copies, and
   batched single-tree literals.
 - Read compressed input through a 64-bit bit buffer refilled one word at a
@@ -9,6 +11,8 @@
 - Speed up `paranoid` decoding with safe chunked match copies.
 - Encode faster: flush `BitWriter` bytes with one fixed 8-byte append, and
   emit token literals in pairs. Output is unchanged.
+- Keep q5 hash tables in the encoder workspace, so they keep their
+  allocation across meta-blocks and reused `Compressor` calls.
 - Fix corrupt output when the encoder switches match finders between
   meta-blocks. Streaming at q1 to q5 and one-shot inputs split into several
   meta-blocks could emit distance codes that pointed at the wrong distance.
@@ -28,6 +32,8 @@
 - Encode q0 and q1 blocks faster through a new bit writer, and let q0
   probe fewer positions on inputs from 128 KiB up. q0 is 5% to 15% faster
   than before at a similar ratio on text and web files.
+
+- Bump the JSR/WASM package to `0.3.3`.
 
 ## [0.3.2] - 2026-09-10
 
