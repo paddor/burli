@@ -35,6 +35,24 @@ pub(super) const Q0_LOW_DUP6_MAX: usize = 199;
 pub(super) const LOW_COMPRESS_SAMPLE_MIN_INPUT: usize = 64 * 1024;
 pub(super) const LOW_COMPRESS_SAMPLE_BYTES: usize = 64 * 1024;
 pub(super) const LOW_COMPRESS_SAMPLE_STEP: usize = 64;
+pub(super) const LOW_COMPRESS_SAMPLE_COUNT: usize =
+    LOW_COMPRESS_SAMPLE_BYTES / LOW_COMPRESS_SAMPLE_STEP;
+pub(super) const LOW_COMPRESS_SMALL_SAMPLES: usize = 256;
+pub(super) const LOW_COMPRESS_SMALL_MIN_STEP: usize = 4;
+pub(super) const LOW_COMPRESS_SMALL_TABLE_SIZE: usize = 1 << 10;
+pub(super) const LOW_COMPRESS_TEXT_PREFIX_SAMPLES: usize = 32;
+pub(super) const LOW_COMPRESS_TEXT_PREFIX_MIN: usize = 31;
+/// Per quality, low-compressibility blocks get a literal-only Huffman code
+/// from this size up and are stored below it. q0 always stores them. Higher
+/// qualities code shorter blocks. Measured on Silesia `x-ray`, the literal
+/// code writes about 590 MB/s at 32 KiB, 475 MB/s at 16 KiB, 225 MB/s at
+/// 4 KiB, 80 MB/s at 1 KiB, and 47 MB/s at 512 B.
+pub(super) const LOW_COMPRESS_LITERAL_MIN_INPUT: [usize; 6] =
+    [usize::MAX, 32 * 1024, 16 * 1024, 4 * 1024, 1024, 512];
+/// Longer low-compressibility blocks split into literal-only meta-blocks of
+/// about this size, each with its own code. On Silesia `x-ray` this gives
+/// ratio 1.249 instead of 1.208 for one 8 MiB block, 2% slower.
+pub(super) const LOW_COMPRESS_LITERAL_BLOCK_SIZE: usize = 256 * 1024;
 pub(super) const LOW_COMPRESS_DUP6_STORE_MAX: usize = 45;
 pub(super) const LOW_COMPRESS_ZERO_RATIO_NUM: usize = 1;
 pub(super) const LOW_COMPRESS_ZERO_RATIO_DEN: usize = 50;
@@ -61,7 +79,7 @@ pub(super) const Q1_DEFAULT_U32_SKIP_START: usize = 32;
 pub(super) const Q1_MEDIUM_U32_SKIP_START: usize = 64;
 pub(super) const Q1_DENSE_U32_SKIP_START: usize = 80;
 pub(super) const Q1_FAST_U32_SKIP_START: usize = 96;
-pub(super) const Q1_FASTER_U32_SKIP_START: usize = 128;
+pub(super) const Q1_FASTER_U32_SKIP_START: usize = 160;
 
 pub(super) const Q1_LARGE_MARKUP_SAMPLE_BYTES: usize = 1024;
 pub(super) const Q1_LARGE_MARKUP_MIN_LT: usize = 8;

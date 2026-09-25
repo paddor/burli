@@ -149,6 +149,21 @@ fn stateful_compressor_reuses_q0_workspace_without_stale_matches() {
 }
 
 #[test]
+fn stateful_compressor_reuses_q5_workspace_without_stale_matches() {
+    let first = b"function demo(){return demo_value;} ".repeat(4_096);
+    let second = b"abcdefghijklmnopqrstuvwxyz0123456789".repeat(2_049);
+    let mut compressor = burli::Compressor::new(5).unwrap();
+
+    let first_encoded = compressor.compress(&first).unwrap();
+    let second_encoded = compressor.compress(&second).unwrap();
+
+    assert_eq!(first_encoded, burli::compress(&first, 5).unwrap());
+    assert_eq!(second_encoded, burli::compress(&second, 5).unwrap());
+    assert_eq!(burli::decompress(&first_encoded).unwrap(), first);
+    assert_eq!(burli::decompress(&second_encoded).unwrap(), second);
+}
+
+#[test]
 fn stateful_q0_workspace_handles_many_reuses() {
     let inputs = [
         b"function demo(){return demo_value;} ".repeat(128),

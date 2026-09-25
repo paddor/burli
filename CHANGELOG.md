@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+- Decode faster: two-level Huffman tables, chunked short match copies, and
+  batched single-tree literals.
+- Read compressed input through a 64-bit bit buffer refilled one word at a
+  time.
+- Speed up `paranoid` decoding with safe chunked match copies.
+- Encode faster: flush `BitWriter` bytes with one fixed 8-byte append, and
+  emit token literals in pairs. Output is unchanged.
+- Fix corrupt output when the encoder switches match finders between
+  meta-blocks. Streaming at q1 to q5 and one-shot inputs split into several
+  meta-blocks could emit distance codes that pointed at the wrong distance.
+- Benchmark small inputs as 64 distinct Silesia slices per size, from 512 B
+  to 1 MiB. `small_decode.svg` also shows each decoder on its own output.
+- Encode low-compressibility binary input much faster. q0 stores it at
+  every size, not only from 64 KiB up. q1 to q5 store it below 32 KiB,
+  16 KiB, 4 KiB, 1 KiB, and 512 B, and write literal-only meta-blocks
+  from there. On Silesia `x-ray` this runs at 470 to 700 MB/s from 16 KiB
+  up instead of 26 to 870 MB/s. Stored inputs grow by up to about 20%.
+  Silesia `sao` grows by up to 13% at q4 and q5, where matching found
+  some repeats.
+- Build Huffman codes faster, which speeds up small inputs at every quality
+  by up to 30%. Output is unchanged.
+- Compress better when a Huffman code would be too deep, mostly at q0 and
+  q1 on large text: Silesia `dickens` q0 shrinks by 13% and q1 by 9%.
+- Encode q0 and q1 blocks faster through a new bit writer, and let q0
+  probe fewer positions on inputs from 128 KiB up. q0 is 5% to 15% faster
+  than before at a similar ratio on text and web files.
+
 ## [0.3.2] - 2026-09-10
 
 - Fix JSR package initialization after `deno bundle` by importing WASM and

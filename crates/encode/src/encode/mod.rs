@@ -33,6 +33,8 @@ const STATIC_CODE_LENGTH_DEPTH: [u8; CODE_LENGTH_ALPHABET_SIZE] =
 const STATIC_CODE_LENGTH_BITS: [u16; CODE_LENGTH_ALPHABET_SIZE] =
     [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 15, 31, 0, 11, 7];
 
+const INITIAL_DISTANCE_RING: [usize; 4] = [INITIAL_LAST_DISTANCE, 11, 15, 16];
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Workspace {
     q0: q0::Workspace,
@@ -42,14 +44,87 @@ pub(crate) struct Workspace {
     q4: q4::Workspace,
     q5: q5::Workspace,
     token_prefix: PrefixCodeScratch,
+    distance_ring: DistanceRing,
+}
+
+/// The decoder's last four distances at the next meta-block boundary.
+///
+/// Brotli keeps this ring across meta-blocks. Collectors that emit
+/// ring-relative distance codes start from it, and every meta-block that
+/// writes copies advances it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DistanceRing([usize; 4]);
+
+impl Default for DistanceRing {
+    fn default() -> Self {
+        Self(INITIAL_DISTANCE_RING)
+    }
+}
+
+impl DistanceRing {
+    const fn last(self) -> usize {
+        self.0[0]
+    }
+
+    fn push(&mut self, distance: usize) {
+        self.0 = [distance, self.0[0], self.0[1], self.0[2]];
+    }
+
+    /// Push up to four distances, newest first.
+    fn push_newest_first(&mut self, newest: &[usize]) {
+        let count = newest.len().min(self.0.len());
+        let old = self.0;
+        self.0[..count].copy_from_slice(&newest[..count]);
+        self.0[count..].copy_from_slice(&old[..old.len() - count]);
+    }
+
+    /// Advance past `tokens` the way a decoder does. Copies that reuse the
+    /// last distance and static dictionary references leave the ring as is.
+    fn advance_tokens(
+        &mut self,
+        tokens: &[Token],
+        input_base: usize,
+        max_backward_distance: usize,
+    ) {
+        let mut newest = [0; 4];
+        let mut count = 0;
+        for token in tokens.iter().rev() {
+            if !token.is_copy() || token.use_last_distance || token.distance_code == Some(0) {
+                continue;
+            }
+            let pos = token.insert_start + token.insert_len;
+            if token.distance > input_base.saturating_add(pos).min(max_backward_distance) {
+                continue;
+            }
+            newest[count] = token.distance;
+            count += 1;
+            if count == newest.len() {
+                break;
+            }
+        }
+        self.push_newest_first(&newest[..count]);
+    }
+}
+
+/// Copy commands a meta-block writer emitted, for advancing the distance ring.
+enum Copies {
+    /// No copy commands.
+    None,
+    /// Copies from a token collector.
+    Tokens(Vec<Token>),
+    /// Copies from the q1 command batch in the workspace.
+    Q1Batch,
+    /// The writer advanced the ring itself.
+    Tracked,
 }
 
 #[derive(Clone, Debug, Default)]
 struct PrefixCodeScratch {
     used: Vec<(u16, usize)>,
-    nodes: Vec<HuffmanNode>,
-    leaves: Vec<(usize, usize)>,
-    parent_queue: Vec<usize>,
+    keys: Vec<u64>,
+    sorted_keys: Vec<u64>,
+    parent_keys: Vec<u64>,
+    parents: Vec<u16>,
     lengths: Vec<u8>,
     tree: Vec<u16>,
 }
@@ -58,18 +133,18 @@ impl PrefixCodeScratch {
     fn reserve_for(&mut self, frequency_symbols: usize, tree_symbols: usize) {
         self.used
             .reserve(frequency_symbols.saturating_sub(self.used.capacity()));
-        self.nodes.reserve(
+        // One extra slot for the merge sentinel.
+        self.keys
+            .reserve((frequency_symbols + 1).saturating_sub(self.keys.capacity()));
+        self.sorted_keys
+            .reserve((frequency_symbols + 1).saturating_sub(self.sorted_keys.capacity()));
+        self.parent_keys
+            .reserve(frequency_symbols.saturating_sub(self.parent_keys.capacity()));
+        self.parents.reserve(
             frequency_symbols
                 .saturating_mul(2)
                 .saturating_sub(1)
-                .saturating_sub(self.nodes.capacity()),
-        );
-        self.leaves
-            .reserve(frequency_symbols.saturating_sub(self.leaves.capacity()));
-        self.parent_queue.reserve(
-            frequency_symbols
-                .saturating_sub(1)
-                .saturating_sub(self.parent_queue.capacity()),
+                .saturating_sub(self.parents.capacity()),
         );
         self.lengths
             .reserve(frequency_symbols.saturating_sub(self.lengths.capacity()));
@@ -79,16 +154,27 @@ impl PrefixCodeScratch {
 }
 
 pub fn compress_with_options(input: &[u8], options: &Options) -> Result<Vec<u8>, CompressError> {
+    // Stored inputs skip building the workspace, which zeroes several KiB.
+    if stores_whole_input(input, options) {
+        return crate::metablock::compress_uncompressed_with_options(input, options);
+    }
     let mut workspace = Workspace::default();
     compress_with_options_workspace(input, options, &mut workspace)
 }
 
 impl Workspace {
     fn reset_stream(&mut self) {
-        self.q2.reset();
-        self.q3.reset();
-        self.q4.reset();
-        self.q5.reset();
+        self.distance_ring = DistanceRing::default();
+        self.load_distance_ring();
+    }
+
+    /// Start every ring-relative collector from the decoder's ring.
+    fn load_distance_ring(&mut self) {
+        let ring = self.distance_ring.0;
+        self.q2.set_dist_cache(ring);
+        self.q3.set_dist_cache(ring);
+        self.q4.set_dist_cache(ring);
+        self.q5.set_dist_cache(ring);
     }
 }
 
@@ -116,7 +202,7 @@ pub(crate) fn compress_into_with_options_workspace(
         ));
     }
     workspace.reset_stream();
-    if options.quality() == 0 && !input.is_empty() && input.len() <= 256 {
+    if stores_whole_input(input, options) {
         let before = output.len();
         let uncompressed = crate::metablock::compress_uncompressed_with_options(input, options)?;
         output.extend_from_slice(&uncompressed);
@@ -150,6 +236,22 @@ pub(crate) fn compress_into_with_options_workspace(
     } else {
         Ok(writer.finish_into(output))
     }
+}
+
+/// Whether all of `input` is written uncompressed: tiny inputs at q0, and
+/// short low-compressibility inputs. q0 stores those up to the block
+/// sampler's size, and q1 to q5 below their literal-code size.
+fn stores_whole_input(input: &[u8], options: &Options) -> bool {
+    let max_stored = match options.quality() {
+        0 if input.len() <= 256 => return !input.is_empty(),
+        0 => tune::LOW_COMPRESS_SAMPLE_MIN_INPUT,
+        // Unsupported qualities fail in the regular path.
+        quality => match tune::LOW_COMPRESS_LITERAL_MIN_INPUT.get(usize::from(quality)) {
+            Some(&max_stored) => max_stored,
+            None => return false,
+        },
+    };
+    !input.is_empty() && input.len() < max_stored && sparse::small_store(input)
 }
 
 pub(crate) fn q0_store_stats(
@@ -449,6 +551,7 @@ fn sanitize_concat_tokens(tokens: &mut [Token]) -> Result<(), CompressError> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct EncoderPlan {
     path: EncoderPath,
+    quality: u8,
     block_size: usize,
     max_backward_distance: usize,
     q1_fast_literal_prefix: bool,
@@ -480,6 +583,7 @@ impl EncoderPlan {
 
         Ok(Self {
             path: EncoderPath::for_quality(quality),
+            quality,
             block_size,
             max_backward_distance,
             q1_fast_literal_prefix: quality != 1 || input_len <= max_backward_distance,
@@ -494,10 +598,43 @@ impl EncoderPlan {
         allow_cross_collector_shortcuts: bool,
         workspace: &mut Workspace,
     ) -> Result<(), CompressError> {
+        workspace.load_distance_ring();
+        let copies = self.write_meta_block_copies(
+            writer,
+            input,
+            input_base,
+            allow_cross_collector_shortcuts,
+            workspace,
+        )?;
+        match copies {
+            Copies::None | Copies::Tracked => {}
+            Copies::Tokens(tokens) => {
+                workspace.distance_ring.advance_tokens(
+                    &tokens,
+                    input_base,
+                    self.max_backward_distance,
+                );
+            }
+            Copies::Q1Batch => workspace
+                .q1
+                .advance_distance_ring(&mut workspace.distance_ring),
+        }
+        Ok(())
+    }
+
+    fn write_meta_block_copies(
+        self,
+        writer: &mut BitWriter,
+        input: &[u8],
+        input_base: usize,
+        allow_cross_collector_shortcuts: bool,
+        workspace: &mut Workspace,
+    ) -> Result<Copies, CompressError> {
         let local_max_backward_distance = self.max_backward_distance.min(input.len());
         let global_max_backward_distance = self.max_backward_distance;
         if input.len() < self.path.min_match_len() {
-            return write_compressed_literal_meta_block(writer, input);
+            write_compressed_literal_meta_block(writer, input)?;
+            return Ok(Copies::None);
         }
 
         if self.path == EncoderPath::FastOnePass {
@@ -511,23 +648,27 @@ impl EncoderPlan {
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     if input.len() <= 512 {
-                        return write_fast_compressed_literal_meta_block(writer, input);
+                        write_fast_compressed_literal_meta_block(writer, input)?;
+                        return Ok(Copies::None);
                     }
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return write_token_batches_with_symbol_limit(
+                write_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     tune::MAX_DELAYED_SYMBOLS,
-                );
+                )?;
+                return Ok(Copies::Tokens(tokens));
             }
 
             if input.len() > tune::Q0_DIRECT_MAX_INPUT {
                 let sparse_decision = sparse::decision(input);
                 if sparse_decision.store_uncompressed {
                     if sparse::q0_store_block(input_base, allow_cross_collector_shortcuts) {
-                        return crate::metablock::write_uncompressed_meta_block(writer, input);
+                        crate::metablock::write_uncompressed_meta_block(writer, input)?;
+                        return Ok(Copies::None);
                     }
                     let has_copy = {
                         let batch = q1::collect_with_64k_sparse_stride(
@@ -538,15 +679,17 @@ impl EncoderPlan {
                         batch.has_copy()
                     };
                     if !has_copy {
-                        return write_compressed_literal_meta_block(writer, input);
+                        write_compressed_literal_meta_block(writer, input)?;
+                        return Ok(Copies::None);
                     }
-                    return q0_write_collected(
+                    q0_write_collected(
                         writer,
                         input,
                         &mut workspace.q1,
                         self.q1_fast_literal_prefix,
                         q0_write_route(input.len(), sparse_decision.sample),
-                    );
+                    )?;
+                    return Ok(Copies::Q1Batch);
                 }
 
                 let has_copy = {
@@ -559,28 +702,53 @@ impl EncoderPlan {
                     batch.has_copy()
                 };
                 if !has_copy {
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return q0_write_collected(
+                q0_write_collected(
                     writer,
                     input,
                     &mut workspace.q1,
                     self.q1_fast_literal_prefix,
                     q0_write_route(input.len(), sparse_decision.sample),
-                );
+                )?;
+                return Ok(Copies::Q1Batch);
             }
 
             let has_copy = {
-                let batch = q0::collect(input, local_max_backward_distance, &mut workspace.q0)?;
+                let batch = q0::collect(
+                    input,
+                    local_max_backward_distance,
+                    &mut workspace.distance_ring,
+                    &mut workspace.q0,
+                )?;
                 batch.has_copy()
             };
             if !has_copy {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return q0::write(writer, input, input.len(), &mut workspace.q0);
+            q0::write(writer, input, input.len(), &mut workspace.q0)?;
+            return Ok(Copies::Tracked);
         }
 
-        if self.write_sparse_binary_meta_block(
+        // Matching finds little in low-compressibility input, and its
+        // literals alone compress about as well. Short blocks gain little
+        // from a Huffman code, so lower qualities store them.
+        if sparse::is_low_compressibility_block(input) {
+            if input.len() < tune::LOW_COMPRESS_LITERAL_MIN_INPUT[usize::from(self.quality)] {
+                crate::metablock::write_uncompressed_meta_block(writer, input)?;
+            } else {
+                // Equal parts, so no short last part pays for its own code.
+                let blocks = input.len().div_ceil(tune::LOW_COMPRESS_LITERAL_BLOCK_SIZE);
+                for chunk in input.chunks(input.len().div_ceil(blocks)) {
+                    write_fast_compressed_literal_meta_block(writer, chunk)?;
+                }
+            }
+            return Ok(Copies::None);
+        }
+
+        if let Some(copies) = self.write_sparse_binary_meta_block(
             writer,
             input,
             input_base,
@@ -588,7 +756,7 @@ impl EncoderPlan {
             global_max_backward_distance,
             workspace,
         )? {
-            return Ok(());
+            return Ok(copies);
         }
 
         if self.path == EncoderPath::FastTwoPass {
@@ -599,15 +767,17 @@ impl EncoderPlan {
                     &mut workspace.q2,
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return write_recomputed_token_batches_with_symbol_limit(
+                write_recomputed_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     tune::Q1_DELAYED_SYMBOLS,
                     &mut workspace.token_prefix,
-                );
+                )?;
+                return Ok(Copies::Tokens(tokens));
             }
 
             if !allow_cross_collector_shortcuts {
@@ -618,15 +788,17 @@ impl EncoderPlan {
                         batch.has_copy()
                     };
                     if !has_copy {
-                        return write_compressed_literal_meta_block(writer, input);
+                        write_compressed_literal_meta_block(writer, input)?;
+                        return Ok(Copies::None);
                     }
-                    return q1::write(
+                    q1::write(
                         writer,
                         input,
                         input.len(),
                         &mut workspace.q1,
                         self.q1_fast_literal_prefix,
-                    );
+                    )?;
+                    return Ok(Copies::Q1Batch);
                 }
                 let tokens = if q1_large_markup_lazy_is_likely_safe(input) {
                     q2::collect_without_dictionary_one_lazy(
@@ -637,15 +809,17 @@ impl EncoderPlan {
                 } else if q1_no_cross_fast_writer_is_likely_safe(input) {
                     let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
                     if !batch.has_copy() {
-                        return write_compressed_literal_meta_block(writer, input);
+                        write_compressed_literal_meta_block(writer, input)?;
+                        return Ok(Copies::None);
                     }
-                    return q1::write(
+                    q1::write(
                         writer,
                         input,
                         input.len(),
                         &mut workspace.q1,
                         self.q1_fast_literal_prefix,
-                    );
+                    )?;
+                    return Ok(Copies::Q1Batch);
                 } else if q1_no_cross_one_lazy_is_likely_safe(input) {
                     q2::collect_without_dictionary_one_lazy(
                         input,
@@ -666,14 +840,16 @@ impl EncoderPlan {
                     )
                 };
                 if !tokens.iter().any(|token| token.is_copy()) {
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return write_token_batches_with_symbol_limit(
+                write_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     tune::Q1_DELAYED_SYMBOLS,
-                );
+                )?;
+                return Ok(Copies::Tokens(tokens));
             }
 
             let has_copy = {
@@ -689,15 +865,17 @@ impl EncoderPlan {
                 batch.has_copy()
             };
             if !has_copy {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return q1::write(
+            q1::write(
                 writer,
                 input,
                 input.len(),
                 &mut workspace.q1,
                 self.q1_fast_literal_prefix,
-            );
+            )?;
+            return Ok(Copies::Q1Batch);
         }
 
         if self.path == EncoderPath::StaticEntropy {
@@ -717,14 +895,16 @@ impl EncoderPlan {
                     q3::collect(input, local_max_backward_distance, &mut workspace.q3)
                 };
                 if !tokens.iter().any(|token| token.is_copy()) {
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return write_regular_token_batches_with_symbol_limit(
+                write_regular_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     tune::MAX_DELAYED_SYMBOLS,
-                );
+                )?;
+                return Ok(Copies::Tokens(tokens));
             }
 
             let tokens = if input.len() < tune::Q2_STATIC_NO_DICTIONARY_MAX_INPUT {
@@ -742,14 +922,16 @@ impl EncoderPlan {
                 )
             };
             if !tokens.iter().any(|token| token.is_copy()) {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return write_token_batches_with_symbol_limit(
+            write_token_batches_with_symbol_limit(
                 writer,
                 input,
                 &tokens,
                 tune::MAX_DELAYED_SYMBOLS,
-            );
+            )?;
+            return Ok(Copies::Tokens(tokens));
         }
 
         if self.path == EncoderPath::RegularNoSplit {
@@ -762,14 +944,16 @@ impl EncoderPlan {
                 q3::collect(input, local_max_backward_distance, &mut workspace.q3)
             };
             if !tokens.iter().any(|token| token.is_copy()) {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return write_regular_token_batches_with_symbol_limit(
+            write_regular_token_batches_with_symbol_limit(
                 writer,
                 input,
                 &tokens,
                 tune::MAX_DELAYED_SYMBOLS,
-            );
+            )?;
+            return Ok(Copies::Tokens(tokens));
         }
 
         if self.path == EncoderPath::RegularSplit {
@@ -781,14 +965,16 @@ impl EncoderPlan {
                     &mut workspace.q5,
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
-                    return write_compressed_literal_meta_block(writer, input);
+                    write_compressed_literal_meta_block(writer, input)?;
+                    return Ok(Copies::None);
                 }
-                return write_regular_token_batches_with_symbol_limit(
+                write_regular_token_batches_with_symbol_limit(
                     writer,
                     input,
                     &tokens,
                     tune::Q5_DELAYED_SYMBOLS,
-                );
+                )?;
+                return Ok(Copies::Tokens(tokens));
             }
             let tokens = q4::collect(
                 input,
@@ -797,14 +983,16 @@ impl EncoderPlan {
                 &mut workspace.q4,
             );
             if !tokens.iter().any(|token| token.is_copy()) {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return write_regular_token_batches_with_symbol_limit(
+            write_regular_token_batches_with_symbol_limit(
                 writer,
                 input,
                 &tokens,
                 tune::Q4_DELAYED_SYMBOLS,
-            );
+            )?;
+            return Ok(Copies::Tokens(tokens));
         }
 
         if self.path == EncoderPath::ContextModeled {
@@ -815,14 +1003,16 @@ impl EncoderPlan {
                 &mut workspace.q5,
             );
             if !tokens.iter().any(|token| token.is_copy()) {
-                return write_compressed_literal_meta_block(writer, input);
+                write_compressed_literal_meta_block(writer, input)?;
+                return Ok(Copies::None);
             }
-            return write_regular_token_batches_with_symbol_limit(
+            write_regular_token_batches_with_symbol_limit(
                 writer,
                 input,
                 &tokens,
                 tune::Q5_DELAYED_SYMBOLS,
-            );
+            )?;
+            return Ok(Copies::Tokens(tokens));
         }
 
         unreachable!("all scoped encoder paths are handled above")
@@ -836,10 +1026,10 @@ impl EncoderPlan {
         local_max_backward_distance: usize,
         _global_max_backward_distance: usize,
         workspace: &mut Workspace,
-    ) -> Result<bool, CompressError> {
+    ) -> Result<Option<Copies>, CompressError> {
         let sparse_decision = sparse::decision(input);
         if !sparse_decision.store_uncompressed {
-            return Ok(false);
+            return Ok(None);
         }
 
         match self.path {
@@ -849,8 +1039,10 @@ impl EncoderPlan {
                     input,
                     local_max_backward_distance,
                     &mut workspace.q1,
+                    &mut workspace.distance_ring,
                     self.q1_fast_literal_prefix,
                 )?;
+                Ok(Some(Copies::Tracked))
             }
             EncoderPath::StaticEntropy => {
                 let tokens = sparse::collect_tokens(
@@ -860,7 +1052,7 @@ impl EncoderPlan {
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
-                    return Ok(true);
+                    return Ok(Some(Copies::None));
                 }
                 write_token_batches_with_symbol_limit(
                     writer,
@@ -868,6 +1060,7 @@ impl EncoderPlan {
                     &tokens,
                     tune::MAX_DELAYED_SYMBOLS,
                 )?;
+                Ok(Some(Copies::Tokens(tokens)))
             }
             EncoderPath::RegularNoSplit => {
                 let tokens = sparse::collect_tokens(
@@ -877,7 +1070,7 @@ impl EncoderPlan {
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
-                    return Ok(true);
+                    return Ok(Some(Copies::None));
                 }
                 write_regular_token_batches_with_symbol_limit(
                     writer,
@@ -885,6 +1078,7 @@ impl EncoderPlan {
                     &tokens,
                     tune::MAX_DELAYED_SYMBOLS,
                 )?;
+                Ok(Some(Copies::Tokens(tokens)))
             }
             EncoderPath::RegularSplit => {
                 let tokens = sparse::collect_tokens(
@@ -894,7 +1088,7 @@ impl EncoderPlan {
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
-                    return Ok(true);
+                    return Ok(Some(Copies::None));
                 }
                 write_regular_token_batches_with_symbol_limit(
                     writer,
@@ -902,6 +1096,7 @@ impl EncoderPlan {
                     &tokens,
                     tune::LOW_COMPRESS_DELAYED_SYMBOLS,
                 )?;
+                Ok(Some(Copies::Tokens(tokens)))
             }
             EncoderPath::ContextModeled => {
                 let tokens = sparse::collect_tokens(
@@ -911,7 +1106,7 @@ impl EncoderPlan {
                 );
                 if !tokens.iter().any(|token| token.is_copy()) {
                     write_compressed_literal_meta_block(writer, input)?;
-                    return Ok(true);
+                    return Ok(Some(Copies::None));
                 }
                 write_regular_token_batches_with_symbol_limit(
                     writer,
@@ -919,10 +1114,10 @@ impl EncoderPlan {
                     &tokens,
                     tune::LOW_COMPRESS_DELAYED_SYMBOLS,
                 )?;
+                Ok(Some(Copies::Tokens(tokens)))
             }
             EncoderPath::FastOnePass => unreachable!("q0 sparse path is handled separately"),
         }
-        Ok(true)
     }
 }
 
@@ -931,6 +1126,7 @@ fn write_split_q1_sparse_binary_meta_blocks(
     input: &[u8],
     local_max_backward_distance: usize,
     workspace: &mut q1::Workspace,
+    distance_ring: &mut DistanceRing,
     fast_literal_prefix: bool,
 ) -> Result<(), CompressError> {
     for (block_index, chunk) in input.chunks(tune::Q1_LOW_COMPRESS_BLOCK_SIZE).enumerate() {
@@ -953,6 +1149,7 @@ fn write_split_q1_sparse_binary_meta_blocks(
             continue;
         }
         q1::write(writer, chunk, chunk.len(), workspace, fast_literal_prefix)?;
+        workspace.advance_distance_ring(distance_ring);
     }
     Ok(())
 }
@@ -1660,13 +1857,15 @@ fn write_compressed_literal_meta_block(
     let literal_code_map = symbol_code_map(&literal_codes, LITERAL_ALPHABET_SIZE);
     write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, command_symbol)?;
     write_simple_prefix_code_single(writer, 64, 0)?;
-    writer.write_bits_trusted(insert.extra_bits, insert.extra);
+    writer.write_bits_trusted(insert.extra_bits, u64::from(insert.extra));
     for &literal in input {
         write_literal(writer, &literal_code_map, literal)?;
     }
     Ok(())
 }
 
+/// Literal-only meta-block with a literal code of at most `FAST_CODE_BITS`
+/// bits, which lets four literals share one bit write.
 fn write_fast_compressed_literal_meta_block(
     writer: &mut BitWriter,
     input: &[u8],
@@ -1678,24 +1877,130 @@ fn write_fast_compressed_literal_meta_block(
     let insert = insert_length_code(input.len())?;
     let command_symbol = command_symbol_for_insert(insert.code)?;
 
+    writer.reserve(input.len() + 512);
     write_meta_block_len(writer, input.len())?;
     write_block_and_context_header(writer)?;
-    let mut literal_frequencies = [0_usize; LITERAL_ALPHABET_SIZE];
-    for &literal in input {
-        literal_frequencies[usize::from(literal)] += 1;
-    }
+    let literal_frequencies = literal_histogram(input);
     let mut prefix = PrefixCodeScratch::default();
     prefix.reserve_for(LITERAL_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE);
-    let literal_code_map = write_fast_dense_prefix_code_array_from_frequencies_with_scratch(
-        writer,
-        &literal_frequencies,
-        &mut prefix,
-    )?;
+    let literal_code_map =
+        write_fast_literal_prefix_code(writer, &literal_frequencies, &mut prefix)?;
     write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, command_symbol)?;
     write_simple_prefix_code_single(writer, 64, 0)?;
-    writer.write_bits_trusted(insert.extra_bits, insert.extra);
-    write_literals_dense(writer, input, &literal_code_map)?;
+    writer.write_bits_trusted(insert.extra_bits, u64::from(insert.extra));
+    let literal_bits = literal_frequencies
+        .iter()
+        .zip(&literal_code_map)
+        .filter(|&(&count, _)| count != 0)
+        .map(|(&count, code)| count * usize::from(code.len))
+        .sum();
+    write_literals_in_fours(writer, input, &literal_code_map, literal_bits);
     Ok(())
+}
+
+const LITERAL_HISTOGRAM_SPLIT_MIN_INPUT: usize = 4096;
+
+/// Byte counts of `input`. Eight tables, one per position modulo 8, keep
+/// repeats of one byte value from waiting on the same counter. Byte
+/// patterns with a period of 2 or 4, like 16-bit samples, would still
+/// collide with four tables.
+fn literal_histogram(input: &[u8]) -> [usize; LITERAL_ALPHABET_SIZE] {
+    debug_assert!(input.len() <= MAX_META_BLOCK_SIZE);
+    if input.len() < LITERAL_HISTOGRAM_SPLIT_MIN_INPUT {
+        // Clearing and merging eight tables costs more than it saves here.
+        let mut counts = [0_usize; LITERAL_ALPHABET_SIZE];
+        for &byte in input {
+            counts[usize::from(byte)] += 1;
+        }
+        return counts;
+    }
+    let mut tables = [[0_u32; LITERAL_ALPHABET_SIZE]; 8];
+    let (chunks, remainder) = input.as_chunks::<8>();
+    for &chunk in chunks {
+        let word = u64::from_le_bytes(chunk);
+        for (lane, table) in tables.iter_mut().enumerate() {
+            table[((word >> (8 * lane)) & 0xff) as usize] += 1;
+        }
+    }
+    for &byte in remainder {
+        tables[0][usize::from(byte)] += 1;
+    }
+    let mut counts = [0_usize; LITERAL_ALPHABET_SIZE];
+    for (symbol, count) in counts.iter_mut().enumerate() {
+        *count = tables.iter().map(|table| table[symbol]).sum::<u32>() as usize;
+    }
+    counts
+}
+
+/// Writes a literal prefix code of at most `FAST_CODE_BITS` bits with the
+/// static code-length code. When the Huffman code is too deep, raises the
+/// smallest counts until it fits, as Google's encoder does.
+fn write_fast_literal_prefix_code(
+    writer: &mut BitWriter,
+    frequencies: &[usize; LITERAL_ALPHABET_SIZE],
+    scratch: &mut PrefixCodeScratch,
+) -> Result<[DenseSymbolCode; LITERAL_ALPHABET_SIZE], CompressError> {
+    scratch.used.clear();
+    for (symbol, &frequency) in frequencies.iter().enumerate() {
+        if frequency != 0 {
+            scratch.used.push((symbol as u16, frequency));
+        }
+    }
+
+    let mut map = [MISSING_DENSE_SYMBOL_CODE; LITERAL_ALPHABET_SIZE];
+    if scratch.used.len() <= MAX_SIMPLE_PREFIX_SYMBOLS {
+        let mut symbols = [0_u16; MAX_SIMPLE_PREFIX_SYMBOLS];
+        for (index, &(symbol, _)) in scratch.used.iter().enumerate() {
+            symbols[index] = symbol;
+        }
+        write_simple_dense_prefix_code(writer, &symbols[..scratch.used.len()], &mut map)?;
+        return Ok(map);
+    }
+
+    scratch.lengths.clear();
+    scratch.lengths.resize(LITERAL_ALPHABET_SIZE, 0);
+    raise_counts_until_huffman_fits(FAST_CODE_BITS, scratch);
+    fill_dense_symbol_code_map_from_lengths(&scratch.lengths, &mut map);
+    write_fast_complex_prefix_code_lengths_with_scratch(writer, scratch)?;
+    Ok(map)
+}
+
+/// Writes every byte of `input` with `codes`, four per bit write. Every byte
+/// needs a code of at most `FAST_CODE_BITS` bits, and `total_bits` must be
+/// the length of the whole encoding.
+fn write_literals_in_fours(
+    writer: &mut BitWriter,
+    input: &[u8],
+    codes: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
+    total_bits: usize,
+) {
+    const _: () = assert!(4 * FAST_CODE_BITS <= MAX_BITS_PER_OP);
+    let code = |byte: u8| {
+        let code = codes[usize::from(byte)];
+        debug_assert!(code.len <= FAST_CODE_BITS);
+        (u64::from(code.bits), code.len)
+    };
+    let (chunks, remainder) = input.as_chunks::<4>();
+    let remainder_bits = remainder
+        .iter()
+        .map(|&byte| usize::from(code(byte).1))
+        .sum::<usize>();
+    writer.write_bits_batch_trusted_fits(
+        total_bits - remainder_bits,
+        chunks.iter().map(|chunk| {
+            let (mut bits, mut width) = code(chunk[0]);
+            for &byte in &chunk[1..] {
+                let (next_bits, next_width) = code(byte);
+                bits |= next_bits << width;
+                width += next_width;
+            }
+            (width, bits)
+        }),
+    );
+    for &byte in remainder {
+        let (bits, width) = code(byte);
+        writer.write_bits_trusted_fits(width, bits);
+    }
 }
 
 fn write_token_batch(
@@ -1808,7 +2113,7 @@ fn write_token_batch_recomputed_with_len(
             &mut pending_bits,
             &mut pending_width,
             insert.extra_bits,
-            insert.extra,
+            u64::from(insert.extra),
         );
         if let Some(copy) = copy {
             append_pending_bits(
@@ -1816,21 +2121,17 @@ fn write_token_batch_recomputed_with_len(
                 &mut pending_bits,
                 &mut pending_width,
                 copy.extra_bits,
-                copy.extra,
+                u64::from(copy.extra),
             );
         }
 
-        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            let literal_code = literal_code_map[usize::from(literal)];
-            debug_assert!(literal_code.len != u8::MAX);
-            append_pending_bits(
-                writer,
-                &mut pending_bits,
-                &mut pending_width,
-                literal_code.len,
-                u64::from(literal_code.bits),
-            );
-        }
+        q1::append_literal_span_bits_paired(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            &input[token.insert_start..token.insert_start + token.insert_len],
+            &literal_code_map,
+        );
 
         if let Some(distance) = prepared_token.distance {
             let distance_code = distance_code_map[usize::from(distance.symbol)];
@@ -1847,7 +2148,7 @@ fn write_token_batch_recomputed_with_len(
                 &mut pending_bits,
                 &mut pending_width,
                 distance.extra_bits,
-                distance.extra,
+                u64::from(distance.extra),
             );
         }
     }
@@ -1920,7 +2221,7 @@ fn write_static_entropy_token_batch(
             &mut pending_bits,
             &mut pending_width,
             insert.extra_bits,
-            insert.extra,
+            u64::from(insert.extra),
         );
         if let Some(copy) = copy {
             append_pending_bits(
@@ -1928,21 +2229,17 @@ fn write_static_entropy_token_batch(
                 &mut pending_bits,
                 &mut pending_width,
                 copy.extra_bits,
-                copy.extra,
+                u64::from(copy.extra),
             );
         }
 
-        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            let literal_code = literal_code_map[usize::from(literal)];
-            debug_assert!(literal_code.len != u8::MAX);
-            append_pending_bits(
-                writer,
-                &mut pending_bits,
-                &mut pending_width,
-                literal_code.len,
-                u64::from(literal_code.bits),
-            );
-        }
+        q1::append_literal_span_bits_paired(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            &input[token.insert_start..token.insert_start + token.insert_len],
+            &literal_code_map,
+        );
 
         if let Some(distance) = prepared_token.distance {
             let distance_code = static_distance_code(distance.symbol)?;
@@ -1958,7 +2255,7 @@ fn write_static_entropy_token_batch(
                 &mut pending_bits,
                 &mut pending_width,
                 distance.extra_bits,
-                distance.extra,
+                u64::from(distance.extra),
             );
         }
     }
@@ -2071,7 +2368,7 @@ fn write_prepared_token_batch_with_len(
             &mut pending_bits,
             &mut pending_width,
             insert.extra_bits,
-            insert.extra,
+            u64::from(insert.extra),
         );
         if let Some(copy) = copy {
             append_pending_bits(
@@ -2079,21 +2376,17 @@ fn write_prepared_token_batch_with_len(
                 &mut pending_bits,
                 &mut pending_width,
                 copy.extra_bits,
-                copy.extra,
+                u64::from(copy.extra),
             );
         }
 
-        for &literal in &input[token.insert_start..token.insert_start + token.insert_len] {
-            let literal_code = literal_code_map[usize::from(literal)];
-            debug_assert!(literal_code.len != u8::MAX);
-            append_pending_bits(
-                writer,
-                &mut pending_bits,
-                &mut pending_width,
-                literal_code.len,
-                u64::from(literal_code.bits),
-            );
-        }
+        q1::append_literal_span_bits_paired(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            &input[token.insert_start..token.insert_start + token.insert_len],
+            &literal_code_map,
+        );
 
         if let Some(distance) = prepared_token.distance {
             let distance_code = distance_code_map[usize::from(distance.symbol)];
@@ -2110,7 +2403,7 @@ fn write_prepared_token_batch_with_len(
                 &mut pending_bits,
                 &mut pending_width,
                 distance.extra_bits,
-                distance.extra,
+                u64::from(distance.extra),
             );
         }
     }
@@ -2287,7 +2580,7 @@ fn write_prefix_code_from_frequencies_with_max_bits(
         return Err(BurliError::Format("Brotli prefix alphabet size mismatch"));
     }
 
-    let mut used = frequencies
+    let used = frequencies
         .iter()
         .enumerate()
         .filter_map(|(symbol, &frequency)| (frequency != 0).then_some((symbol as u16, frequency)))
@@ -2300,8 +2593,7 @@ fn write_prefix_code_from_frequencies_with_max_bits(
         return write_simple_prefix_code_symbols(writer, alphabet_size, &symbols);
     }
 
-    let lengths = huffman_code_lengths(frequencies, max_bits)
-        .unwrap_or_else(|| balanced_code_lengths(alphabet_size, &mut used, max_bits));
+    let lengths = limited_huffman_code_lengths(frequencies, max_bits);
 
     write_complex_prefix_code_lengths(writer, &lengths)?;
     Ok(symbol_codes_from_lengths(&lengths))
@@ -2425,18 +2717,20 @@ fn code_lengths_from_current_used_with_scratch(
         return;
     }
 
-    if huffman_code_lengths_from_current_used_with_scratch(max_bits, scratch) {
-        return;
-    }
+    raise_counts_until_huffman_fits(max_bits, scratch);
+}
 
-    scratch.lengths.clear();
-    scratch.lengths.resize(alphabet_size, 0);
-    balanced_code_lengths_into(
-        alphabet_size,
-        &mut scratch.used,
-        max_bits,
-        &mut scratch.lengths,
-    );
+/// Builds Huffman lengths for `scratch.used`, doubling a floor under the
+/// counts until no code is longer than `max_bits`, as Google's encoder does.
+/// A balanced code instead would spend about eight bits on every literal.
+fn raise_counts_until_huffman_fits(max_bits: u8, scratch: &mut PrefixCodeScratch) {
+    let mut floor = 1;
+    while !huffman_code_lengths_from_current_used_with_scratch(max_bits, scratch) {
+        floor *= 2;
+        for (_, frequency) in &mut scratch.used {
+            *frequency = (*frequency).max(floor);
+        }
+    }
 }
 
 fn code_lengths_from_dense_frequencies_with_scratch<const N: usize>(
@@ -2462,7 +2756,7 @@ fn code_lengths_from_frequencies(
         return Err(BurliError::Format("Brotli prefix alphabet size mismatch"));
     }
 
-    let mut used = frequencies
+    let used = frequencies
         .iter()
         .enumerate()
         .filter_map(|(symbol, &frequency)| (frequency != 0).then_some((symbol as u16, frequency)))
@@ -2478,30 +2772,34 @@ fn code_lengths_from_frequencies(
         return Ok(lengths);
     }
 
-    Ok(huffman_code_lengths(frequencies, max_bits)
-        .unwrap_or_else(|| balanced_code_lengths(alphabet_size, &mut used, max_bits)))
+    Ok(limited_huffman_code_lengths(frequencies, max_bits))
 }
 
-fn balanced_code_lengths(alphabet_size: usize, used: &mut [(u16, usize)], max_bits: u8) -> Vec<u8> {
-    used.sort_unstable_by(
-        |&(left_symbol, left_frequency), &(right_symbol, right_frequency)| {
-            right_frequency
-                .cmp(&left_frequency)
-                .then_with(|| left_symbol.cmp(&right_symbol))
-        },
-    );
-
-    let mut lengths = vec![0_u8; alphabet_size];
-    let base_bits = ceil_log2(used.len()).unwrap().min(max_bits);
-    let short_count = (1_usize << base_bits) - used.len();
-    for (rank, &(symbol, _)) in used.iter().enumerate() {
-        lengths[usize::from(symbol)] = if rank < short_count {
-            base_bits - 1
-        } else {
-            base_bits
-        };
+/// Huffman code lengths of at most `max_bits` for at least two used
+/// symbols. Raises the smallest counts until the code fits, like
+/// [`raise_counts_until_huffman_fits`].
+fn limited_huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Vec<u8> {
+    if let Some(lengths) = huffman_code_lengths(frequencies, max_bits) {
+        return lengths;
     }
-    lengths
+    debug_assert!(
+        frequencies
+            .iter()
+            .filter(|&&frequency| frequency != 0)
+            .count()
+            >= 2
+    );
+    let mut raised = frequencies.to_vec();
+    let mut floor = 1;
+    loop {
+        floor *= 2;
+        for frequency in raised.iter_mut().filter(|frequency| **frequency != 0) {
+            *frequency = (*frequency).max(floor);
+        }
+        if let Some(lengths) = huffman_code_lengths(&raised, max_bits) {
+            return lengths;
+        }
+    }
 }
 
 fn balanced_code_lengths_into(
@@ -2531,82 +2829,23 @@ fn balanced_code_lengths_into(
     }
 }
 
-#[derive(Clone, Debug)]
-struct HuffmanNode {
-    frequency: u64,
-    min_symbol: u16,
-    parent: Option<usize>,
-}
-
 fn huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Option<Vec<u8>> {
-    let mut nodes = Vec::new();
-    let mut leaves = Vec::new();
-
-    for (symbol, &frequency) in frequencies.iter().enumerate() {
-        if frequency == 0 {
-            continue;
-        }
-        let index = nodes.len();
-        nodes.push(HuffmanNode {
-            frequency: frequency as u64,
-            min_symbol: symbol as u16,
-            parent: None,
-        });
-        leaves.push((symbol, index));
-    }
-
-    if leaves.len() <= 1 {
-        return None;
-    }
-
-    leaves.sort_unstable_by(|&(_, left), &(_, right)| compare_huffman_nodes(&nodes, left, right));
-    let mut leaf_head = 0;
-    let mut parent_queue = Vec::with_capacity(leaves.len() - 1);
-    let mut parent_head = 0;
-    let mut remaining = leaves.len();
-
-    while remaining > 1 {
-        let first = pop_huffman_queue(
-            &nodes,
-            &leaves,
-            &mut leaf_head,
-            &parent_queue,
-            &mut parent_head,
-        )?;
-        let second = pop_huffman_queue(
-            &nodes,
-            &leaves,
-            &mut leaf_head,
-            &parent_queue,
-            &mut parent_head,
-        )?;
-        let parent = nodes.len();
-        nodes.push(HuffmanNode {
-            frequency: nodes[first].frequency + nodes[second].frequency,
-            min_symbol: nodes[first].min_symbol.min(nodes[second].min_symbol),
-            parent: None,
-        });
-        nodes[first].parent = Some(parent);
-        nodes[second].parent = Some(parent);
-        parent_queue.push(parent);
-        remaining -= 1;
-    }
-
+    let mut keys = frequencies
+        .iter()
+        .enumerate()
+        .filter(|&(_, &frequency)| frequency != 0)
+        .map(|(symbol, &frequency)| huffman_key(frequency, symbol))
+        .collect::<Vec<_>>();
     let mut lengths = vec![0_u8; frequencies.len()];
-    for (symbol, node_index) in leaves {
-        let mut depth = 0_u8;
-        let mut cursor = node_index;
-        while let Some(parent) = nodes[cursor].parent {
-            depth = depth.checked_add(1)?;
-            cursor = parent;
-        }
-        if depth == 0 || depth > max_bits {
-            return None;
-        }
-        lengths[symbol] = depth;
-    }
-
-    Some(lengths)
+    huffman_lengths_from_keys(
+        &mut keys,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut lengths,
+        max_bits,
+    )
+    .then_some(lengths)
 }
 
 fn huffman_code_lengths_with_scratch(
@@ -2614,213 +2853,168 @@ fn huffman_code_lengths_with_scratch(
     max_bits: u8,
     scratch: &mut PrefixCodeScratch,
 ) -> bool {
-    scratch.nodes.clear();
-    scratch.leaves.clear();
-    scratch.parent_queue.clear();
+    scratch.keys.clear();
+    scratch.keys.extend(
+        frequencies
+            .iter()
+            .enumerate()
+            .filter(|&(_, &frequency)| frequency != 0)
+            .map(|(symbol, &frequency)| huffman_key(frequency, symbol)),
+    );
     scratch.lengths.clear();
     scratch.lengths.resize(frequencies.len(), 0);
-
-    for (symbol, &frequency) in frequencies.iter().enumerate() {
-        if frequency == 0 {
-            continue;
-        }
-        let index = scratch.nodes.len();
-        scratch.nodes.push(HuffmanNode {
-            frequency: frequency as u64,
-            min_symbol: symbol as u16,
-            parent: None,
-        });
-        scratch.leaves.push((symbol, index));
-    }
-
-    if scratch.leaves.len() <= 1 {
-        return false;
-    }
-
-    {
-        let nodes = &scratch.nodes;
-        scratch
-            .leaves
-            .sort_unstable_by(|&(_, left), &(_, right)| compare_huffman_nodes(nodes, left, right));
-    }
-
-    let mut leaf_head = 0;
-    let mut parent_head = 0;
-    let mut remaining = scratch.leaves.len();
-
-    while remaining > 1 {
-        let Some(first) = pop_huffman_queue(
-            &scratch.nodes,
-            &scratch.leaves,
-            &mut leaf_head,
-            &scratch.parent_queue,
-            &mut parent_head,
-        ) else {
-            return false;
-        };
-        let Some(second) = pop_huffman_queue(
-            &scratch.nodes,
-            &scratch.leaves,
-            &mut leaf_head,
-            &scratch.parent_queue,
-            &mut parent_head,
-        ) else {
-            return false;
-        };
-        let parent = scratch.nodes.len();
-        scratch.nodes.push(HuffmanNode {
-            frequency: scratch.nodes[first].frequency + scratch.nodes[second].frequency,
-            min_symbol: scratch.nodes[first]
-                .min_symbol
-                .min(scratch.nodes[second].min_symbol),
-            parent: None,
-        });
-        scratch.nodes[first].parent = Some(parent);
-        scratch.nodes[second].parent = Some(parent);
-        scratch.parent_queue.push(parent);
-        remaining -= 1;
-    }
-
-    for &(symbol, node_index) in &scratch.leaves {
-        let mut depth = 0_u8;
-        let mut cursor = node_index;
-        while let Some(parent) = scratch.nodes[cursor].parent {
-            let Some(next_depth) = depth.checked_add(1) else {
-                return false;
-            };
-            depth = next_depth;
-            cursor = parent;
-        }
-        if depth == 0 || depth > max_bits {
-            return false;
-        }
-        scratch.lengths[symbol] = depth;
-    }
-
-    true
+    huffman_lengths_from_keys(
+        &mut scratch.keys,
+        &mut scratch.sorted_keys,
+        &mut scratch.parent_keys,
+        &mut scratch.parents,
+        &mut scratch.lengths,
+        max_bits,
+    )
 }
 
 fn huffman_code_lengths_from_current_used_with_scratch(
     max_bits: u8,
     scratch: &mut PrefixCodeScratch,
 ) -> bool {
-    scratch.nodes.clear();
-    scratch.leaves.clear();
-    scratch.parent_queue.clear();
+    scratch.keys.clear();
+    scratch.keys.extend(
+        scratch
+            .used
+            .iter()
+            .map(|&(symbol, frequency)| huffman_key(frequency, usize::from(symbol))),
+    );
+    huffman_lengths_from_keys(
+        &mut scratch.keys,
+        &mut scratch.sorted_keys,
+        &mut scratch.parent_keys,
+        &mut scratch.parents,
+        &mut scratch.lengths,
+        max_bits,
+    )
+}
 
-    for &(symbol, frequency) in &scratch.used {
-        let index = scratch.nodes.len();
-        scratch.nodes.push(HuffmanNode {
-            frequency: frequency as u64,
-            min_symbol: symbol,
-            parent: None,
-        });
-        scratch.leaves.push((usize::from(symbol), index));
-    }
+/// Sort key of a Huffman node: its frequency, then its smallest symbol.
+fn huffman_key(frequency: usize, symbol: usize) -> u64 {
+    debug_assert!((frequency as u64) < 1 << 48);
+    debug_assert!(u16::try_from(symbol).is_ok());
+    ((frequency as u64) << 16) | symbol as u64
+}
 
-    if scratch.leaves.len() <= 1 {
+/// Writes Huffman code lengths into `lengths[symbol]` for the leaves in
+/// `keys`, which [`huffman_key`] built in increasing symbol order. Returns
+/// false for fewer than two leaves or when a code would be longer than
+/// `max_bits`, without writing.
+///
+/// The two-queue construction merges the two smallest keys each step. A
+/// leaf wins a tie with an internal node, which cannot happen for distinct
+/// symbols anyway. An internal node's key is the sum of its children's
+/// frequencies and their smallest symbol.
+fn huffman_lengths_from_keys(
+    keys: &mut Vec<u64>,
+    sorted_keys: &mut Vec<u64>,
+    parent_keys: &mut Vec<u64>,
+    parents: &mut Vec<u16>,
+    lengths: &mut [u8],
+    max_bits: u8,
+) -> bool {
+    let leaves = keys.len();
+    if leaves <= 1 {
         return false;
     }
+    debug_assert!(u16::try_from(2 * leaves - 1).is_ok());
+    sort_huffman_keys(keys, sorted_keys);
+    // Sentinels let the merge read one past the end of either queue.
+    keys.push(u64::MAX);
+    parent_keys.clear();
+    parent_keys.resize(leaves, u64::MAX);
 
+    // Nodes `0..leaves` are the sorted leaves, and node `leaves + i` is the
+    // `i`th internal node. Every parent index is larger than its children's.
+    let nodes = 2 * leaves - 1;
+    parents.clear();
+    parents.resize(nodes, 0);
+    let mut leaf = 0;
+    let mut internal = 0;
+    for parent in 0..leaves - 1 {
+        let (first, first_key) =
+            pop_huffman_node(keys, parent_keys, leaves, &mut leaf, &mut internal);
+        let (second, second_key) =
+            pop_huffman_node(keys, parent_keys, leaves, &mut leaf, &mut internal);
+        parents[first] = (leaves + parent) as u16;
+        parents[second] = (leaves + parent) as u16;
+        let frequency = (first_key >> 16) + (second_key >> 16);
+        let symbol = (first_key & 0xffff).min(second_key & 0xffff);
+        parent_keys[parent] = (frequency << 16) | symbol;
+    }
+    keys.pop();
+
+    // Replace each parent index with the node's depth, from the root down.
+    // The root keeps zero.
+    for node in (0..nodes - 1).rev() {
+        parents[node] = parents[usize::from(parents[node])] + 1;
+    }
+    if parents[..leaves]
+        .iter()
+        .any(|&depth| depth > u16::from(max_bits))
     {
-        let nodes = &scratch.nodes;
-        scratch
-            .leaves
-            .sort_unstable_by(|&(_, left), &(_, right)| compare_huffman_nodes(nodes, left, right));
+        return false;
     }
-
-    let mut leaf_head = 0;
-    let mut parent_head = 0;
-    let mut remaining = scratch.leaves.len();
-
-    while remaining > 1 {
-        let Some(first) = pop_huffman_queue(
-            &scratch.nodes,
-            &scratch.leaves,
-            &mut leaf_head,
-            &scratch.parent_queue,
-            &mut parent_head,
-        ) else {
-            return false;
-        };
-        let Some(second) = pop_huffman_queue(
-            &scratch.nodes,
-            &scratch.leaves,
-            &mut leaf_head,
-            &scratch.parent_queue,
-            &mut parent_head,
-        ) else {
-            return false;
-        };
-        let parent = scratch.nodes.len();
-        scratch.nodes.push(HuffmanNode {
-            frequency: scratch.nodes[first].frequency + scratch.nodes[second].frequency,
-            min_symbol: scratch.nodes[first]
-                .min_symbol
-                .min(scratch.nodes[second].min_symbol),
-            parent: None,
-        });
-        scratch.nodes[first].parent = Some(parent);
-        scratch.nodes[second].parent = Some(parent);
-        scratch.parent_queue.push(parent);
-        remaining -= 1;
+    for (&key, &depth) in keys.iter().zip(&parents[..leaves]) {
+        lengths[(key & 0xffff) as usize] = depth as u8;
     }
-
-    for &(symbol, node_index) in &scratch.leaves {
-        let mut depth = 0_u8;
-        let mut cursor = node_index;
-        while let Some(parent) = scratch.nodes[cursor].parent {
-            let Some(next_depth) = depth.checked_add(1) else {
-                return false;
-            };
-            depth = next_depth;
-            cursor = parent;
-        }
-        if depth == 0 || depth > max_bits {
-            return false;
-        }
-        scratch.lengths[symbol] = depth;
-    }
-
     true
 }
 
-fn compare_huffman_nodes(nodes: &[HuffmanNode], left: usize, right: usize) -> core::cmp::Ordering {
-    nodes[left]
-        .frequency
-        .cmp(&nodes[right].frequency)
-        .then_with(|| nodes[left].min_symbol.cmp(&nodes[right].min_symbol))
+/// Takes the smaller head of the leaf and internal queues without a
+/// data-dependent branch. Both queues end in a `u64::MAX` sentinel.
+#[inline(always)]
+fn pop_huffman_node(
+    keys: &[u64],
+    parent_keys: &[u64],
+    leaves: usize,
+    leaf: &mut usize,
+    internal: &mut usize,
+) -> (usize, u64) {
+    let leaf_key = keys[*leaf];
+    let internal_key = parent_keys[*internal];
+    let take_leaf = leaf_key <= internal_key;
+    let node = if take_leaf { *leaf } else { leaves + *internal };
+    *leaf += usize::from(take_leaf);
+    *internal += usize::from(!take_leaf);
+    (node, leaf_key.min(internal_key))
 }
 
-fn pop_huffman_queue(
-    nodes: &[HuffmanNode],
-    leaf_queue: &[(usize, usize)],
-    leaf_head: &mut usize,
-    parent_queue: &[usize],
-    parent_head: &mut usize,
-) -> Option<usize> {
-    let leaf = leaf_queue.get(*leaf_head).map(|&(_, index)| index);
-    let parent = parent_queue.get(*parent_head).copied();
-
-    match (leaf, parent) {
-        (Some(leaf), Some(parent)) => {
-            if compare_huffman_nodes(nodes, leaf, parent).is_le() {
-                *leaf_head += 1;
-                Some(leaf)
-            } else {
-                *parent_head += 1;
-                Some(parent)
-            }
+/// Sorts Huffman keys that are in increasing symbol order. A stable radix
+/// sort on the frequency bytes keeps that order among equal frequencies,
+/// which sorts the whole keys.
+fn sort_huffman_keys(keys: &mut Vec<u64>, buffer: &mut Vec<u64>) {
+    debug_assert!(
+        keys.windows(2)
+            .all(|pair| (pair[0] & 0xffff) < (pair[1] & 0xffff))
+    );
+    let max_frequency = keys.iter().map(|&key| key >> 16).max().unwrap_or(0);
+    let digits = (u64::BITS - max_frequency.leading_zeros()).div_ceil(8);
+    buffer.clear();
+    buffer.resize(keys.len(), 0);
+    for digit in 0..digits {
+        let shift = 16 + 8 * digit;
+        let mut starts = [0_u16; 256];
+        for &key in keys.iter() {
+            starts[((key >> shift) & 0xff) as usize] += 1;
         }
-        (Some(leaf), None) => {
-            *leaf_head += 1;
-            Some(leaf)
+        let mut next = 0_u16;
+        for start in &mut starts {
+            let count = *start;
+            *start = next;
+            next += count;
         }
-        (None, Some(parent)) => {
-            *parent_head += 1;
-            Some(parent)
+        for &key in keys.iter() {
+            let bucket = &mut starts[((key >> shift) & 0xff) as usize];
+            buffer[usize::from(*bucket)] = key;
+            *bucket += 1;
         }
-        (None, None) => None,
+        core::mem::swap(keys, buffer);
     }
 }
 
@@ -2872,59 +3066,14 @@ fn write_fast_complex_prefix_code_lengths_with_scratch(
     writer: &mut BitWriter,
     scratch: &mut PrefixCodeScratch,
 ) -> Result<(), CompressError> {
-    encode_fast_code_length_tree_into(&scratch.lengths, &mut scratch.tree)?;
-    writer.write_bits_trusted_fits(40, 0x00ff_5555_5554);
-    let mut pending_bits = 0_u64;
-    let mut pending_width = 0_u8;
-    for &entry in &scratch.tree {
-        let symbol = code_length_tree_symbol(entry);
-        let extra_bits = code_length_tree_extra_bits(entry);
-        match symbol {
-            0..=14 => {
-                let len = STATIC_CODE_LENGTH_DEPTH[usize::from(symbol)];
-                let bits = STATIC_CODE_LENGTH_BITS[usize::from(symbol)];
-                append_pending_bits(
-                    writer,
-                    &mut pending_bits,
-                    &mut pending_width,
-                    len,
-                    u64::from(bits),
-                );
-            }
-            16 => {
-                let len = STATIC_CODE_LENGTH_DEPTH[16];
-                let bits = STATIC_CODE_LENGTH_BITS[16] | (u16::from(extra_bits) << len);
-                append_pending_bits(
-                    writer,
-                    &mut pending_bits,
-                    &mut pending_width,
-                    len + 2,
-                    u64::from(bits),
-                );
-            }
-            17 => {
-                let len = STATIC_CODE_LENGTH_DEPTH[17];
-                let bits = STATIC_CODE_LENGTH_BITS[17] | (u16::from(extra_bits) << len);
-                append_pending_bits(
-                    writer,
-                    &mut pending_bits,
-                    &mut pending_width,
-                    len + 3,
-                    u64::from(bits),
-                );
-            }
-            _ => return Err(BurliError::Format("invalid Brotli code length symbol")),
-        }
-    }
-    if pending_width != 0 {
-        writer.write_bits_trusted_fits(pending_width, pending_bits);
-    }
-    Ok(())
+    write_fast_complex_prefix_code_lengths(writer, &scratch.lengths)
 }
 
-fn encode_fast_code_length_tree_into(
+/// Writes `lengths` with the static code-length code in one pass. Runs use
+/// repeat codes 16 and 17 by the same rules as [`encode_code_length_tree_into`].
+fn write_fast_complex_prefix_code_lengths(
+    writer: &mut BitWriter,
     lengths: &[u8],
-    tree: &mut Vec<u16>,
 ) -> Result<(), CompressError> {
     let trimmed_len = lengths
         .iter()
@@ -2933,27 +3082,90 @@ fn encode_fast_code_length_tree_into(
     if trimmed_len == 0 {
         return Err(BurliError::Format("empty Brotli Huffman code"));
     }
+    if lengths[..trimmed_len]
+        .iter()
+        .any(|&len| len > FAST_CODE_BITS)
+    {
+        return Err(BurliError::Format("Brotli Huffman code length exceeds 14"));
+    }
 
-    tree.clear();
-    tree.reserve(trimmed_len);
+    writer.write_bits_trusted_fits(40, 0x00ff_5555_5554);
+    let mut pending_bits = 0_u64;
+    let mut pending_width = 0_u8;
+    let mut emit = |symbol: u8, extra: u8| {
+        let symbol = usize::from(symbol);
+        let len = STATIC_CODE_LENGTH_DEPTH[symbol];
+        let extra_bits = match symbol {
+            16 => 2,
+            17 => 3,
+            _ => 0,
+        };
+        let bits = u64::from(STATIC_CODE_LENGTH_BITS[symbol]) | (u64::from(extra) << len);
+        append_pending_bits(
+            writer,
+            &mut pending_bits,
+            &mut pending_width,
+            len + extra_bits,
+            bits,
+        );
+    };
+
     let mut previous_value = 8_u8;
     let mut index = 0;
     while index < trimmed_len {
         let value = lengths[index];
-        if value > FAST_CODE_BITS {
-            return Err(BurliError::Format("Brotli Huffman code length exceeds 14"));
-        }
-        let mut repetitions = 1;
-        while index + repetitions < trimmed_len && lengths[index + repetitions] == value {
-            repetitions += 1;
-        }
-        if value == 0 {
-            push_zero_code_length_repetitions(repetitions, tree);
+        let run_end = lengths[index..trimmed_len]
+            .iter()
+            .position(|&len| len != value)
+            .map_or(trimmed_len, |offset| index + offset);
+        let mut repetitions = run_end - index;
+        index = run_end;
+
+        let (repeat_symbol, digit_bits) = if value == 0 {
+            if repetitions == 11 {
+                emit(0, 0);
+                repetitions -= 1;
+            }
+            (17, 3)
         } else {
-            push_code_length_repetitions(previous_value, value, repetitions, tree);
+            if previous_value != value {
+                emit(value, 0);
+                repetitions -= 1;
+            }
+            if repetitions == 7 {
+                emit(value, 0);
+                repetitions -= 1;
+            }
             previous_value = value;
+            (16, 2)
+        };
+        if repetitions < 3 {
+            for _ in 0..repetitions {
+                emit(value, 0);
+            }
+            continue;
         }
-        index += repetitions;
+
+        // Repeat codes carry the count in base 4 or 8, most significant
+        // digit first.
+        let mut digits = [0_u8; 8];
+        let mut count = 0;
+        repetitions -= 3;
+        loop {
+            digits[count] = (repetitions & ((1 << digit_bits) - 1)) as u8;
+            count += 1;
+            repetitions >>= digit_bits;
+            if repetitions == 0 {
+                break;
+            }
+            repetitions -= 1;
+        }
+        for &digit in digits[..count].iter().rev() {
+            emit(repeat_symbol, digit);
+        }
+    }
+    if pending_width != 0 {
+        writer.write_bits_trusted_fits(pending_width, pending_bits);
     }
     Ok(())
 }
@@ -3174,12 +3386,7 @@ fn code_lengths_from_frequencies_with_scratch(
 
     scratch.lengths.clear();
     scratch.lengths.resize(alphabet_size, 0);
-    balanced_code_lengths_into(
-        alphabet_size,
-        &mut scratch.used,
-        max_bits,
-        &mut scratch.lengths,
-    );
+    raise_counts_until_huffman_fits(max_bits, scratch);
     Ok(())
 }
 
@@ -3401,32 +3608,6 @@ fn write_literal(
     Ok(())
 }
 
-fn write_literals_dense(
-    writer: &mut BitWriter,
-    input: &[u8],
-    codes: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
-) -> Result<(), CompressError> {
-    let mut pending_bits = 0_u64;
-    let mut pending_width = 0_u8;
-    for &literal in input {
-        let code = codes[usize::from(literal)];
-        if code.len == u8::MAX {
-            return Err(BurliError::Format("missing Brotli prefix symbol"));
-        }
-        append_pending_bits(
-            writer,
-            &mut pending_bits,
-            &mut pending_width,
-            code.len,
-            u64::from(code.bits),
-        );
-    }
-    if pending_width != 0 {
-        writer.write_bits_trusted_fits(pending_width, pending_bits);
-    }
-    Ok(())
-}
-
 #[inline(always)]
 fn append_pending_bits(
     writer: &mut BitWriter,
@@ -3451,7 +3632,7 @@ fn append_pending_bits(
 struct InsertLengthCode {
     code: usize,
     extra_bits: u8,
-    extra: u64,
+    extra: u32,
 }
 
 fn insert_length_code(len: usize) -> Result<InsertLengthCode, CompressError> {
@@ -3476,7 +3657,7 @@ fn insert_length_code(len: usize) -> Result<InsertLengthCode, CompressError> {
     Ok(InsertLengthCode {
         code,
         extra_bits,
-        extra: (len - base) as u64,
+        extra: (len - base) as u32,
     })
 }
 
@@ -3504,7 +3685,7 @@ fn insert_length_prefix(code: usize) -> Result<(usize, u8), CompressError> {
 struct CopyLengthCode {
     code: usize,
     extra_bits: u8,
-    extra: u64,
+    extra: u32,
 }
 
 fn copy_length_code(len: usize) -> Result<CopyLengthCode, CompressError> {
@@ -3528,7 +3709,7 @@ fn copy_length_code(len: usize) -> Result<CopyLengthCode, CompressError> {
     Ok(CopyLengthCode {
         code,
         extra_bits,
-        extra: (len - base) as u64,
+        extra: (len - base) as u32,
     })
 }
 
@@ -3598,7 +3779,7 @@ fn command_symbol_for_insert_copy(
 struct DistanceCode {
     symbol: u16,
     extra_bits: u8,
-    extra: u64,
+    extra: u32,
 }
 
 fn distance_code(distance: usize) -> Result<DistanceCode, CompressError> {
@@ -3617,7 +3798,7 @@ fn distance_code(distance: usize) -> Result<DistanceCode, CompressError> {
     Ok(DistanceCode {
         symbol: (16 + 2 * (extra_bits - 1) + parity) as u16,
         extra_bits: extra_bits as u8,
-        extra: (d - base) as u64,
+        extra: (d - base) as u32,
     })
 }
 
@@ -3856,6 +4037,9 @@ fn symbol_code(codes: &[Option<SymbolCode>], symbol: u16) -> Result<SymbolCode, 
         .ok_or(BurliError::Format("missing Brotli prefix symbol"))
 }
 
+/// Fills `map` with the canonical codes for `lengths`. Symbols with length
+/// zero get `MISSING_DENSE_SYMBOL_CODE`. The loops have no data-dependent
+/// branches, since unused symbols mix unpredictably with used ones.
 fn fill_dense_symbol_code_map_from_lengths<const N: usize>(
     lengths: &[u8],
     map: &mut [DenseSymbolCode; N],
@@ -3863,10 +4047,10 @@ fn fill_dense_symbol_code_map_from_lengths<const N: usize>(
     debug_assert_eq!(lengths.len(), N);
     let mut counts = [0_u16; 16];
     for &len in lengths {
-        if len != 0 {
-            counts[usize::from(len)] += 1;
-        }
+        debug_assert!(len <= MAX_CODE_BITS);
+        counts[usize::from(len & 15)] += 1;
     }
+    counts[0] = 0;
 
     let mut next_code = [0_u16; 16];
     let mut code = 0_u16;
@@ -3875,15 +4059,19 @@ fn fill_dense_symbol_code_map_from_lengths<const N: usize>(
         next_code[bits] = code;
     }
 
-    for (symbol, &len) in lengths.iter().enumerate() {
-        if len == 0 {
-            continue;
-        }
-        let code = next_code[usize::from(len)];
-        next_code[usize::from(len)] += 1;
-        map[symbol] = DenseSymbolCode {
-            len,
-            bits: reverse_bits_u16(code, len),
+    for (entry, &len) in map.iter_mut().zip(lengths) {
+        let slot = &mut next_code[usize::from(len & 15)];
+        let code = *slot;
+        *slot = code.wrapping_add(1);
+        // A zero length shifts by 32, which wraps to a shift of 0. The
+        // result is replaced below.
+        let bits = u32::from(code)
+            .reverse_bits()
+            .wrapping_shr(32 - u32::from(len)) as u16;
+        *entry = if len == 0 {
+            MISSING_DENSE_SYMBOL_CODE
+        } else {
+            DenseSymbolCode { len, bits }
         };
     }
 }
@@ -4235,6 +4423,67 @@ mod tests {
     }
 
     #[test]
+    fn q0_stores_small_low_compressibility_input() {
+        let options = Options::default().with_quality(0).unwrap();
+        for len in [257, 512, 4096, 64 * 1024 - 1] {
+            let input = sparse_binary_fixture(len);
+            assert!(sparse::small_store(&input), "{len}");
+            let encoded = compress_with_options(&input, &options).unwrap();
+            let stored =
+                crate::metablock::compress_uncompressed_with_options(&input, &options).unwrap();
+            assert_eq!(encoded, stored, "{len}");
+            assert_eq!(burli_decode::decompress(&encoded).unwrap(), input);
+        }
+
+        let zero_heavy = {
+            let mut input = sparse_binary_fixture(4096);
+            for byte in input.iter_mut().step_by(8) {
+                *byte = 0;
+            }
+            input
+        };
+        let mut text_then_binary = printable_sparse_fixture(512);
+        text_then_binary.extend(sparse_binary_fixture(512));
+        assert!(!sparse::small_store(&printable_sparse_fixture(4096)));
+        assert!(!sparse::small_store(&zero_heavy));
+        assert!(!sparse::small_store(&vec![42_u8; 4096]));
+        assert!(!sparse::small_store(&text_then_binary));
+        assert!(!sparse::small_store(&sparse_binary_fixture(7)));
+    }
+
+    #[test]
+    fn low_compressibility_blocks_skip_matching_above_q0() {
+        let mut mixed = sparse_binary_fixture(64 * 1024);
+        mixed.extend(printable_sparse_fixture(1024 * 1024));
+        assert!(sparse::is_low_compressibility_block(
+            &sparse_binary_fixture(1024 * 1024)
+        ));
+        assert!(!sparse::is_low_compressibility_block(&mixed));
+
+        let skewed = {
+            let mut input = sparse_binary_fixture(600 * 1024);
+            for byte in input.iter_mut().step_by(3) {
+                *byte = 0x80 | (*byte & 0x0f);
+            }
+            input
+        };
+        assert!(sparse::is_low_compressibility_block(&skewed));
+        for quality in 1..=5 {
+            let options = Options::default().with_quality(quality).unwrap();
+            let literal_min = tune::LOW_COMPRESS_LITERAL_MIN_INPUT[usize::from(quality)];
+            let small = sparse_binary_fixture(literal_min - 1);
+            let encoded = compress_with_options(&small, &options).unwrap();
+            let stored =
+                crate::metablock::compress_uncompressed_with_options(&small, &options).unwrap();
+            assert_eq!(encoded, stored, "q{quality}");
+
+            let encoded = compress_with_options(&skewed, &options).unwrap();
+            assert!(encoded.len() < skewed.len(), "q{quality}");
+            assert_eq!(burli_decode::decompress(&encoded).unwrap(), skewed);
+        }
+    }
+
+    #[test]
     fn q0_sparse_binary_round_trips() {
         let input = sparse_binary_fixture(128 * 1024 + 17);
         let encoded =
@@ -4313,7 +4562,7 @@ mod verification {
         let command_symbol = command_symbol_for_insert(insert.code).unwrap();
 
         assert_eq!(base + insert.extra as usize, len);
-        assert!(insert.extra < (1_u64 << extra_bits));
+        assert!(u64::from(insert.extra) < (1_u64 << extra_bits));
         assert!(usize::from(command_symbol) < 704);
         assert_eq!(decode_insert_code(command_symbol), insert.code);
     }

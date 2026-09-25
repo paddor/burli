@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Use two-level Huffman lookup tables with a 10-bit root.
+- Copy short backward matches in fixed 8- or 16-byte chunks.
+- Decode single-tree literals three per bit refill.
+- Refill the bit buffer once per command and distance symbol, and decode
+  multi-block literals in per-block runs.
+- Chunk short backward copies in the `paranoid` build with safe fixed-size
+  appends.
+
 ## [0.3.2] - 2026-09-10
 
 - Reject invalid window bits in the concat payload decoder.

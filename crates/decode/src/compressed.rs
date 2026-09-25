@@ -10,6 +10,10 @@ const COMMAND_ALPHABET_SIZE: usize = 704;
 const BLOCK_LENGTH_ALPHABET_SIZE: usize = 26;
 const LAST_DISTANCES: [usize; 4] = [16, 15, 11, 4];
 const CHUNKED_COPY_MIN_DISTANCE: usize = 8;
+/// Spare output capacity the chunked backward copy may overwrite.
+const COPY_CHUNK_SLACK: usize = 16;
+/// Longer non-overlapping copies go through `memcpy`.
+const CHUNKED_COPY_MAX_DISJOINT_LEN: usize = 64;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DistanceRing {
@@ -113,7 +117,10 @@ pub(crate) fn decode_meta_block_with_base_and_policy(
             needed: global_needed,
         });
     }
-    output.reserve(needed - output.len());
+    if output.capacity() < needed {
+        // Growing anyway, so add slack for the chunked backward copy.
+        output.reserve(needed - output.len() + COPY_CHUNK_SLACK);
+    }
 
     let mut header = read_header(reader)?;
 
@@ -147,6 +154,10 @@ pub(crate) fn decode_meta_block_with_base_and_policy(
     )
 }
 
+/// Runs the command loop on a local copy of `reader`. The loop never takes
+/// the copy's address outside inlined code, so its fields stay in registers.
+/// Output stores through raw pointers would otherwise force reader fields
+/// back to memory after each write.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 fn decode_meta_block_body(
@@ -163,35 +174,71 @@ fn decode_meta_block_body(
     raw_dictionary: RawDictionary<'_>,
     distance_policy: DistancePolicy,
 ) -> Result<bool, DecompressError> {
+    let mut local = reader.clone();
+    let result = decode_commands(
+        &mut local,
+        output,
+        needed,
+        output_base,
+        window_size,
+        header,
+        literal_codes,
+        command_codes,
+        distance_codes,
+        distances,
+        raw_dictionary,
+        distance_policy,
+    );
+    *reader = local;
+    result
+}
+
+/// Calls `f` with a copy of `reader` and stores the copy back. Use it around
+/// calls that are not inlined, so the caller's reader keeps its fields in
+/// registers.
+#[inline(always)]
+fn with_reader_copy<'a, T>(
+    reader: &mut BitReader<'a>,
+    f: impl FnOnce(&mut BitReader<'a>) -> T,
+) -> T {
+    let mut copy = reader.clone();
+    let result = f(&mut copy);
+    *reader = copy;
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn decode_commands(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    needed: usize,
+    output_base: usize,
+    window_size: usize,
+    header: &mut CompressedHeader,
+    literal_codes: &[PrefixCode],
+    command_codes: &[PrefixCode],
+    distance_codes: &[PrefixCode],
+    distances: &mut DistanceRing,
+    raw_dictionary: RawDictionary<'_>,
+    distance_policy: DistancePolicy,
+) -> Result<bool, DecompressError> {
     let single_command_block = header.commands.types() == 1;
     let single_distance_block = header.distances.types() == 1;
     let single_distance_tree = distance_codes.len() == 1;
-    let command_codes_all_non_single = command_codes
-        .iter()
-        .all(|code| code.single_symbol().is_none());
-    let distance_codes_all_non_single = distance_codes
-        .iter()
-        .all(|code| code.single_symbol().is_none());
     let single_literal_block = header.literals.types() == 1;
     let single_literal_code = if single_literal_block && literal_codes.len() == 1 {
         Some(&literal_codes[0])
     } else {
         None
     };
-    let single_literal_block_max_bits = if single_literal_block && single_literal_code.is_none() {
-        Some(
-            literal_codes
-                .iter()
-                .map(|code| usize::from(code.max_bits()))
-                .max()
-                .unwrap_or(0),
-        )
-    } else {
-        None
-    };
+    let literal_max_bits = literal_codes
+        .iter()
+        .map(|code| usize::from(code.max_bits()))
+        .max()
+        .unwrap_or(0);
     let literal_shape = LiteralDecodeShape {
-        single_block_max_bits: single_literal_block_max_bits,
-        uniform_context_mode: uniform_literal_context_mode(header),
+        max_bits: literal_max_bits,
     };
     let no_postfix_distances = header.npostfix == 0 && header.ndirect == 0;
     let mut has_copy = false;
@@ -202,11 +249,7 @@ fn decode_meta_block_body(
         } else {
             header.commands.current_type_multi(reader)?
         };
-        let command = read_command(
-            reader,
-            &command_codes[command_block_type],
-            command_codes_all_non_single,
-        )?;
+        let command = read_command(reader, &command_codes[command_block_type])?;
         if !single_command_block {
             header.commands.consume_one_multi();
         }
@@ -261,11 +304,7 @@ fn decode_meta_block_body(
             if !single_distance_block {
                 header.distances.consume_one();
             }
-            decode_prefix_symbol(
-                reader,
-                &distance_codes[tree_index],
-                distance_codes_all_non_single,
-            )? as usize
+            decode_prefix_symbol(reader, &distance_codes[tree_index])? as usize
         };
         if distance_policy == DistancePolicy::LocalOnly && distance_symbol < 16 {
             return Err(BurliError::Format(
@@ -314,8 +353,8 @@ struct CopyRequest {
 
 #[derive(Clone, Copy, Debug)]
 struct LiteralDecodeShape {
-    single_block_max_bits: Option<usize>,
-    uniform_context_mode: Option<u8>,
+    /// Longest literal code length across all literal trees.
+    max_bits: usize,
 }
 
 fn copy_from_distance(
@@ -379,6 +418,24 @@ fn copy_from_distance(
 
     checked_backward_copy_end(produced, request.needed, request.len)?;
 
+    if request.distance >= 8
+        && (request.len <= CHUNKED_COPY_MAX_DISJOINT_LEN || request.distance < request.len)
+        && output.capacity() - produced >= request.len + COPY_CHUNK_SLACK
+    {
+        // SAFETY: `8 <= distance <= produced` was checked above, and the
+        // capacity check covers the rounded-up chunk overshoot.
+        #[cfg(not(feature = "paranoid"))]
+        unsafe {
+            append_backward_copy_chunked(output, request.distance, request.len);
+        }
+        #[cfg(feature = "paranoid")]
+        append_backward_copy_chunked(output, request.distance, request.len);
+        if request.push_distance {
+            distances.push(request.distance);
+        }
+        return Ok(());
+    }
+
     if request.distance == 1 {
         let byte = output[produced - 1];
         output.resize(produced + request.len, byte);
@@ -418,6 +475,93 @@ fn copy_from_distance(
         distances.push(request.distance);
     }
     Ok(())
+}
+
+/// Copies `len` bytes from `distance` back in fixed 8- or 16-byte chunks.
+///
+/// The last chunk may write up to 15 bytes past `old_len + len`, into spare
+/// capacity. A chunk never wider than `distance` reads only bytes that are
+/// already initialized, so overlapping copies repeat the pattern correctly.
+#[cfg(not(feature = "paranoid"))]
+#[inline(always)]
+unsafe fn append_backward_copy_chunked(output: &mut Vec<u8>, distance: usize, len: usize) {
+    let old_len = output.len();
+    debug_assert!(chunked_backward_copy_contract(
+        old_len,
+        output.capacity(),
+        distance,
+        len,
+    ));
+
+    // SAFETY: the caller proves `8 <= distance <= old_len` and
+    // `capacity - old_len >= len + COPY_CHUNK_SLACK`. Chunk `i` reads
+    // `old_len - distance + i * w..` for `w` bytes, which ends at or before
+    // `old_len + i * w` because `w <= distance`. Earlier chunks initialized
+    // that range. Chunk `i` writes `old_len + i * w..` for `w` bytes, and
+    // `i * w < len`, so every write stays below `old_len + len + 16`.
+    unsafe {
+        let base = output.as_mut_ptr();
+        let mut src = base.add(old_len - distance);
+        let mut dst = base.add(old_len);
+        let end = dst.add(len);
+        if distance >= 16 {
+            while dst < end {
+                dst.cast::<[u8; 16]>()
+                    .write_unaligned(src.cast::<[u8; 16]>().read_unaligned());
+                src = src.add(16);
+                dst = dst.add(16);
+            }
+        } else {
+            while dst < end {
+                dst.cast::<[u8; 8]>()
+                    .write_unaligned(src.cast::<[u8; 8]>().read_unaligned());
+                src = src.add(8);
+                dst = dst.add(8);
+            }
+        }
+        output.set_len(old_len + len);
+    }
+}
+
+/// Safe form of the chunked copy. Each fixed-size chunk goes through
+/// `extend_from_slice`, which compiles to one store instead of a `memcpy`
+/// call. `truncate` then drops the overshoot. The caller's capacity check
+/// keeps the overshoot from reallocating.
+#[cfg(feature = "paranoid")]
+#[inline(always)]
+fn append_backward_copy_chunked(output: &mut Vec<u8>, distance: usize, len: usize) {
+    let end = output.len() + len;
+    let mut src = output.len() - distance;
+    if distance >= 16 {
+        while output.len() < end {
+            let chunk: [u8; 16] = output[src..src + 16].try_into().unwrap();
+            output.extend_from_slice(&chunk);
+            src += 16;
+        }
+    } else {
+        while output.len() < end {
+            let chunk: [u8; 8] = output[src..src + 8].try_into().unwrap();
+            output.extend_from_slice(&chunk);
+            src += 8;
+        }
+    }
+    output.truncate(end);
+}
+
+#[cfg(not(feature = "paranoid"))]
+#[inline(always)]
+fn chunked_backward_copy_contract(
+    old_len: usize,
+    capacity: usize,
+    distance: usize,
+    len: usize,
+) -> bool {
+    distance >= 8
+        && distance <= old_len
+        && capacity >= old_len
+        && len
+            .checked_add(COPY_CHUNK_SLACK)
+            .is_some_and(|needed| needed <= capacity - old_len)
 }
 
 #[cfg(not(feature = "paranoid"))]
@@ -611,7 +755,7 @@ impl BlockCategory {
     fn current_type_multi(&mut self, reader: &mut BitReader<'_>) -> Result<usize, DecompressError> {
         debug_assert!(self.block_types != 1);
         if self.remaining == 0 {
-            self.switch(reader)?;
+            with_reader_copy(reader, |reader| self.switch(reader))?;
         }
         Ok(self.current_type)
     }
@@ -622,6 +766,13 @@ impl BlockCategory {
             return Ok(0);
         }
         self.current_type_multi(reader)
+    }
+
+    #[inline(always)]
+    fn consume_multi(&mut self, count: usize) {
+        debug_assert!(self.block_types != 1);
+        debug_assert!(count <= self.remaining);
+        self.remaining -= count;
     }
 
     #[inline(always)]
@@ -638,6 +789,7 @@ impl BlockCategory {
     }
 
     #[cold]
+    #[inline(never)]
     fn switch(&mut self, reader: &mut BitReader<'_>) -> Result<(), DecompressError> {
         let type_code = self
             .type_code
@@ -664,11 +816,6 @@ impl BlockCategory {
         self.remaining = read_block_count(reader, count_code)?;
         Ok(())
     }
-}
-
-fn uniform_literal_context_mode(header: &CompressedHeader) -> Option<u8> {
-    let (&first, rest) = header.context_modes.split_first()?;
-    rest.iter().all(|&mode| mode == first).then_some(first)
 }
 
 fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, DecompressError> {
@@ -1037,12 +1184,12 @@ const COPY_LENGTH_PREFIXES: [(usize, u8); 24] = [
     (2118, 24),
 ];
 
+#[inline(always)]
 fn read_command(
     reader: &mut BitReader<'_>,
     command_code: &PrefixCode,
-    known_non_single: bool,
 ) -> Result<Command, DecompressError> {
-    let code = usize::from(decode_prefix_symbol(reader, command_code, known_non_single)? & 0x0fff);
+    let code = usize::from(decode_prefix_symbol(reader, command_code)? & 0x0fff);
     debug_assert!(code < COMMAND_ALPHABET_SIZE);
     let prefix = COMMAND_PREFIXES[code];
     let insert_extra_bits = prefix.insert_extra_bits();
@@ -1068,17 +1215,15 @@ fn read_command(
     })
 }
 
+/// Decodes a command or distance symbol. The unconditional refill also
+/// covers the extra bits that follow, so their reads rarely refill again.
 #[inline(always)]
 fn decode_prefix_symbol(
     reader: &mut BitReader<'_>,
     code: &PrefixCode,
-    known_non_single: bool,
 ) -> Result<u16, DecompressError> {
-    if known_non_single {
-        code.decode_non_single(reader)
-    } else {
-        code.decode(reader)
-    }
+    reader.refill();
+    code.decode_refilled(reader)
 }
 
 #[cfg(test)]
@@ -1118,6 +1263,7 @@ fn command_code_parts(code: usize) -> Result<(usize, usize, bool, usize), Decomp
     ))
 }
 
+#[inline(always)]
 fn copy_literals(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
@@ -1145,97 +1291,33 @@ fn copy_literals(
             literal_codes,
             &header.literal_context_map[..64],
             header.context_modes[0],
-            shape.single_block_max_bits.unwrap_or(0),
+            shape.max_bits,
         );
     }
 
-    if let Some(mode) = shape.uniform_context_mode {
-        return copy_literals_multi_block_uniform_mode(
+    // Decode block by block so that the context map and mode are fixed for
+    // each run.
+    let mut remaining = count;
+    while remaining != 0 {
+        let block_type = header.literals.current_type_multi(reader)?;
+        let run = remaining.min(header.literals.remaining);
+        let map_start = block_type * 64;
+        copy_literals_single_block(
             reader,
             output,
-            count,
+            run,
             literal_codes,
-            header,
-            mode,
-        );
-    }
-
-    let mut previous = previous_literal_bytes(output);
-    for _ in 0..count {
-        let literal_block_type = header.literals.current_type_multi(reader)?;
-        let context = literal_context(previous, header, literal_block_type);
-        let tree_index = header.literal_context_map[literal_block_type * 64 + context];
-        let literal = read_literal(reader, &literal_codes[tree_index])?;
-        header.literals.consume_one_multi();
-        output.push(literal);
-        previous = (literal, previous.0);
+            &header.literal_context_map[map_start..map_start + 64],
+            header.context_modes[block_type],
+            shape.max_bits,
+        )?;
+        header.literals.consume_multi(run);
+        remaining -= run;
     }
     Ok(())
 }
 
-fn copy_literals_multi_block_uniform_mode(
-    reader: &mut BitReader<'_>,
-    output: &mut Vec<u8>,
-    count: usize,
-    literal_codes: &[PrefixCode],
-    header: &mut CompressedHeader,
-    mode: u8,
-) -> Result<(), DecompressError> {
-    let mut previous = previous_literal_bytes(output);
-    match mode {
-        0 => {
-            for _ in 0..count {
-                let literal_block_type = header.literals.current_type_multi(reader)?;
-                let context = usize::from(previous.0 & 0x3f);
-                let tree_index = header.literal_context_map[literal_block_type * 64 + context];
-                let literal = read_literal(reader, &literal_codes[tree_index])?;
-                header.literals.consume_one_multi();
-                output.push(literal);
-                previous = (literal, previous.0);
-            }
-        }
-        1 => {
-            for _ in 0..count {
-                let literal_block_type = header.literals.current_type_multi(reader)?;
-                let context = usize::from(previous.0 >> 2);
-                let tree_index = header.literal_context_map[literal_block_type * 64 + context];
-                let literal = read_literal(reader, &literal_codes[tree_index])?;
-                header.literals.consume_one_multi();
-                output.push(literal);
-                previous = (literal, previous.0);
-            }
-        }
-        2 => {
-            for _ in 0..count {
-                let literal_block_type = header.literals.current_type_multi(reader)?;
-                let context = crate::context_lookup::CONTEXT_PAIR_LOOKUP[0]
-                    [(usize::from(previous.0) << 8) | usize::from(previous.1)];
-                let tree_index =
-                    header.literal_context_map[literal_block_type * 64 + usize::from(context)];
-                let literal = read_literal(reader, &literal_codes[tree_index])?;
-                header.literals.consume_one_multi();
-                output.push(literal);
-                previous = (literal, previous.0);
-            }
-        }
-        3 => {
-            for _ in 0..count {
-                let literal_block_type = header.literals.current_type_multi(reader)?;
-                let context = crate::context_lookup::CONTEXT_PAIR_LOOKUP[1]
-                    [(usize::from(previous.0) << 8) | usize::from(previous.1)];
-                let tree_index =
-                    header.literal_context_map[literal_block_type * 64 + usize::from(context)];
-                let literal = read_literal(reader, &literal_codes[tree_index])?;
-                header.literals.consume_one_multi();
-                output.push(literal);
-                previous = (literal, previous.0);
-            }
-        }
-        _ => return Err(BurliError::Format("invalid literal context mode")),
-    }
-    Ok(())
-}
-
+#[inline(always)]
 fn copy_literals_single_code(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
@@ -1288,16 +1370,12 @@ unsafe fn copy_literals_single_code_trusted_fast(
     unsafe {
         let ptr = output.as_mut_ptr().add(old_len);
         let mut index = 0;
-        while index + 4 <= count {
-            ptr.add(index)
-                .write(code.decode_non_single_trusted_fast(reader) as u8);
-            ptr.add(index + 1)
-                .write(code.decode_non_single_trusted_fast(reader) as u8);
-            ptr.add(index + 2)
-                .write(code.decode_non_single_trusted_fast(reader) as u8);
-            ptr.add(index + 3)
-                .write(code.decode_non_single_trusted_fast(reader) as u8);
-            index += 4;
+        while index + LITERALS_PER_REFILL <= count {
+            let [a, b, c] = decode_three_literals(reader, code);
+            ptr.add(index).write(a);
+            ptr.add(index + 1).write(b);
+            ptr.add(index + 2).write(c);
+            index += LITERALS_PER_REFILL;
         }
         while index < count {
             ptr.add(index)
@@ -1308,6 +1386,23 @@ unsafe fn copy_literals_single_code_trusted_fast(
     }
 }
 
+/// Three 15-bit codes fit in the 57 bits one padded peek provides.
+const LITERALS_PER_REFILL: usize = 3;
+
+/// Decodes three literals from one bit refill. The caller proves that the
+/// input holds `3 * code.max_bits()` bits.
+#[inline(always)]
+fn decode_three_literals(reader: &mut BitReader<'_>, code: &PrefixCode) -> [u8; 3] {
+    let mut bits = reader.peek_bits_padded();
+    let (a, a_len) = code.lookup_bits(bits);
+    bits >>= a_len;
+    let (b, b_len) = code.lookup_bits(bits);
+    bits >>= b_len;
+    let (c, c_len) = code.lookup_bits(bits);
+    reader.drop_bits_trusted(a_len + b_len + c_len);
+    [a as u8, b as u8, c as u8]
+}
+
 #[cfg(feature = "paranoid")]
 #[inline(always)]
 fn copy_literals_single_code_trusted_fast(
@@ -1316,7 +1411,12 @@ fn copy_literals_single_code_trusted_fast(
     count: usize,
     code: &PrefixCode,
 ) {
-    for _ in 0..count {
+    let mut remaining = count;
+    while remaining >= LITERALS_PER_REFILL {
+        output.extend_from_slice(&decode_three_literals(reader, code));
+        remaining -= LITERALS_PER_REFILL;
+    }
+    for _ in 0..remaining {
         output.push(code.decode_non_single_trusted_fast(reader) as u8);
     }
 }
@@ -1327,6 +1427,7 @@ fn literal_bulk_write_contract(old_len: usize, capacity: usize, count: usize) ->
     old_len <= capacity && count <= capacity - old_len
 }
 
+#[inline(always)]
 fn copy_literals_single_code_checked(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
@@ -1343,6 +1444,7 @@ fn copy_literals_single_code_checked(
     copy_literals_single_code(reader, output, count, code)
 }
 
+#[inline(always)]
 fn copy_literals_single_block(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
@@ -1403,6 +1505,7 @@ fn copy_literals_single_block(
     Ok(())
 }
 
+#[inline(always)]
 fn copy_literals_single_block_trusted(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
@@ -1411,45 +1514,69 @@ fn copy_literals_single_block_trusted(
     context_map: &[usize],
     mode: u8,
 ) {
-    let mut previous = previous_literal_bytes(output);
     match mode {
-        0 => {
-            for _ in 0..count {
-                let tree_index = context_map[usize::from(previous.0 & 0x3f)];
-                let literal = read_literal_trusted(reader, &literal_codes[tree_index]);
-                output.push(literal);
-                previous = (literal, previous.0);
-            }
-        }
-        1 => {
-            for _ in 0..count {
-                let tree_index = context_map[usize::from(previous.0 >> 2)];
-                let literal = read_literal_trusted(reader, &literal_codes[tree_index]);
-                output.push(literal);
-                previous = (literal, previous.0);
-            }
-        }
-        2 => {
-            for _ in 0..count {
-                let context = crate::context_lookup::CONTEXT_PAIR_LOOKUP[0]
-                    [(usize::from(previous.0) << 8) | usize::from(previous.1)];
-                let tree_index = context_map[usize::from(context)];
-                let literal = read_literal_trusted(reader, &literal_codes[tree_index]);
-                output.push(literal);
-                previous = (literal, previous.0);
-            }
-        }
-        3 => {
-            for _ in 0..count {
-                let context = crate::context_lookup::CONTEXT_PAIR_LOOKUP[1]
-                    [(usize::from(previous.0) << 8) | usize::from(previous.1)];
-                let tree_index = context_map[usize::from(context)];
-                let literal = read_literal_trusted(reader, &literal_codes[tree_index]);
-                output.push(literal);
-                previous = (literal, previous.0);
-            }
-        }
+        0 => copy_literals_single_block_trusted_mode::<0>(
+            reader,
+            output,
+            count,
+            literal_codes,
+            context_map,
+        ),
+        1 => copy_literals_single_block_trusted_mode::<1>(
+            reader,
+            output,
+            count,
+            literal_codes,
+            context_map,
+        ),
+        2 => copy_literals_single_block_trusted_mode::<2>(
+            reader,
+            output,
+            count,
+            literal_codes,
+            context_map,
+        ),
+        3 => copy_literals_single_block_trusted_mode::<3>(
+            reader,
+            output,
+            count,
+            literal_codes,
+            context_map,
+        ),
         _ => unreachable!(),
+    }
+}
+
+#[inline(always)]
+fn copy_literals_single_block_trusted_mode<const MODE: u8>(
+    reader: &mut BitReader<'_>,
+    output: &mut Vec<u8>,
+    count: usize,
+    literal_codes: &[PrefixCode],
+    context_map: &[usize],
+) {
+    let mut previous = previous_literal_bytes(output);
+    let mut remaining = count;
+    // One refill covers three codes of at most 15 bits. It replaces a
+    // per-literal "buffer low" branch that mispredicts often.
+    while remaining >= LITERALS_PER_REFILL {
+        reader.refill();
+        for _ in 0..LITERALS_PER_REFILL {
+            let code = &literal_codes[context_map[literal_context_for_mode(previous, MODE)]];
+            let literal = match code.single_symbol() {
+                Some(symbol) => symbol as u8,
+                None => code.decode_non_single_buffered(reader) as u8,
+            };
+            output.push(literal);
+            previous = (literal, previous.0);
+        }
+        remaining -= LITERALS_PER_REFILL;
+    }
+    for _ in 0..remaining {
+        let code = &literal_codes[context_map[literal_context_for_mode(previous, MODE)]];
+        let literal = read_literal_trusted(reader, code);
+        output.push(literal);
+        previous = (literal, previous.0);
     }
 }
 
@@ -1465,11 +1592,6 @@ fn read_literal_trusted(reader: &mut BitReader<'_>, code: &PrefixCode) -> u8 {
     } else {
         code.decode_non_single_trusted_fast(reader) as u8
     }
-}
-
-#[inline(always)]
-fn literal_context(previous: (u8, u8), header: &CompressedHeader, block_type: usize) -> usize {
-    literal_context_for_mode(previous, header.context_modes[block_type])
 }
 
 #[inline(always)]
@@ -1501,6 +1623,7 @@ fn literal_context_for_mode(previous: (u8, u8), mode: u8) -> usize {
     .into()
 }
 
+#[inline(always)]
 fn read_distance(
     reader: &mut BitReader<'_>,
     symbol: usize,
@@ -1764,6 +1887,40 @@ mod tests {
         );
         let mut reader = BitReader::new(&[]);
         assert_eq!(read_distance(&mut reader, 0, 0, 0, &distances).unwrap(), 16);
+    }
+
+    #[test]
+    fn backward_copy_with_spare_capacity_matches_byte_copy() {
+        let history: Vec<u8> = (0..40_u8).map(|byte| byte.wrapping_mul(37)).collect();
+        for distance in 8..=history.len() {
+            for len in 1..=100 {
+                let mut expected = history.clone();
+                for _ in 0..len {
+                    expected.push(expected[expected.len() - distance]);
+                }
+
+                let mut output = Vec::with_capacity(history.len() + len + COPY_CHUNK_SLACK);
+                output.extend_from_slice(&history);
+                let mut distances = DistanceRing::new();
+                copy_from_distance(
+                    &mut output,
+                    CopyRequest {
+                        needed: history.len() + len,
+                        window_size: 1 << 16,
+                        output_base: 0,
+                        distance,
+                        len,
+                        push_distance: true,
+                    },
+                    &mut distances,
+                    RawDictionary::empty(),
+                    DistancePolicy::Standard,
+                )
+                .unwrap();
+
+                assert_eq!(output, expected, "distance {distance} len {len}");
+            }
+        }
     }
 
     #[test]

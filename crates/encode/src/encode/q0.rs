@@ -3,7 +3,7 @@ use alloc::{vec, vec::Vec};
 use burli_core::{BurliError, CompressError, bits::BitWriter};
 
 use super::{
-    COMMAND_ALPHABET_SIZE, DenseSymbolCode, INITIAL_LAST_DISTANCE, LITERAL_ALPHABET_SIZE,
+    COMMAND_ALPHABET_SIZE, DenseSymbolCode, DistanceRing, LITERAL_ALPHABET_SIZE,
     MAX_META_BLOCK_SIZE, PrefixCodeScratch, Token, append_pending_bits, command_symbol_for_insert,
     command_symbol_for_insert_copy, copy_length_code, distance_code, hash_word_q0,
     insert_length_code, is_match5, match_len, next_hash_word, read_u64_le,
@@ -111,9 +111,9 @@ impl Batch {
         self.records.push(Record {
             insert_start: token.insert_start as u32,
             insert_len: token.insert_len as u32,
-            insert_extra: insert.extra as u32,
-            copy_extra: copy.map_or(0, |copy| copy.extra as u32),
-            distance_extra: distance.map_or(0, |distance| distance.extra as u32),
+            insert_extra: insert.extra,
+            copy_extra: copy.map_or(0, |copy| copy.extra),
+            distance_extra: distance.map_or(0, |distance| distance.extra),
             meta: pack_record_meta(
                 u32::from(command_symbol),
                 distance_symbol,
@@ -372,12 +372,14 @@ fn unpack_record_meta(meta: u32) -> RecordMeta {
     }
 }
 
+/// Collect copies for one meta-block and advance `distance_ring` past them.
 pub(super) fn collect<'a>(
     input: &[u8],
     max_backward_distance: usize,
+    distance_ring: &mut DistanceRing,
     workspace: &'a mut Workspace,
 ) -> Result<&'a Batch, CompressError> {
-    workspace.collect(input, max_backward_distance)
+    workspace.collect(input, max_backward_distance, distance_ring)
 }
 
 pub(super) fn write(
@@ -394,6 +396,7 @@ impl Workspace {
         &mut self,
         input: &[u8],
         max_backward_distance: usize,
+        distance_ring: &mut DistanceRing,
     ) -> Result<&Batch, CompressError> {
         self.reset(input.len() / 32);
         if input.len() < 8 {
@@ -449,9 +452,11 @@ impl Workspace {
                         distance_code: None,
                         use_last_distance: false,
                     };
-                    token.use_last_distance = distance
-                        == last_distance.unwrap_or(INITIAL_LAST_DISTANCE)
-                        && token_supports_last_distance(token);
+                    token.use_last_distance =
+                        distance == distance_ring.last() && token_supports_last_distance(token);
+                    if !token.use_last_distance {
+                        distance_ring.push(distance);
+                    }
                     batch.push(input, token)?;
                     store_match_range(input, table, pos + 1, copy_len.saturating_sub(1));
                     pos += copy_len;

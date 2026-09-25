@@ -82,9 +82,18 @@ struct CorpusEntry {
 #[derive(Clone)]
 struct BenchInput {
     name: String,
+    /// One slice, or for small inputs up to `SMALL_SLICES` consecutive
+    /// slices of `slice_len` bytes each.
     data: Vec<u8>,
+    slice_len: usize,
     sha256: String,
     is_small: bool,
+}
+
+impl BenchInput {
+    fn slices(&self) -> Vec<&[u8]> {
+        self.data.chunks_exact(self.slice_len).collect()
+    }
 }
 
 #[derive(Serialize)]
@@ -394,10 +403,17 @@ const CORPUS: &[CorpusEntry] = &[
 ];
 
 const SMALL_SIZES: &[usize] = &[
-    512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072, 262_144,
+    512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072, 262_144, 524_288, 1_048_576,
 ];
-const CHART_SMALL_FILES: &[&str] = &["bootstrap-js", "bootstrap-css", "json-citm"];
-const CHART_SMALL_SIZES: &[usize] = &[512, 1024, 2048, 4096, 8192, 16_384, 32_768, 65_536, 131_072];
+/// Distinct consecutive slices per small input. Each timed pass walks all of
+/// them, so no codec sees the same input twice in a row.
+const SMALL_SLICES: usize = 64;
+const CHART_SMALL_FILES: &[&str] = &[
+    "silesia-dickens",
+    "silesia-nci",
+    "silesia-xml",
+    "silesia-x-ray",
+];
 const DEFAULT_TARGET_NS: u64 = 30_000_000;
 const DEFAULT_ROUNDS: usize = 3;
 const DEFAULT_WARMUP: usize = 1;
@@ -474,7 +490,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut args = Args {
-        impls: vec!["burli".to_owned(), "rust-brotli".to_owned()],
+        impls: vec![
+            "burli".to_owned(),
+            "rust-brotli".to_owned(),
+            "mbrotli".to_owned(),
+        ],
         qualities: vec![DEFAULT_QUALITY],
         corpus: CorpusSelection::Web,
         files: None,
@@ -500,6 +520,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
                         "google-brotli".to_owned(),
                         "burli".to_owned(),
                         "rust-brotli".to_owned(),
+                        "mbrotli".to_owned(),
                     ]
                 } else {
                     value.split(',').map(str::to_owned).collect()
@@ -524,13 +545,14 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             "--small-only" => args.small_only = true,
             "--chart-small-only" | "--small-chart-only" => {
                 args.small_only = true;
+                args.corpus = CorpusSelection::Silesia;
                 args.files = Some(
                     CHART_SMALL_FILES
                         .iter()
                         .map(|name| (*name).to_owned())
                         .collect(),
                 );
-                args.small_sizes = CHART_SMALL_SIZES.to_vec();
+                args.small_sizes = SMALL_SIZES.to_vec();
             }
             "--quick" => {
                 args.bench = BenchConfig {
@@ -573,7 +595,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
 
 fn print_help() {
     println!(
-        "Usage: burli_bench [--impl burli|rust-brotli|google-brotli|all] \
+        "Usage: burli_bench [--impl burli|rust-brotli|mbrotli|google-brotli|google-brotli-burli|google-brotli-rust-brotli|google-brotli-mbrotli|all] \
          [--qualities LIST] [--corpus web|silesia|all] [--files LIST] \
          [--small-only] [--chart-small-only] [--small-sizes LIST] [--quick] \
          [--target-ms N] [--target-ns N] [--rounds N] [--warmup N] \
@@ -685,18 +707,23 @@ fn load_inputs(args: &Args) -> Result<Vec<BenchInput>, Box<dyn std::error::Error
         let sha256 = sha256_hex(&data);
         if args.small_only {
             for &size in &args.small_sizes {
-                if size <= data.len() {
-                    inputs.push(BenchInput {
-                        name: format!("{}_{}", entry.label, size_label(size)),
-                        data: data[..size].to_vec(),
-                        sha256: sha256_hex(&data[..size]),
-                        is_small: true,
-                    });
+                let count = (data.len() / size).min(SMALL_SLICES);
+                if count == 0 {
+                    continue;
                 }
+                let slices = data[..count * size].to_vec();
+                inputs.push(BenchInput {
+                    name: format!("{}_{}", entry.label, size_label(size)),
+                    sha256: sha256_hex(&slices),
+                    data: slices,
+                    slice_len: size,
+                    is_small: true,
+                });
             }
         } else {
             inputs.push(BenchInput {
                 name: entry.label.to_owned(),
+                slice_len: data.len(),
                 data,
                 sha256,
                 is_small: false,
@@ -826,9 +853,10 @@ fn profile_encode_only(
     quality: u8,
     bench: BenchConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let compressed = compress_codec(codec, &input.data, quality)?;
-    verify_decodes(codec, &compressed, input)?;
-    let compress_ns = bench_compress(codec, &input.data, quality, bench)?;
+    let slices = input.slices();
+    let frames = compress_slices(codec, &slices, quality)?;
+    verify_decodes(codec, &frames, &slices, &input.name)?;
+    let compress_ns = bench_compress(codec, &slices, quality, bench)?;
     let mbs = input.data.len() as f64 / compress_ns * 1000.0;
     println!(
         "{} q{} {}: {} -> {} bytes, encode {:.1} MB/s",
@@ -836,7 +864,7 @@ fn profile_encode_only(
         quality,
         input.name,
         input.data.len(),
-        compressed.len(),
+        frames.iter().map(Vec::len).sum::<usize>(),
         mbs
     );
     Ok(())
@@ -852,7 +880,7 @@ fn print_q0_store_stats(
         }
         let options = burli::Options::default().with_quality(quality)?;
         for input in inputs {
-            let stats = burli::encode::diagnostics::q0_store_stats(&input.data, &options)?;
+            let stats = burli_encode::diagnostics::q0_store_stats(&input.data, &options)?;
             println!(
                 "q0-store {}: blocks={} sampled={} candidates={} stored={}/{} \
                  stored_bytes={} sampled_positions={} sampled_load_bytes={} \
@@ -885,9 +913,10 @@ fn profile_decode_only(
     quality: u8,
     bench: BenchConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let compressed = compress_codec(codec, &input.data, quality)?;
-    verify_decodes(codec, &compressed, input)?;
-    let decompress_ns = bench_decompress(codec, &compressed, input.data.len(), bench)?;
+    let slices = input.slices();
+    let frames = compress_slices(codec, &slices, quality)?;
+    verify_decodes(codec, &frames, &slices, &input.name)?;
+    let decompress_ns = bench_decompress(codec, &frames, &slices, bench)?;
     let mbs = input.data.len() as f64 / decompress_ns * 1000.0;
     println!(
         "{} q{} {}: {} <- {} bytes, decode {:.1} MB/s",
@@ -895,7 +924,7 @@ fn profile_decode_only(
         quality,
         input.name,
         input.data.len(),
-        compressed.len(),
+        frames.iter().map(Vec::len).sum::<usize>(),
         mbs
     );
     Ok(())
@@ -907,16 +936,17 @@ fn bench_codec(
     quality: u8,
     bench: BenchConfig,
 ) -> Result<Option<BenchResult>, Box<dyn std::error::Error>> {
-    let compressed = match compress_codec(codec, &input.data, quality) {
-        Ok(output) => output,
+    let slices = input.slices();
+    let frames = match compress_slices(codec, &slices, quality) {
+        Ok(frames) => frames,
         Err(error) if is_unsupported_burli(error.as_ref()) => return Ok(None),
         Err(error) => return Err(error),
     };
-    verify_decodes(codec, &compressed, input)?;
+    verify_decodes(codec, &frames, &slices, &input.name)?;
 
-    let compress_ns = bench_compress(codec, &input.data, quality, bench)?;
+    let compress_ns = bench_compress(codec, &slices, quality, bench)?;
 
-    let decompress_ns = bench_decompress(codec, &compressed, input.data.len(), bench)?;
+    let decompress_ns = bench_decompress(codec, &frames, &slices, bench)?;
 
     let encoded_by = encoded_by_label(codec);
     let decoded_by = decoded_by_label(codec);
@@ -928,7 +958,7 @@ fn bench_codec(
         input: input.name.clone(),
         quality,
         input_size: input.data.len(),
-        compressed_size: compressed.len(),
+        compressed_size: frames.iter().map(Vec::len).sum(),
         compress_ns,
         decompress_ns,
         input_sha256: input.sha256.clone(),
@@ -937,27 +967,47 @@ fn bench_codec(
     }))
 }
 
+/// Times passes that decode every frame of `frames`, the output for
+/// `slices`, in turn.
 fn bench_decompress(
     codec: &str,
-    compressed: &[u8],
-    decoded_len: usize,
+    frames: &[Vec<u8>],
+    slices: &[&[u8]],
     bench: BenchConfig,
 ) -> Result<f64, Box<dyn std::error::Error>> {
+    let jobs = frames
+        .iter()
+        .zip(slices)
+        .map(|(frame, slice)| (frame.as_slice(), slice.len()))
+        .collect::<Vec<_>>();
     match codec {
-        "burli" => Ok(bench_loop(bench, || {
-            let _ = burli_decompress_with_limit(compressed, decoded_len);
+        "burli" | "google-brotli-burli" => Ok(time_passes(bench, &jobs, |&(frame, len)| {
+            burli_decompress_with_limit(frame, len)
         })),
-        "google-brotli" => Ok(bench_loop(bench, || {
-            let _ = google_brotli_decompress(compressed, decoded_len);
+        "google-brotli" => Ok(time_passes(bench, &jobs, |&(frame, len)| {
+            google_brotli_decompress(frame, len)
         })),
-        "google-brotli-burli" => Ok(bench_loop(bench, || {
-            let _ = burli_decompress_with_limit(compressed, decoded_len);
+        "mbrotli" | "google-brotli-mbrotli" => Ok(time_passes(bench, &jobs, |&(frame, _)| {
+            mbrotli_decompress(frame)
         })),
-        "rust-brotli" => Ok(bench_loop(bench, || {
-            let _ = rust_brotli_decompress(compressed);
-        })),
+        "rust-brotli" | "google-brotli-rust-brotli" => {
+            Ok(time_passes(bench, &jobs, |&(frame, _)| {
+                rust_brotli_decompress(frame)
+            }))
+        }
         other => Err(format!("unknown impl: {other}").into()),
     }
+}
+
+fn compress_slices(
+    codec: &str,
+    slices: &[&[u8]],
+    quality: u8,
+) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+    slices
+        .iter()
+        .map(|slice| compress_codec(codec, slice, quality))
+        .collect()
 }
 
 fn compress_codec(
@@ -969,29 +1019,36 @@ fn compress_codec(
         "burli" => burli_compress(input, quality).map_err(Into::into),
         "google-brotli" => google_brotli_compress(input, quality),
         "google-brotli-burli" => google_brotli_compress(input, quality),
+        "google-brotli-mbrotli" => google_brotli_compress(input, quality),
+        "google-brotli-rust-brotli" => google_brotli_compress(input, quality),
         "rust-brotli" => rust_brotli_compress(input, quality),
+        "mbrotli" => mbrotli_compress(input, quality),
         other => Err(format!("unknown impl: {other}").into()),
     }
 }
 
+/// Times passes that compress every slice of `slices` in turn.
 fn bench_compress(
     codec: &str,
-    input: &[u8],
+    slices: &[&[u8]],
     quality: u8,
     bench: BenchConfig,
 ) -> Result<f64, Box<dyn std::error::Error>> {
     match codec {
-        "burli" => Ok(bench_loop(bench, || {
-            let _ = burli_compress(input, quality);
+        "burli" => Ok(time_passes(bench, slices, |slice| {
+            burli_compress(slice, quality)
         })),
-        "google-brotli" => Ok(bench_loop(bench, || {
-            let _ = google_brotli_compress(input, quality);
+        "google-brotli"
+        | "google-brotli-burli"
+        | "google-brotli-mbrotli"
+        | "google-brotli-rust-brotli" => Ok(time_passes(bench, slices, |slice| {
+            google_brotli_compress(slice, quality)
         })),
-        "google-brotli-burli" => Ok(bench_loop(bench, || {
-            let _ = google_brotli_compress(input, quality);
+        "rust-brotli" => Ok(time_passes(bench, slices, |slice| {
+            rust_brotli_compress(slice, quality)
         })),
-        "rust-brotli" => Ok(bench_loop(bench, || {
-            let _ = rust_brotli_compress(input, quality);
+        "mbrotli" => Ok(time_passes(bench, slices, |slice| {
+            mbrotli_compress(slice, quality)
         })),
         other => Err(format!("unknown impl: {other}").into()),
     }
@@ -999,18 +1056,21 @@ fn bench_compress(
 
 fn verify_decodes(
     codec: &str,
-    compressed: &[u8],
-    input: &BenchInput,
+    frames: &[Vec<u8>],
+    slices: &[&[u8]],
+    name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let decoded = match codec {
-        "burli" => burli_decompress(compressed)?,
-        "google-brotli" => google_brotli_decompress(compressed, input.data.len())?,
-        "google-brotli-burli" => burli_decompress(compressed)?,
-        "rust-brotli" => rust_brotli_decompress(compressed)?,
-        _ => unreachable!(),
-    };
-    if decoded != input.data {
-        return Err(format!("{codec} roundtrip mismatch on {}", input.name).into());
+    for (frame, slice) in frames.iter().zip(slices) {
+        let decoded = match codec {
+            "burli" | "google-brotli-burli" => burli_decompress(frame)?,
+            "google-brotli" => google_brotli_decompress(frame, slice.len())?,
+            "mbrotli" | "google-brotli-mbrotli" => mbrotli_decompress(frame)?,
+            "rust-brotli" | "google-brotli-rust-brotli" => rust_brotli_decompress(frame)?,
+            _ => unreachable!(),
+        };
+        if decoded != *slice {
+            return Err(format!("{codec} roundtrip mismatch on {name}").into());
+        }
     }
     Ok(())
 }
@@ -1100,6 +1160,30 @@ fn rust_brotli_decompress(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::E
     Ok(output)
 }
 
+fn mbrotli_compress(input: &[u8], quality: u8) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let config = mbrotli::EncoderConfig::default()
+        .with_quality(mbrotli::Quality::try_from(quality)?)
+        .with_window(mbrotli::Window::standard(DEFAULT_WINDOW_BITS)?);
+    let mut compressor = mbrotli::Compressor::new(config)?;
+    Ok(compressor.compress(input)?)
+}
+
+fn mbrotli_decompress(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let config = mbrotli::DecoderConfig::default()
+        .with_window_limit(mbrotli::WindowLimit::standard(DEFAULT_WINDOW_BITS)?);
+    let mut decompressor = mbrotli::Decompressor::new(config)?;
+    Ok(decompressor.decompress(input)?)
+}
+
+/// Times passes that call `f` on every item of `items` in turn.
+fn time_passes<T, R>(bench: BenchConfig, items: &[T], mut f: impl FnMut(&T) -> R) -> f64 {
+    bench_loop(bench, || {
+        for item in items {
+            std::hint::black_box(f(std::hint::black_box(item)));
+        }
+    })
+}
+
 fn bench_loop<F: FnMut()>(bench: BenchConfig, mut f: F) -> f64 {
     for _ in 0..bench.warmup {
         f();
@@ -1170,6 +1254,8 @@ fn size_label(size: usize) -> String {
         65_536 => "64k".to_owned(),
         131_072 => "128k".to_owned(),
         262_144 => "256k".to_owned(),
+        524_288 => "512k".to_owned(),
+        1_048_576 => "1m".to_owned(),
         _ => format!("{size}b"),
     }
 }
@@ -1184,14 +1270,18 @@ fn codec_label(codec: &str) -> String {
 
 fn encoded_by_label(codec: &str) -> String {
     match codec {
-        "google-brotli-burli" => "google-brotli".to_owned(),
+        "google-brotli-burli" | "google-brotli-mbrotli" | "google-brotli-rust-brotli" => {
+            "google-brotli".to_owned()
+        }
         _ => codec_label(codec),
     }
 }
 
 fn decoded_by_label(codec: &str) -> String {
     match codec {
-        "google-brotli-burli" => "burli".to_owned(),
+        "google-brotli-burli" => codec_label("burli"),
+        "google-brotli-mbrotli" => "mbrotli".to_owned(),
+        "google-brotli-rust-brotli" => "rust-brotli".to_owned(),
         _ => codec_label(codec),
     }
 }

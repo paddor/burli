@@ -2,12 +2,12 @@ use alloc::vec::Vec;
 
 use burli_core::{
     BurliError, CompressError,
-    bits::{BitWriter, MAX_BITS_PER_OP},
+    bits::{BitSink, BitWriter, MAX_BITS_PER_OP},
 };
 
 use super::{
-    COMMAND_ALPHABET_SIZE, DenseSymbolCode, LITERAL_ALPHABET_SIZE, MAX_META_BLOCK_SIZE,
-    PrefixCodeScratch, append_pending_bits, match_len, read_u64_le, tune,
+    COMMAND_ALPHABET_SIZE, DenseSymbolCode, DistanceRing, LITERAL_ALPHABET_SIZE,
+    MAX_META_BLOCK_SIZE, PrefixCodeScratch, append_pending_bits, match_len, read_u64_le, tune,
     write_block_and_context_header,
     write_fast_dense_prefix_code_array_from_frequencies_with_scratch, write_meta_block_len,
     write_q1_internal_balanced_command_static_distance_prefix_codes,
@@ -25,6 +25,7 @@ const NO_POSITION_16: u16 = 0;
 const NO_LAST_DISTANCE: usize = usize::MAX;
 const INTERNAL_COMMAND_ALPHABET_SIZE: usize = 128;
 const INTERNAL_DISTANCE_REUSE_CODE: usize = 64;
+const INTERNAL_DISTANCE_CODE_BASE: usize = 80;
 const INTERNAL_NUM_EXTRA_BITS: [u8; INTERNAL_COMMAND_ALPHABET_SIZE] = [
     0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 12, 14, 24, 0, 0, 0, 0, 0, 0,
     0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9,
@@ -252,7 +253,7 @@ impl Batch {
         let nbits = log2_floor(d) - 1;
         let prefix = (d >> nbits) & 1;
         let offset = (2 + prefix) << nbits;
-        let code = 2 * (nbits - 1) + prefix + 80;
+        let code = 2 * (nbits - 1) + prefix + INTERNAL_DISTANCE_CODE_BASE;
         self.emit_command(code, d - offset);
     }
 
@@ -279,7 +280,8 @@ impl Batch {
         let command_code_map =
             write_q1_internal_command_prefix_codes(writer, &command_frequencies, prefix)?;
 
-        write_batch_body::<false>(writer, input, self, &literal_code_map, &command_code_map)
+        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
+        Ok(())
     }
 
     pub(super) fn write_q0(
@@ -302,7 +304,7 @@ impl Batch {
         let command_code_map =
             write_q1_internal_command_prefix_codes(writer, &command_frequencies, prefix)?;
 
-        write_q0_batch_body::<false>(writer, input, self, &literal_code_map, &command_code_map);
+        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
         Ok(())
     }
 
@@ -328,7 +330,7 @@ impl Batch {
             prefix,
         )?;
 
-        write_q0_batch_body::<false>(writer, input, self, &literal_code_map, &command_code_map);
+        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
         Ok(())
     }
 
@@ -355,7 +357,7 @@ impl Batch {
             prefix,
         )?;
 
-        write_q0_batch_body::<false>(writer, input, self, &literal_code_map, &command_code_map);
+        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
         Ok(())
     }
 
@@ -379,7 +381,7 @@ impl Batch {
         let command_code_map =
             write_q1_internal_fast_command_prefix_codes(writer, &command_frequencies, prefix)?;
 
-        write_q0_batch_body::<false>(writer, input, self, &literal_code_map, &command_code_map);
+        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
         Ok(())
     }
 
@@ -403,7 +405,7 @@ impl Batch {
         let command_code_map =
             write_q1_internal_command_prefix_codes(writer, &command_frequencies, prefix)?;
 
-        write_q0_batch_body::<true>(writer, input, self, &literal_code_map, &command_code_map);
+        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
         Ok(())
     }
 
@@ -451,144 +453,124 @@ fn add_q0_command_guards(command_frequencies: &mut [usize; INTERNAL_COMMAND_ALPH
     command_frequencies[84] += 1;
 }
 
+/// Writes every command of `batch` and the literals it inserts.
 #[inline(never)]
-fn write_batch_body<const PACK_LITERALS: bool>(
-    writer: &mut BitWriter,
-    input: &[u8],
-    batch: &Batch,
-    literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
-    command_code_map: &[DenseSymbolCode; INTERNAL_COMMAND_ALPHABET_SIZE],
-) -> Result<(), CompressError> {
-    let mut literal_span_index = 0_usize;
-    let mut pending_bits = 0_u64;
-    let mut pending_width = 0_u8;
-    for &command in &batch.commands {
-        let code = (command & 0xff) as usize;
-        let extra = (command >> 8) as usize;
-        debug_assert!(code < INTERNAL_COMMAND_ALPHABET_SIZE);
-        let command_code = command_code_map[code];
-        let extra_bits = INTERNAL_NUM_EXTRA_BITS[code];
-        debug_assert!(command_code.len != u8::MAX);
-        debug_assert!(extra_bits == 0 || extra < (1_usize << extra_bits));
-        let command_width = command_code.len + extra_bits;
-        let command_bits = u64::from(command_code.bits) | ((extra as u64) << command_code.len);
-        append_pending_bits(
-            writer,
-            &mut pending_bits,
-            &mut pending_width,
-            command_width,
-            command_bits,
-        );
-
-        if code < INTERNAL_INSERT_OFFSET.len() {
-            let insert_len = INTERNAL_INSERT_OFFSET[code] + extra;
-            debug_assert!(literal_span_index < batch.literal_spans.len());
-            let span = batch.literal_spans[literal_span_index];
-            if span.len as usize != insert_len {
-                return Err(BurliError::Format("Brotli q1 literal span mismatch"));
-            }
-            let start = span.start as usize;
-            let end = start + span.len as usize;
-            debug_assert!(end <= input.len());
-            append_literal_span_bits::<PACK_LITERALS>(
-                writer,
-                &mut pending_bits,
-                &mut pending_width,
-                &input[start..end],
-                literal_code_map,
-            );
-            literal_span_index += 1;
-        }
-    }
-    if pending_width != 0 {
-        writer.write_bits_trusted_nonzero_fits(pending_width, pending_bits);
-    }
-
-    if literal_span_index != batch.literal_spans.len() {
-        return Err(BurliError::Format("Brotli q1 literal span mismatch"));
-    }
-
-    Ok(())
-}
-
-#[inline(never)]
-fn write_q0_batch_body<const PACK_LITERALS: bool>(
+fn write_batch_body(
     writer: &mut BitWriter,
     input: &[u8],
     batch: &Batch,
     literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
     command_code_map: &[DenseSymbolCode; INTERNAL_COMMAND_ALPHABET_SIZE],
 ) {
-    let mut literal_span_index = 0_usize;
-    let mut pending_bits = 0_u64;
-    let mut pending_width = 0_u8;
-    for &command in &batch.commands {
-        let code = (command & 0xff) as usize;
-        let extra = (command >> 8) as usize;
-        debug_assert!(code < INTERNAL_COMMAND_ALPHABET_SIZE);
-        let command_code = command_code_map[code];
-        let extra_bits = INTERNAL_NUM_EXTRA_BITS[code];
-        debug_assert!(command_code.len != u8::MAX);
-        debug_assert!(extra_bits == 0 || extra < (1_usize << extra_bits));
-        append_pending_bits(
-            writer,
-            &mut pending_bits,
-            &mut pending_width,
-            command_code.len + extra_bits,
-            u64::from(command_code.bits) | ((extra as u64) << command_code.len),
-        );
-
-        if code < INTERNAL_INSERT_OFFSET.len() {
-            let span = batch.literal_spans[literal_span_index];
-            let start = span.start as usize;
-            let end = start + span.len as usize;
-            debug_assert_eq!(span.len as usize, INTERNAL_INSERT_OFFSET[code] + extra);
-            debug_assert!(end <= input.len());
-            append_literal_span_bits::<PACK_LITERALS>(
-                writer,
-                &mut pending_bits,
-                &mut pending_width,
-                &input[start..end],
-                literal_code_map,
+    let total_bits = batch_body_bits(batch, literal_code_map, command_code_map);
+    let literal_max_len = literal_code_map
+        .iter()
+        .filter(|code| code.len != u8::MAX)
+        .map(|code| code.len)
+        .max()
+        .unwrap_or(0);
+    writer.write_bits_with(total_bits, |sink| {
+        let mut literal_span_index = 0_usize;
+        for &command in &batch.commands {
+            let code = (command & 0xff) as usize;
+            let extra = (command >> 8) as usize;
+            debug_assert!(code < INTERNAL_COMMAND_ALPHABET_SIZE);
+            let command_code = command_code_map[code];
+            let extra_bits = INTERNAL_NUM_EXTRA_BITS[code];
+            debug_assert!(command_code.len != u8::MAX);
+            debug_assert!(extra_bits == 0 || extra < (1_usize << extra_bits));
+            sink.write(
+                command_code.len + extra_bits,
+                u64::from(command_code.bits) | ((extra as u64) << command_code.len),
             );
-            literal_span_index += 1;
+
+            if code < INTERNAL_INSERT_OFFSET.len() {
+                let span = batch.literal_spans[literal_span_index];
+                let start = span.start as usize;
+                let end = start + span.len as usize;
+                debug_assert_eq!(span.len as usize, INTERNAL_INSERT_OFFSET[code] + extra);
+                write_literal_span(sink, &input[start..end], literal_code_map, literal_max_len);
+                literal_span_index += 1;
+            }
         }
-    }
-    debug_assert_eq!(literal_span_index, batch.literal_spans.len());
-    if pending_width != 0 {
-        writer.write_bits_trusted_nonzero_fits(pending_width, pending_bits);
-    }
+        debug_assert_eq!(literal_span_index, batch.literal_spans.len());
+    });
 }
 
+/// Bits that [`write_batch_body`] writes for `batch` with these codes.
+fn batch_body_bits(
+    batch: &Batch,
+    literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
+    command_code_map: &[DenseSymbolCode; INTERNAL_COMMAND_ALPHABET_SIZE],
+) -> usize {
+    let literal_bits = batch
+        .literal_frequencies
+        .iter()
+        .zip(literal_code_map)
+        .filter(|&(&count, _)| count != 0)
+        .map(|(&count, code)| count * usize::from(code.len))
+        .sum::<usize>();
+    let command_bits = batch
+        .command_frequencies
+        .iter()
+        .zip(command_code_map)
+        .zip(INTERNAL_NUM_EXTRA_BITS)
+        .filter(|&((&count, _), _)| count != 0)
+        .map(|((&count, code), extra_bits)| count * usize::from(code.len + extra_bits))
+        .sum::<usize>();
+    literal_bits + command_bits
+}
+
+/// Writes `literals` four codes per write when every code fits in
+/// `FAST_CODE_BITS` bits, and three per write otherwise.
 #[inline(always)]
-fn append_literal_span_bits<const PACK_LITERALS: bool>(
-    writer: &mut BitWriter,
-    pending_bits: &mut u64,
-    pending_width: &mut u8,
+fn write_literal_span(
+    sink: &mut BitSink<'_>,
     literals: &[u8],
     literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
+    literal_max_len: u8,
 ) {
-    if PACK_LITERALS {
-        return append_literal_span_bits_packed(
-            writer,
-            pending_bits,
-            pending_width,
-            literals,
-            literal_code_map,
-        );
+    const _: () = assert!(4 * super::FAST_CODE_BITS <= MAX_BITS_PER_OP);
+    const _: () = assert!(3 * super::MAX_CODE_BITS <= MAX_BITS_PER_OP);
+    let code = |literal: u8| {
+        let code = literal_code_map[usize::from(literal)];
+        debug_assert!(code.len != u8::MAX);
+        (u64::from(code.bits), code.len)
+    };
+    let pack = |literals: &[u8]| {
+        let (mut bits, mut width) = code(literals[0]);
+        for &literal in &literals[1..] {
+            let (next_bits, next_width) = code(literal);
+            bits |= next_bits << width;
+            width += next_width;
+        }
+        (width, bits)
+    };
+    if literal_max_len <= super::FAST_CODE_BITS {
+        let (quads, rest) = literals.as_chunks::<4>();
+        for quad in quads {
+            let (width, bits) = pack(quad);
+            sink.write(width, bits);
+        }
+        if !rest.is_empty() {
+            let (width, bits) = pack(rest);
+            sink.write(width, bits);
+        }
+    } else {
+        let (triples, rest) = literals.as_chunks::<3>();
+        for triple in triples {
+            let (width, bits) = pack(triple);
+            sink.write(width, bits);
+        }
+        if !rest.is_empty() {
+            let (width, bits) = pack(rest);
+            sink.write(width, bits);
+        }
     }
-
-    append_literal_span_bits_paired(
-        writer,
-        pending_bits,
-        pending_width,
-        literals,
-        literal_code_map,
-    );
 }
 
 #[inline(always)]
-fn append_literal_span_bits_paired(
+pub(super) fn append_literal_span_bits_paired(
     writer: &mut BitWriter,
     pending_bits: &mut u64,
     pending_width: &mut u8,
@@ -623,63 +605,6 @@ fn append_literal_span_bits_paired(
             u64::from(literal_code.bits),
         );
     }
-}
-
-#[inline(always)]
-fn append_literal_span_bits_packed(
-    writer: &mut BitWriter,
-    pending_bits: &mut u64,
-    pending_width: &mut u8,
-    literals: &[u8],
-    literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
-) {
-    let (chunks, remainder) = literals.as_chunks::<4>();
-    for chunk in chunks {
-        let first = literal_code_map[usize::from(chunk[0])];
-        let second = literal_code_map[usize::from(chunk[1])];
-        let third = literal_code_map[usize::from(chunk[2])];
-        let fourth = literal_code_map[usize::from(chunk[3])];
-        debug_assert!(first.len != u8::MAX);
-        debug_assert!(second.len != u8::MAX);
-        debug_assert!(third.len != u8::MAX);
-        debug_assert!(fourth.len != u8::MAX);
-
-        let first_width = first.len + second.len;
-        let second_width = third.len + fourth.len;
-        let width = first_width + second_width;
-        if width <= MAX_BITS_PER_OP {
-            let bits = u64::from(first.bits)
-                | (u64::from(second.bits) << first.len)
-                | (u64::from(third.bits) << first_width)
-                | (u64::from(fourth.bits) << (first_width + third.len));
-            append_pending_bits(writer, pending_bits, pending_width, width, bits);
-        } else {
-            append_literal_pair_bits(
-                writer,
-                pending_bits,
-                pending_width,
-                first,
-                second,
-                first_width,
-            );
-            append_literal_pair_bits(
-                writer,
-                pending_bits,
-                pending_width,
-                third,
-                fourth,
-                second_width,
-            );
-        }
-    }
-
-    append_literal_span_bits_paired(
-        writer,
-        pending_bits,
-        pending_width,
-        remainder,
-        literal_code_map,
-    );
 }
 
 #[inline(always)]
@@ -871,6 +796,29 @@ pub(super) fn write_q0_packed_literal_body(
 }
 
 impl Workspace {
+    /// Advance `ring` past the batch's explicit distances. Distance reuse
+    /// commands leave the ring as is.
+    pub(super) fn advance_distance_ring(&self, ring: &mut DistanceRing) {
+        let mut newest = [0; 4];
+        let mut count = 0;
+        for &command in self.batch.commands.iter().rev() {
+            let code = (command & 0xff) as usize;
+            if code < INTERNAL_DISTANCE_CODE_BASE {
+                continue;
+            }
+            // Invert `Batch::emit_distance`.
+            let nbits = (code - INTERNAL_DISTANCE_CODE_BASE) / 2 + 1;
+            let prefix = (code - INTERNAL_DISTANCE_CODE_BASE) & 1;
+            let extra = (command >> 8) as usize;
+            newest[count] = ((2 + prefix) << nbits) + extra - 3;
+            count += 1;
+            if count == newest.len() {
+                break;
+            }
+        }
+        ring.push_newest_first(&newest[..count]);
+    }
+
     fn write(
         &mut self,
         writer: &mut BitWriter,
