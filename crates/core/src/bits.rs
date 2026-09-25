@@ -411,8 +411,7 @@ impl BitWriter {
 
     /// Writes each `(width, value)` pair in order, like repeated
     /// [`Self::write_bits_trusted_fits`] calls. `total_bits` must be the sum
-    /// of all widths. The output grows once up front, and the loop keeps the
-    /// writer state in locals, which a loop of single writes cannot.
+    /// of all widths.
     ///
     /// # Panics
     ///
@@ -424,32 +423,46 @@ impl BitWriter {
         total_bits: usize,
         items: impl IntoIterator<Item = (u8, u64)>,
     ) {
+        self.write_bits_with(total_bits, |sink| {
+            for (width, value) in items {
+                sink.write(width, value);
+            }
+        });
+    }
+
+    /// Runs `write` with a [`BitSink`] for exactly `total_bits` more bits.
+    /// The output grows once up front, and the sink keeps the bit state in
+    /// locals, which a loop of writes through `&mut self` cannot.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `write` writes more than `total_bits` bits.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn write_bits_with<R>(
+        &mut self,
+        total_bits: usize,
+        write: impl FnOnce(&mut BitSink<'_>) -> R,
+    ) -> R {
         let start = self.output.len();
         let end_bits = usize::from(self.bit_count) + total_bits;
         // Every write stores 8 bytes, so keep 8 bytes of slack at the end.
         self.output.resize(start + end_bits / 8 + 8, 0);
-        let out = &mut self.output[start..];
-        let mut buffer = self.bit_buffer;
-        let mut count = self.bit_count;
-        let mut pos = 0_usize;
-        for (width, value) in items {
-            debug_assert!(width <= MAX_BITS_PER_OP);
-            debug_assert!(width == 0 || value < (1_u64 << width));
-            buffer |= value << count;
-            count += width;
-            let byte_count = count / 8;
-            out[pos..pos + 8].copy_from_slice(&buffer.to_le_bytes());
-            pos += usize::from(byte_count);
-            // `count` stays below 64, so the shift is at most 56.
-            buffer >>= byte_count * 8;
-            count -= byte_count * 8;
-        }
+        let mut sink = BitSink {
+            out: &mut self.output[start..],
+            pos: 0,
+            buffer: self.bit_buffer,
+            count: self.bit_count,
+        };
+        let result = write(&mut sink);
+        let (pos, buffer, count) = (sink.pos, sink.buffer, sink.count);
         debug_assert_eq!(pos, end_bits / 8);
         debug_assert_eq!(usize::from(count), end_bits % 8);
         self.output.truncate(start + pos);
         self.bit_buffer = buffer;
         self.bit_count = count;
         self.bit_len = self.bit_len.wrapping_add(total_bits);
+        result
     }
 
     #[inline(always)]
@@ -509,6 +522,36 @@ impl BitWriter {
 
     pub fn finished_len(&self) -> usize {
         self.output.len() + usize::from(self.bit_count != 0)
+    }
+}
+
+/// LSB-first bit output into space that [`BitWriter::write_bits_with`]
+/// reserved.
+#[cfg(feature = "alloc")]
+#[doc(hidden)]
+pub struct BitSink<'a> {
+    out: &'a mut [u8],
+    pos: usize,
+    buffer: u64,
+    count: u8,
+}
+
+#[cfg(feature = "alloc")]
+impl BitSink<'_> {
+    /// Writes the low `width` bits of `value`, which must have no higher
+    /// bits set. `width` is at most [`MAX_BITS_PER_OP`].
+    #[inline(always)]
+    pub fn write(&mut self, width: u8, value: u64) {
+        debug_assert!(width <= MAX_BITS_PER_OP);
+        debug_assert!(width == 0 || value < (1_u64 << width));
+        self.buffer |= value << self.count;
+        self.count += width;
+        let byte_count = self.count / 8;
+        self.out[self.pos..self.pos + 8].copy_from_slice(&self.buffer.to_le_bytes());
+        self.pos += usize::from(byte_count);
+        // `count` stays below 64, so the shift is at most 56.
+        self.buffer >>= byte_count * 8;
+        self.count -= byte_count * 8;
     }
 }
 

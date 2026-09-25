@@ -1959,13 +1959,7 @@ fn write_fast_literal_prefix_code(
 
     scratch.lengths.clear();
     scratch.lengths.resize(LITERAL_ALPHABET_SIZE, 0);
-    let mut floor = 1;
-    while !huffman_code_lengths_from_current_used_with_scratch(FAST_CODE_BITS, scratch) {
-        floor *= 2;
-        for (_, frequency) in &mut scratch.used {
-            *frequency = (*frequency).max(floor);
-        }
-    }
+    raise_counts_until_huffman_fits(FAST_CODE_BITS, scratch);
     fill_dense_symbol_code_map_from_lengths(&scratch.lengths, &mut map);
     write_fast_complex_prefix_code_lengths_with_scratch(writer, scratch)?;
     Ok(map)
@@ -2586,7 +2580,7 @@ fn write_prefix_code_from_frequencies_with_max_bits(
         return Err(BurliError::Format("Brotli prefix alphabet size mismatch"));
     }
 
-    let mut used = frequencies
+    let used = frequencies
         .iter()
         .enumerate()
         .filter_map(|(symbol, &frequency)| (frequency != 0).then_some((symbol as u16, frequency)))
@@ -2599,8 +2593,7 @@ fn write_prefix_code_from_frequencies_with_max_bits(
         return write_simple_prefix_code_symbols(writer, alphabet_size, &symbols);
     }
 
-    let lengths = huffman_code_lengths(frequencies, max_bits)
-        .unwrap_or_else(|| balanced_code_lengths(alphabet_size, &mut used, max_bits));
+    let lengths = limited_huffman_code_lengths(frequencies, max_bits);
 
     write_complex_prefix_code_lengths(writer, &lengths)?;
     Ok(symbol_codes_from_lengths(&lengths))
@@ -2724,18 +2717,20 @@ fn code_lengths_from_current_used_with_scratch(
         return;
     }
 
-    if huffman_code_lengths_from_current_used_with_scratch(max_bits, scratch) {
-        return;
-    }
+    raise_counts_until_huffman_fits(max_bits, scratch);
+}
 
-    scratch.lengths.clear();
-    scratch.lengths.resize(alphabet_size, 0);
-    balanced_code_lengths_into(
-        alphabet_size,
-        &mut scratch.used,
-        max_bits,
-        &mut scratch.lengths,
-    );
+/// Builds Huffman lengths for `scratch.used`, doubling a floor under the
+/// counts until no code is longer than `max_bits`, as Google's encoder does.
+/// A balanced code instead would spend about eight bits on every literal.
+fn raise_counts_until_huffman_fits(max_bits: u8, scratch: &mut PrefixCodeScratch) {
+    let mut floor = 1;
+    while !huffman_code_lengths_from_current_used_with_scratch(max_bits, scratch) {
+        floor *= 2;
+        for (_, frequency) in &mut scratch.used {
+            *frequency = (*frequency).max(floor);
+        }
+    }
 }
 
 fn code_lengths_from_dense_frequencies_with_scratch<const N: usize>(
@@ -2761,7 +2756,7 @@ fn code_lengths_from_frequencies(
         return Err(BurliError::Format("Brotli prefix alphabet size mismatch"));
     }
 
-    let mut used = frequencies
+    let used = frequencies
         .iter()
         .enumerate()
         .filter_map(|(symbol, &frequency)| (frequency != 0).then_some((symbol as u16, frequency)))
@@ -2777,30 +2772,34 @@ fn code_lengths_from_frequencies(
         return Ok(lengths);
     }
 
-    Ok(huffman_code_lengths(frequencies, max_bits)
-        .unwrap_or_else(|| balanced_code_lengths(alphabet_size, &mut used, max_bits)))
+    Ok(limited_huffman_code_lengths(frequencies, max_bits))
 }
 
-fn balanced_code_lengths(alphabet_size: usize, used: &mut [(u16, usize)], max_bits: u8) -> Vec<u8> {
-    used.sort_unstable_by(
-        |&(left_symbol, left_frequency), &(right_symbol, right_frequency)| {
-            right_frequency
-                .cmp(&left_frequency)
-                .then_with(|| left_symbol.cmp(&right_symbol))
-        },
-    );
-
-    let mut lengths = vec![0_u8; alphabet_size];
-    let base_bits = ceil_log2(used.len()).unwrap().min(max_bits);
-    let short_count = (1_usize << base_bits) - used.len();
-    for (rank, &(symbol, _)) in used.iter().enumerate() {
-        lengths[usize::from(symbol)] = if rank < short_count {
-            base_bits - 1
-        } else {
-            base_bits
-        };
+/// Huffman code lengths of at most `max_bits` for at least two used
+/// symbols. Raises the smallest counts until the code fits, like
+/// [`raise_counts_until_huffman_fits`].
+fn limited_huffman_code_lengths(frequencies: &[usize], max_bits: u8) -> Vec<u8> {
+    if let Some(lengths) = huffman_code_lengths(frequencies, max_bits) {
+        return lengths;
     }
-    lengths
+    debug_assert!(
+        frequencies
+            .iter()
+            .filter(|&&frequency| frequency != 0)
+            .count()
+            >= 2
+    );
+    let mut raised = frequencies.to_vec();
+    let mut floor = 1;
+    loop {
+        floor *= 2;
+        for frequency in raised.iter_mut().filter(|frequency| **frequency != 0) {
+            *frequency = (*frequency).max(floor);
+        }
+        if let Some(lengths) = huffman_code_lengths(&raised, max_bits) {
+            return lengths;
+        }
+    }
 }
 
 fn balanced_code_lengths_into(
@@ -3387,12 +3386,7 @@ fn code_lengths_from_frequencies_with_scratch(
 
     scratch.lengths.clear();
     scratch.lengths.resize(alphabet_size, 0);
-    balanced_code_lengths_into(
-        alphabet_size,
-        &mut scratch.used,
-        max_bits,
-        &mut scratch.lengths,
-    );
+    raise_counts_until_huffman_fits(max_bits, scratch);
     Ok(())
 }
 

@@ -23,6 +23,11 @@
   some repeats.
 - Build Huffman codes faster, which speeds up small inputs at every quality
   by up to 30%. Output is unchanged.
+- Compress better when a Huffman code would be too deep, mostly at q0 and
+  q1 on large text: Silesia `dickens` q0 shrinks by 13% and q1 by 9%.
+- Encode q0 and q1 blocks faster through a new bit writer, and let q0
+  probe fewer positions on inputs from 128 KiB up. q0 is 5% to 15% faster
+  than before at a similar ratio on text and web files.
 
 ## [0.3.2] - 2026-09-10
 

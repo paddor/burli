@@ -18,6 +18,14 @@
   sort and a branch-free two-queue merge. Output is unchanged.
 - Write literal-only meta-blocks four literals per bit write, and count
   bytes in eight interleaved tables.
+- Limit Huffman code lengths by raising the smallest counts until the code
+  fits, as Google's encoder does, instead of falling back to a balanced
+  code. The balanced code spent about eight bits on every literal of large
+  q0 and q1 blocks.
+- Write q0 and q1 block bodies through `BitWriter::write_bits_with`, sized
+  from the exact bit count, with literals packed four or three per write.
+- Start q0's match skipping at 160 instead of 128 on its 32 Ki-entry
+  table path.
 
 ## [0.3.2] - 2026-09-10
 

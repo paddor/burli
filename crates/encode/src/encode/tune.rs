@@ -79,7 +79,7 @@ pub(super) const Q1_DEFAULT_U32_SKIP_START: usize = 32;
 pub(super) const Q1_MEDIUM_U32_SKIP_START: usize = 64;
 pub(super) const Q1_DENSE_U32_SKIP_START: usize = 80;
 pub(super) const Q1_FAST_U32_SKIP_START: usize = 96;
-pub(super) const Q1_FASTER_U32_SKIP_START: usize = 128;
+pub(super) const Q1_FASTER_U32_SKIP_START: usize = 160;
 
 pub(super) const Q1_LARGE_MARKUP_SAMPLE_BYTES: usize = 1024;
 pub(super) const Q1_LARGE_MARKUP_MIN_LT: usize = 8;

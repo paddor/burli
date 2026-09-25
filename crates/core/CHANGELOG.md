@@ -9,6 +9,8 @@
   variable-length copy.
 - Add hidden `BitWriter::write_bits_batch_trusted_fits`, which writes many
   bit fields with the writer state kept in locals.
+- Add hidden `BitWriter::write_bits_with` and `BitSink`, which write into
+  output reserved up front.
 
 ## [0.3.0] - 2026-08-18
 
