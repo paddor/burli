@@ -13,34 +13,34 @@ seconds / GB
 <text x="62" y="252" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
 10.0
 </text>
-<polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,191 680,191 "/>
-<text x="62" y="191" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
+<polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,192 680,192 "/>
+<text x="62" y="192" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
 20.0
 </text>
 <polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,131 680,131 "/>
 <text x="62" y="131" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
 30.0
 </text>
-<polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,70 680,70 "/>
-<text x="62" y="70" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
+<polyline fill="none" opacity="1" stroke="#21262D" stroke-width="1" points="70,71 680,71 "/>
+<text x="62" y="71" dy="0.5ex" text-anchor="end" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#7D8590">
 40.0
 </text>
 <polyline fill="none" opacity="1" stroke="#30363D" stroke-width="2" points="70,313 680,313 "/>
-<rect x="167" y="252" width="80" height="61" opacity="1" fill="#2563EB" stroke="none"/>
-<rect x="167" y="237" width="80" height="15" opacity="1" fill="#1D4ED8" stroke="none"/>
-<rect x="167" y="219" width="80" height="18" opacity="1" fill="#2563EB" stroke="none"/>
+<rect x="167" y="253" width="80" height="60" opacity="1" fill="#2563EB" stroke="none"/>
+<rect x="167" y="238" width="80" height="15" opacity="1" fill="#1D4ED8" stroke="none"/>
+<rect x="167" y="220" width="80" height="18" opacity="1" fill="#2563EB" stroke="none"/>
 <text x="207" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
 google-brotli
 </text>
 <rect x="251" y="256" width="80" height="57" opacity="1" fill="#F87171" stroke="none"/>
 <rect x="251" y="241" width="80" height="15" opacity="1" fill="#C45050" stroke="none"/>
-<rect x="251" y="218" width="80" height="23" opacity="1" fill="#F87171" stroke="none"/>
+<rect x="251" y="219" width="80" height="22" opacity="1" fill="#F87171" stroke="none"/>
 <text x="291" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
 burli
 </text>
-<rect x="335" y="253" width="80" height="60" opacity="1" fill="#F472B6" stroke="none"/>
-<rect x="335" y="238" width="80" height="15" opacity="1" fill="#C05A92" stroke="none"/>
-<rect x="335" y="214" width="80" height="24" opacity="1" fill="#F472B6" stroke="none"/>
+<rect x="335" y="254" width="80" height="59" opacity="1" fill="#F472B6" stroke="none"/>
+<rect x="335" y="239" width="80" height="15" opacity="1" fill="#C05A92" stroke="none"/>
+<rect x="335" y="216" width="80" height="23" opacity="1" fill="#F472B6" stroke="none"/>
 <text x="375" y="329" dy="0.5ex" text-anchor="middle" font-family="sans-serif" font-size="8.870967741935484" opacity="1" fill="#E6EDF3" font-weight="bold">
 burli paranoid
 </text>
