@@ -474,7 +474,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut args = Args {
-        impls: vec!["burli".to_owned(), "rust-brotli".to_owned()],
+        impls: vec![
+            "burli".to_owned(),
+            "rust-brotli".to_owned(),
+            "mbrotli".to_owned(),
+        ],
         qualities: vec![DEFAULT_QUALITY],
         corpus: CorpusSelection::Web,
         files: None,
@@ -500,6 +504,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
                         "google-brotli".to_owned(),
                         "burli".to_owned(),
                         "rust-brotli".to_owned(),
+                        "mbrotli".to_owned(),
                     ]
                 } else {
                     value.split(',').map(str::to_owned).collect()
@@ -573,7 +578,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
 
 fn print_help() {
     println!(
-        "Usage: burli_bench [--impl burli|rust-brotli|google-brotli|all] \
+        "Usage: burli_bench [--impl burli|rust-brotli|mbrotli|google-brotli|google-brotli-burli|google-brotli-rust-brotli|google-brotli-mbrotli|all] \
          [--qualities LIST] [--corpus web|silesia|all] [--files LIST] \
          [--small-only] [--chart-small-only] [--small-sizes LIST] [--quick] \
          [--target-ms N] [--target-ns N] [--rounds N] [--warmup N] \
@@ -953,8 +958,17 @@ fn bench_decompress(
         "google-brotli-burli" => Ok(bench_loop(bench, || {
             let _ = burli_decompress_with_limit(compressed, decoded_len);
         })),
+        "google-brotli-mbrotli" => Ok(bench_loop(bench, || {
+            let _ = mbrotli_decompress(compressed);
+        })),
+        "google-brotli-rust-brotli" => Ok(bench_loop(bench, || {
+            let _ = rust_brotli_decompress(compressed);
+        })),
         "rust-brotli" => Ok(bench_loop(bench, || {
             let _ = rust_brotli_decompress(compressed);
+        })),
+        "mbrotli" => Ok(bench_loop(bench, || {
+            let _ = mbrotli_decompress(compressed);
         })),
         other => Err(format!("unknown impl: {other}").into()),
     }
@@ -969,7 +983,10 @@ fn compress_codec(
         "burli" => burli_compress(input, quality).map_err(Into::into),
         "google-brotli" => google_brotli_compress(input, quality),
         "google-brotli-burli" => google_brotli_compress(input, quality),
+        "google-brotli-mbrotli" => google_brotli_compress(input, quality),
+        "google-brotli-rust-brotli" => google_brotli_compress(input, quality),
         "rust-brotli" => rust_brotli_compress(input, quality),
+        "mbrotli" => mbrotli_compress(input, quality),
         other => Err(format!("unknown impl: {other}").into()),
     }
 }
@@ -990,8 +1007,17 @@ fn bench_compress(
         "google-brotli-burli" => Ok(bench_loop(bench, || {
             let _ = google_brotli_compress(input, quality);
         })),
+        "google-brotli-mbrotli" => Ok(bench_loop(bench, || {
+            let _ = google_brotli_compress(input, quality);
+        })),
+        "google-brotli-rust-brotli" => Ok(bench_loop(bench, || {
+            let _ = google_brotli_compress(input, quality);
+        })),
         "rust-brotli" => Ok(bench_loop(bench, || {
             let _ = rust_brotli_compress(input, quality);
+        })),
+        "mbrotli" => Ok(bench_loop(bench, || {
+            let _ = mbrotli_compress(input, quality);
         })),
         other => Err(format!("unknown impl: {other}").into()),
     }
@@ -1006,7 +1032,10 @@ fn verify_decodes(
         "burli" => burli_decompress(compressed)?,
         "google-brotli" => google_brotli_decompress(compressed, input.data.len())?,
         "google-brotli-burli" => burli_decompress(compressed)?,
+        "google-brotli-mbrotli" => mbrotli_decompress(compressed)?,
+        "google-brotli-rust-brotli" => rust_brotli_decompress(compressed)?,
         "rust-brotli" => rust_brotli_decompress(compressed)?,
+        "mbrotli" => mbrotli_decompress(compressed)?,
         _ => unreachable!(),
     };
     if decoded != input.data {
@@ -1100,6 +1129,21 @@ fn rust_brotli_decompress(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::E
     Ok(output)
 }
 
+fn mbrotli_compress(input: &[u8], quality: u8) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let config = mbrotli::EncoderConfig::default()
+        .with_quality(mbrotli::Quality::try_from(quality)?)
+        .with_window(mbrotli::Window::standard(DEFAULT_WINDOW_BITS)?);
+    let mut compressor = mbrotli::Compressor::new(config)?;
+    Ok(compressor.compress(input)?)
+}
+
+fn mbrotli_decompress(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let config = mbrotli::DecoderConfig::default()
+        .with_window_limit(mbrotli::WindowLimit::standard(DEFAULT_WINDOW_BITS)?);
+    let mut decompressor = mbrotli::Decompressor::new(config)?;
+    Ok(decompressor.decompress(input)?)
+}
+
 fn bench_loop<F: FnMut()>(bench: BenchConfig, mut f: F) -> f64 {
     for _ in 0..bench.warmup {
         f();
@@ -1184,14 +1228,18 @@ fn codec_label(codec: &str) -> String {
 
 fn encoded_by_label(codec: &str) -> String {
     match codec {
-        "google-brotli-burli" => "google-brotli".to_owned(),
+        "google-brotli-burli" | "google-brotli-mbrotli" | "google-brotli-rust-brotli" => {
+            "google-brotli".to_owned()
+        }
         _ => codec_label(codec),
     }
 }
 
 fn decoded_by_label(codec: &str) -> String {
     match codec {
-        "google-brotli-burli" => "burli".to_owned(),
+        "google-brotli-burli" => codec_label("burli"),
+        "google-brotli-mbrotli" => "mbrotli".to_owned(),
+        "google-brotli-rust-brotli" => "rust-brotli".to_owned(),
         _ => codec_label(codec),
     }
 }

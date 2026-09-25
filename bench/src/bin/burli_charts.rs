@@ -108,7 +108,7 @@ const SILESIA_GROUPS: &[(&str, &[&str])] = &[
     ("Medium compressibility", SILESIA_MEDIUM_COMPRESSIBILITY),
     ("Low compressibility", SILESIA_LOW_COMPRESSIBILITY),
 ];
-const SILESIA_BASELINE_CODECS: &[&str] = &["google-brotli", "rust-brotli"];
+const SILESIA_BASELINE_CODECS: &[&str] = &["google-brotli", "rust-brotli", "mbrotli"];
 
 const SMALL_PREFIXES: &[&str] = &["bootstrap-js", "bootstrap-css", "json-citm"];
 const SMALL_SUFFIXES: &[&str] = &[
@@ -264,13 +264,44 @@ impl Config {
                 codec("burli", "burli", 0xf87171, 0xc45050),
                 codec("burli paranoid", "burli paranoid", 0xf472b6, 0xc05a92),
                 codec("rust-brotli", "rust-brotli 8.0.4", 0x4ade80, 0x3aaf60),
+                codec("mbrotli", "mbrotli 0.4.1", 0xfbbf24, 0xd97706),
             ],
-            scatter_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
-            summary_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
-            pipeline_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
-            matrix_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
-            small_codecs: vec!["google-brotli", "burli", "rust-brotli"],
-            small_decode_codecs: vec!["google-brotli", "burli", "burli paranoid", "rust-brotli"],
+            scatter_codecs: vec![
+                "google-brotli",
+                "burli",
+                "burli paranoid",
+                "rust-brotli",
+                "mbrotli",
+            ],
+            summary_codecs: vec![
+                "google-brotli",
+                "burli",
+                "burli paranoid",
+                "rust-brotli",
+                "mbrotli",
+            ],
+            pipeline_codecs: vec![
+                "google-brotli",
+                "burli",
+                "burli paranoid",
+                "rust-brotli",
+                "mbrotli",
+            ],
+            matrix_codecs: vec![
+                "google-brotli",
+                "burli",
+                "burli paranoid",
+                "rust-brotli",
+                "mbrotli",
+            ],
+            small_codecs: vec!["google-brotli", "burli", "rust-brotli", "mbrotli"],
+            small_decode_codecs: vec![
+                "google-brotli",
+                "burli",
+                "burli paranoid",
+                "rust-brotli",
+                "mbrotli",
+            ],
         }
     }
 
@@ -518,7 +549,22 @@ fn load_small_data(cfg: &Config, codecs: &[&str]) -> BTreeMap<String, Vec<BenchR
 }
 
 fn load_small_decode_data(cfg: &Config, codecs: &[&str]) -> BTreeMap<String, Vec<BenchRow>> {
-    let out = load_data(cfg, codecs, Some(DECODE_QUALITY), Some(true), None);
+    let base = cache_dir(cfg);
+    let mut out = BTreeMap::new();
+    for &codec in codecs {
+        let (stored_codec, encoded_by) = small_decode_source(codec);
+        load_rows_from_path_with_provenance(
+            &base.join(codec_file(stored_codec)),
+            stored_codec,
+            encoded_by,
+            codec,
+            codec,
+            Some(DECODE_QUALITY),
+            Some(true),
+            None,
+            &mut out,
+        );
+    }
     out.into_iter()
         .map(|(codec, rows)| {
             let mut latest = BTreeMap::new();
@@ -530,6 +576,16 @@ fn load_small_decode_data(cfg: &Config, codecs: &[&str]) -> BTreeMap<String, Vec
             (codec, latest.into_values().collect())
         })
         .collect()
+}
+
+fn small_decode_source(codec: &str) -> (&str, &str) {
+    match codec {
+        "google-brotli" => ("google-brotli", "google-brotli"),
+        "burli" | "burli paranoid" => ("google-brotli-burli", "google-brotli"),
+        "rust-brotli" => ("google-brotli-rust-brotli", "google-brotli"),
+        "mbrotli" => ("google-brotli-mbrotli", "google-brotli"),
+        _ => (codec, codec),
+    }
 }
 
 fn load_data(
@@ -563,6 +619,22 @@ fn load_rows_from_path(
     allowed: Option<&BTreeSet<&str>>,
     out: &mut BTreeMap<String, Vec<BenchRow>>,
 ) {
+    load_rows_from_path_with_provenance(
+        path, codec, codec, codec, codec, quality, small, allowed, out,
+    );
+}
+
+fn load_rows_from_path_with_provenance(
+    path: &Path,
+    stored_codec: &str,
+    encoded_by: &str,
+    decoded_by: &str,
+    output_codec: &str,
+    quality: Option<u8>,
+    small: Option<bool>,
+    allowed: Option<&BTreeSet<&str>>,
+    out: &mut BTreeMap<String, Vec<BenchRow>>,
+) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
@@ -570,10 +642,12 @@ fn load_rows_from_path(
         let Ok(row) = serde_json::from_str::<BenchRow>(line) else {
             continue;
         };
-        if row.codec != codec {
+        if row.codec != stored_codec {
             continue;
         }
-        if row.encoded_by.as_deref() != Some(codec) || row.decoded_by.as_deref() != Some(codec) {
+        if row.encoded_by.as_deref() != Some(encoded_by)
+            || row.decoded_by.as_deref() != Some(decoded_by)
+        {
             continue;
         }
         if quality.is_some_and(|quality| row.quality != quality) {
@@ -587,7 +661,7 @@ fn load_rows_from_path(
         {
             continue;
         }
-        out.entry(codec.to_string()).or_default().push(row);
+        out.entry(output_codec.to_string()).or_default().push(row);
     }
 }
 
@@ -2180,7 +2254,9 @@ fn draw_small_decode(cfg: &Config, out_dir: &Path) -> Result<(), Box<dyn Error>>
     chart_header(
         &area,
         width,
-        &format!("Decode Throughput vs Input Size (web corpus slices, q{DECODE_QUALITY})"),
+        &format!(
+            "Decode Throughput vs Input Size (web corpus slices, q{DECODE_QUALITY}; Google C output)"
+        ),
         cfg.hw_label.as_deref(),
         18,
     )?;
@@ -2443,6 +2519,63 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].timestamp_secs, 3);
         Ok(())
+    }
+
+    #[test]
+    fn small_decode_loader_uses_mbrotli_decoding_of_google_output() -> Result<(), Box<dyn Error>> {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        path.push(format!(
+            "burli_chart_mbrotli_provenance_{}_{}.jsonl",
+            std::process::id(),
+            nanos
+        ));
+        let row = r#"{"codec":"google-brotli-mbrotli","encoded_by":"google-brotli","decoded_by":"mbrotli","input":"bootstrap-js_512","quality":5,"input_size":512,"compressed_size":256,"compress_ns":10.0,"decompress_ns":20.0,"is_small":true,"timestamp_secs":1}"#;
+        std::fs::write(&path, row)?;
+
+        let mut out = BTreeMap::new();
+        load_rows_from_path_with_provenance(
+            &path,
+            "google-brotli-mbrotli",
+            "google-brotli",
+            "mbrotli",
+            "mbrotli",
+            Some(5),
+            Some(true),
+            None,
+            &mut out,
+        );
+        let _ = std::fs::remove_file(&path);
+
+        let rows = out.get("mbrotli").expect("accepted row");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].encoded_by.as_deref(), Some("google-brotli"));
+        assert_eq!(rows[0].decoded_by.as_deref(), Some("mbrotli"));
+        Ok(())
+    }
+
+    #[test]
+    fn small_decode_sources_use_google_output() {
+        assert_eq!(
+            small_decode_source("google-brotli"),
+            ("google-brotli", "google-brotli")
+        );
+        assert_eq!(
+            small_decode_source("burli"),
+            ("google-brotli-burli", "google-brotli")
+        );
+        assert_eq!(
+            small_decode_source("burli paranoid"),
+            ("google-brotli-burli", "google-brotli")
+        );
+        assert_eq!(
+            small_decode_source("rust-brotli"),
+            ("google-brotli-rust-brotli", "google-brotli")
+        );
+        assert_eq!(
+            small_decode_source("mbrotli"),
+            ("google-brotli-mbrotli", "google-brotli")
+        );
     }
 
     fn row_json(encoded_by: &str, decoded_by: &str, timestamp_secs: u64) -> String {

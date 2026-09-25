@@ -176,6 +176,7 @@ Default implementation set:
 
 - `burli`
 - `rust-brotli`
+- `mbrotli`
 
 `--impl all` also includes Google Brotli C through system `libbrotli`.
 No CLI baseline.
@@ -200,6 +201,9 @@ Generated chart set:
 - `small_encode.svg`
 - `small_decode.svg`
 - `scatter_silesia.svg`
+
+`small_decode.svg` measures every decoder against the same Google Brotli C
+stream at quality 5.
 
 Review SVG diffs before committing. Only commit chart files that were
 intentionally refreshed.
