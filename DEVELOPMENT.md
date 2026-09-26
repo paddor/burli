@@ -107,6 +107,7 @@ Requires cargo-fuzz:
 
 ```bash
 cargo fuzz run burli-decode
+cargo fuzz run burli-decode-reuse
 cargo fuzz run burli-roundtrip
 ```
 

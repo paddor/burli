@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Add regression tests and a fuzz target for decoder reuse after malformed
+  streams and across dictionary changes, output limits, and stream boundaries.
+
 ## [0.3.3] - 2026-09-25
 
 - Decode faster: two-level Huffman tables, chunked short match copies, and
