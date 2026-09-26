@@ -32,3 +32,10 @@ path = "fuzz_targets/fragmented.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "burli-decode-reuse"
+path = "fuzz_targets/decode_reuse.rs"
+test = false
+doc = false
+bench = false

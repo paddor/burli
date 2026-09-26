@@ -2,6 +2,7 @@
 
 mod common;
 mod fixtures;
+mod reuse;
 
 use std::{
     ffi::c_int,
@@ -254,6 +255,110 @@ fn c_brotli_raw_dictionary_decodes_through_burli() {
         limited.read_to_end(&mut streamed).unwrap_err().kind(),
         io::ErrorKind::InvalidData
     );
+}
+
+#[test]
+fn c_brotli_streams_decode_through_reused_decompressor() {
+    const LIMIT: usize = 1 << 20;
+    let mut reused = burli::Decompressor::with_limit(LIMIT);
+
+    // q5 and q11 add literal context maps with several prefix codes, and
+    // the mixed input adds literal block switches. Font mode adds postfix and
+    // direct distance codes.
+    let mut inputs = generated_conformance_inputs();
+    inputs.push(("mixed", mixed_input()));
+    for (name, input) in inputs {
+        for quality in [5, 11] {
+            for mode in BROTLI_MODES {
+                for lgwin in [10, 22] {
+                    let encoded = c_brotli_compress_with(&input, quality, mode, lgwin);
+                    let label =
+                        format!("C q{quality} mode={} lgwin={lgwin} {name}", mode_name(mode));
+                    for corrupted in reuse::corruptions(&encoded) {
+                        let fresh = burli::Decompressor::with_limit(LIMIT);
+                        let _ = reuse::assert_matches_fresh(&mut reused, fresh, &corrupted, &label);
+                        let whole = reuse::read_stream(&corrupted, usize::MAX, LIMIT);
+                        let chunk = corrupted.len() / 5 + 1;
+                        assert!(
+                            reuse::read_stream(&corrupted, chunk, LIMIT) == whole,
+                            "{label} fragmented stream differs from whole reads"
+                        );
+
+                        let fresh = burli::Decompressor::with_limit(LIMIT);
+                        let decoded =
+                            reuse::assert_matches_fresh(&mut reused, fresh, &encoded, &label)
+                                .unwrap_or_else(|error| panic!("{label} failed: {error:?}"));
+                        assert_bytes_eq(&decoded, &input, &label);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn c_brotli_raw_dictionary_streams_decode_through_reused_decompressor() {
+    const LIMIT: usize = 1 << 20;
+    let dictionary =
+        b"raw-dictionary-entry:function renderTemplate(item){return item.label + item.value;}|"
+            .repeat(64);
+    let raw_dictionary = burli::decode::RawDictionary::new(&dictionary);
+    let input = dictionary[128..dictionary.len() - 128].to_vec();
+    let encoded = c_brotli_compress_with_raw_dictionary(&input, &dictionary, 11);
+    let dictionaries = [
+        raw_dictionary.clone(),
+        burli::decode::RawDictionary::empty(),
+        burli::decode::RawDictionary::new(&dictionary.to_ascii_uppercase()),
+        burli::decode::RawDictionary::new(&dictionary[..dictionary.len() - 1]),
+    ];
+    let mut streams = reuse::corruptions(&encoded);
+    streams.push(encoded.clone());
+    let mut reused = burli::Decompressor::with_limit(LIMIT);
+
+    for (stream_index, stream) in streams.iter().enumerate() {
+        for (dictionary_index, dictionary) in dictionaries.iter().enumerate() {
+            if dictionary.is_empty() {
+                reused.clear_raw_dictionary();
+            } else {
+                reused.set_raw_dictionary(dictionary);
+            }
+            let label =
+                format!("raw dictionary stream {stream_index} dictionary {dictionary_index}");
+            let fresh =
+                burli::Decompressor::with_raw_dictionary_and_limit(dictionary.clone(), LIMIT);
+            let decoded = reuse::assert_matches_fresh(&mut reused, fresh, stream, &label);
+            if *stream == encoded {
+                assert_eq!(
+                    decoded.is_ok_and(|decoded| decoded == input),
+                    dictionary_index == 0,
+                    "{label}"
+                );
+            }
+        }
+    }
+
+    let joined = [encoded.as_slice(), encoded.as_slice()].concat();
+    for chunk in [1, 7, usize::MAX] {
+        let label = format!("raw dictionary stream boundary chunk {chunk}");
+        let source = FragmentedRead::new(&joined, chunk);
+        let mut decoder = burli::StreamDecoder::with_raw_dictionary_and_limit(
+            source,
+            raw_dictionary.clone(),
+            LIMIT,
+        );
+        let mut decoded = Vec::new();
+        decoder
+            .read_to_end(&mut decoded)
+            .unwrap_or_else(|error| panic!("{label} failed: {error:?}"));
+        assert_bytes_eq(&decoded, &input, &label);
+
+        let (inner, mut unread) = match decoder.into_inner() {
+            Ok(inner) => (inner, Vec::new()),
+            Err(error) => error.into_parts(),
+        };
+        unread.extend_from_slice(&inner.input[inner.pos..]);
+        assert!(unread == encoded, "{label} wrong unread bytes");
+    }
 }
 
 #[test]
@@ -628,6 +733,25 @@ fn generated_conformance_inputs() -> Vec<(&'static str, Vec<u8>)> {
             (0..4096).map(|index| (index * 37 % 251) as u8).collect(),
         ),
     ]
+}
+
+/// Sections of lowercase noise, web text, binary noise, and a short cycle.
+/// C Brotli q5 and q11 split them into several literal block types.
+fn mixed_input() -> Vec<u8> {
+    let mut state = 0x2545_f491_u32;
+    let mut next = move || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (state >> 24) as u8
+    };
+    let texts = generated_conformance_inputs();
+    let mut mixed = Vec::new();
+    for (_, text) in &texts[2..6] {
+        mixed.extend((0..1024).map(|_| b'a' + next() % 26));
+        mixed.extend_from_slice(&text[..text.len().min(1500)]);
+        mixed.extend((0..1024).map(|_| next()));
+        mixed.extend((0..512).map(|index| (index % 7) as u8 * 3));
+    }
+    mixed
 }
 
 fn web_fixture_slices() -> Vec<Vec<u8>> {

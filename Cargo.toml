@@ -42,6 +42,10 @@ name = "burli-c-brotli"
 path = "tests/c_brotli.rs"
 
 [[test]]
+name = "burli-decode-reuse"
+path = "tests/decode_reuse.rs"
+
+[[test]]
 name = "burli-errors"
 path = "tests/errors.rs"
 
