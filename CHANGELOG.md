@@ -2,8 +2,11 @@
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-26
+
 - Add regression tests and a fuzz target for decoder reuse after malformed
   streams and across dictionary changes, output limits, and stream boundaries.
+- Bump the JSR/WASM package to `0.3.4`.
 
 ## [0.3.3] - 2026-09-25
 
