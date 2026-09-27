@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-27
+
 - Start one-shot output empty instead of reserving the output limit, when the
   limit is 16 MiB or less.
 - Decode `decompress_into` in place when the output is empty.
