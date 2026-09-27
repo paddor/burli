@@ -189,6 +189,22 @@ pub fn decompress_into_with_options(
     output: &mut alloc::vec::Vec<u8>,
     options: &Options,
 ) -> Result<usize, DecompressError> {
+    if output.is_empty() {
+        // Decode in place. A failed decode leaves the output empty again.
+        let result = stored::decompress_into_empty_with_limit(
+            input,
+            options.max_output_size(),
+            output,
+            crate::dictionary::RawDictionary::empty(),
+        );
+        if result.is_err() {
+            output.clear();
+        }
+        return result;
+    }
+
+    // Backward references must not reach bytes that were already in
+    // `output`, so decode separately and append.
     let before = output.len();
     let mut decompressed = alloc::vec::Vec::new();
     stored::decompress_into_empty_with_limit(
@@ -227,7 +243,7 @@ pub fn decompress_into_slice_with_options(
     options: &Options,
 ) -> Result<usize, DecompressError> {
     let limit = options.max_output_size().min(output.len());
-    let mut decompressed = alloc::vec::Vec::with_capacity(output.len());
+    let mut decompressed = alloc::vec::Vec::new();
     stored::decompress_into_empty_with_limit(
         input,
         limit,

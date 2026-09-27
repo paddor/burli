@@ -69,6 +69,8 @@ impl DistanceRing {
 pub(crate) struct MetaBlockDecodeParams<'a> {
     pub(crate) output_base: usize,
     pub(crate) len: usize,
+    /// The meta-block ends the stream, so the output ends with it.
+    pub(crate) is_last: bool,
     pub(crate) max_output_size: usize,
     pub(crate) window_bits: u8,
     pub(crate) raw_dictionary: RawDictionary<'a>,
@@ -118,8 +120,14 @@ pub(crate) fn decode_meta_block_with_base_and_policy(
         });
     }
     if output.capacity() < needed {
-        // Growing anyway, so add slack for the chunked backward copy.
-        output.reserve(needed - output.len() + COPY_CHUNK_SLACK);
+        // Growing anyway, so add slack for the chunked backward copy. The last
+        // meta-block ends the output, so it grows by exactly its length.
+        let additional = needed - output.len() + COPY_CHUNK_SLACK;
+        if params.is_last {
+            output.reserve_exact(additional);
+        } else {
+            output.reserve(additional);
+        }
     }
 
     let mut header = read_header(reader)?;
@@ -1684,6 +1692,50 @@ fn read_distance_no_postfix(
 mod tests {
     use super::*;
     use burli_core::bits::BitWriter;
+
+    /// Decodes the single meta-block of a small stream into an empty output
+    /// one byte short of its length, and returns the output.
+    fn decode_single_meta_block(is_last: bool) -> (Vec<u8>, Vec<u8>) {
+        let data: Vec<u8> = (0..3000_u32).map(|i| (i * 7 % 251) as u8).collect();
+        let stream = burli::compress(&data, 1).unwrap();
+        let mut reader = BitReader::new(&stream);
+        let window_bits = crate::stored::read_window_bits(&mut reader).unwrap();
+        let crate::stored::MetaBlockHeader::Compressed { len, .. } =
+            crate::stored::read_meta_block_header(&mut reader).unwrap()
+        else {
+            panic!("expected a compressed meta-block");
+        };
+        let mut output = Vec::with_capacity(len - 1);
+        decode_meta_block_with_base(
+            &mut reader,
+            &mut output,
+            MetaBlockDecodeParams {
+                output_base: 0,
+                len,
+                is_last,
+                max_output_size: usize::MAX,
+                window_bits,
+                raw_dictionary: RawDictionary::empty(),
+            },
+            &mut DistanceRing::new(),
+        )
+        .unwrap();
+        (output, data)
+    }
+
+    #[test]
+    fn last_meta_block_grows_the_output_by_its_length() {
+        let (output, data) = decode_single_meta_block(true);
+        assert_eq!(output, data);
+        assert_eq!(output.capacity(), data.len() + COPY_CHUNK_SLACK);
+    }
+
+    #[test]
+    fn earlier_meta_blocks_grow_the_output_geometrically() {
+        let (output, data) = decode_single_meta_block(false);
+        assert_eq!(output, data);
+        assert_eq!(output.capacity(), 2 * (data.len() - 1));
+    }
 
     #[test]
     fn reads_single_type_headers_without_prefix_codes() {

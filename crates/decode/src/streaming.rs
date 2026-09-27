@@ -295,6 +295,7 @@ impl<R: Read> StreamDecoder<R> {
                     MetaBlockDecodeParams {
                         output_base: self.output_base,
                         len,
+                        is_last,
                         max_output_size: self.max_output_size,
                         window_bits,
                         raw_dictionary: crate::dictionary::RawDictionary::new(

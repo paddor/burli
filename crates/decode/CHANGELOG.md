@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Start one-shot output empty instead of reserving the output limit, when the
+  limit is 16 MiB or less.
+- Decode `decompress_into` in place when the output is empty.
+- Start the `decompress_into_slice` scratch buffer and the `validate` window
+  empty instead of reserving the slice length or the window size.
+- Grow the output by exactly the last meta-block's length.
+
 ## [0.3.3] - 2026-09-25
 
 - Use two-level Huffman lookup tables with a 10-bit root.
