@@ -47,11 +47,7 @@ pub(crate) fn decompress_concat_payload_with_limit(
         return Err(BurliError::Format("non-zero concat fragment padding"));
     }
 
-    let mut output = if max_output_size <= MAX_META_BLOCK_SIZE {
-        Vec::with_capacity(max_output_size)
-    } else {
-        Vec::new()
-    };
+    let mut output = Vec::new();
     let mut reader = BitReader::new(input);
     let mut distances = DistanceRing::new();
     let mut has_copy = false;
@@ -97,6 +93,7 @@ pub(crate) fn decompress_concat_payload_with_limit(
                     MetaBlockDecodeParams {
                         output_base: 0,
                         len,
+                        is_last,
                         max_output_size,
                         window_bits,
                         raw_dictionary: RawDictionary::empty(),
@@ -122,11 +119,7 @@ pub(crate) fn decompress_with_raw_dictionary_and_limit(
     raw_dictionary: RawDictionary<'_>,
     max_output_size: usize,
 ) -> Result<Vec<u8>, DecompressError> {
-    let mut output = if max_output_size <= MAX_META_BLOCK_SIZE {
-        Vec::with_capacity(max_output_size)
-    } else {
-        Vec::new()
-    };
+    let mut output = Vec::new();
     decompress_into_empty_with_limit(input, max_output_size, &mut output, raw_dictionary)?;
     Ok(output)
 }
@@ -138,7 +131,7 @@ pub(crate) fn validate(input: &[u8]) -> Result<(), DecompressError> {
     let mut distances = DistanceRing::new();
     // Keep only sliding-window history. Delay compaction until the largest
     // legal meta-block so validation does not repeatedly move the window.
-    let mut output = Vec::with_capacity(window_size.min(MAX_META_BLOCK_SIZE));
+    let mut output = Vec::new();
     let mut output_base = 0_usize;
 
     loop {
@@ -167,6 +160,7 @@ pub(crate) fn validate(input: &[u8]) -> Result<(), DecompressError> {
                     MetaBlockDecodeParams {
                         output_base,
                         len,
+                        is_last,
                         max_output_size: usize::MAX,
                         window_bits,
                         raw_dictionary: RawDictionary::empty(),
@@ -240,6 +234,7 @@ pub(crate) fn decompress_into_empty_with_limit(
                     MetaBlockDecodeParams {
                         output_base: 0,
                         len,
+                        is_last,
                         max_output_size,
                         window_bits,
                         raw_dictionary,

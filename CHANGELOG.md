@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+- Size decoded output from the stream instead of the output limit:
+  `decompress_with_limit`, `decompress_with_options`, and
+  `Decompressor::decompress` returned a buffer with the whole limit as
+  capacity when the limit was 16 MiB or less, even for a 2 KB output.
+- Decode `decompress_into` in place when the output `Vec` is empty. It
+  decoded into a temporary buffer and copied it, doubling peak memory.
+- `decompress_into_slice` no longer allocates a temporary buffer the size of
+  the caller's slice, and `validate` no longer reserves the whole window up
+  front (4 MB for a 2 KB stream).
+- Grow the output by exactly the last meta-block's length instead of
+  doubling it.
+
 ## [0.3.4] - 2026-09-26
 
 - Add regression tests and a fuzz target for decoder reuse after malformed
