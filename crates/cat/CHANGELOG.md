@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-09-27
+
+- Update `burli-decode` to `0.3.4`, which sizes decoded concat payloads from
+  the stream instead of the output limit.
+
 ## [0.2.4] - 2026-09-25
 
 - Update `burli-core` to `0.3.1` and `burli-encode` and `burli-decode`

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-09-27
+
 - Size decoded output from the stream instead of the output limit:
   `decompress_with_limit`, `decompress_with_options`, and
   `Decompressor::decompress` returned a buffer with the whole limit as
@@ -13,6 +15,7 @@
   front (4 MB for a 2 KB stream).
 - Grow the output by exactly the last meta-block's length instead of
   doubling it.
+- Bump the JSR/WASM package to `0.3.5`.
 
 ## [0.3.4] - 2026-09-26
 
