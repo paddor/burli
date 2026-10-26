@@ -274,7 +274,7 @@ impl Config {
                 codec("google-brotli", google_brotli_label(), 0x2563eb, 0x1d4ed8),
                 codec("burli", "burli", 0xf87171, 0xc45050),
                 codec("rust-brotli", "rust-brotli 8.0.4", 0x4ade80, 0x3aaf60),
-                codec("mbrotli", "mbrotli 0.4.1", 0xfbbf24, 0xd97706),
+                codec("mbrotli", "mbrotli 0.5.17", 0xfbbf24, 0xd97706),
             ],
             scatter_codecs: vec!["google-brotli", "burli", "rust-brotli", "mbrotli"],
             summary_codecs: vec!["google-brotli", "burli", "rust-brotli", "mbrotli"],
