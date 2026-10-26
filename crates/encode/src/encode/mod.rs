@@ -4060,19 +4060,19 @@ fn fill_dense_symbol_code_map_from_lengths<const N: usize>(
     }
 
     for (entry, &len) in map.iter_mut().zip(lengths) {
+        // Unused symbols skip the counter update. Sending them through one
+        // counter chained every update to the one before it.
+        if len == 0 {
+            *entry = MISSING_DENSE_SYMBOL_CODE;
+            continue;
+        }
         let slot = &mut next_code[usize::from(len & 15)];
         let code = *slot;
         *slot = code.wrapping_add(1);
-        // A zero length shifts by 32, which wraps to a shift of 0. The
-        // result is replaced below.
         let bits = u32::from(code)
             .reverse_bits()
             .wrapping_shr(32 - u32::from(len)) as u16;
-        *entry = if len == 0 {
-            MISSING_DENSE_SYMBOL_CODE
-        } else {
-            DenseSymbolCode { len, bits }
-        };
+        *entry = DenseSymbolCode { len, bits };
     }
 }
 

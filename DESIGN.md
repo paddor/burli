@@ -104,6 +104,11 @@ Dictionary references resolve through the shared Brotli dictionary table and
 transform code. The transform path validates length classes and UTF-8-sensitive
 uppercase transforms before appending bytes.
 
+A table built at compile time holds each transform's prefix and suffix
+inline. With room past the word, the prefix, word, and suffix move as fixed
+8-, 24-, and 8-byte windows. Each window runs into bytes that the next part
+or later output replaces, as short backward copies do.
+
 Raw LZ77 prefix dictionaries are supported on decode. They are kept separate
 from the output ring. Distances in the range after the normal backward window
 copy from the raw dictionary suffix first, then continue into the beginning of

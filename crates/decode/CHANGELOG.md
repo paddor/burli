@@ -20,6 +20,8 @@
   locals, like the command and distance codes. One test sends a copy within
   the output and the window to the hot path; a cold path resolves dictionary
   references and rejects invalid distances.
+- Write static dictionary words as fixed-size windows from a transform table
+  with prefixes and suffixes inline, in one call from the command loop.
 - Decoding runs 34% to 68% faster than 0.3.4 in aggregate.
 
 ## [0.3.4] - 2026-09-27

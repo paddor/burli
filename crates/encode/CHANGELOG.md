@@ -5,6 +5,8 @@
 - Enforce `#![forbid(unsafe_code)]`. The match scanner reads words through
   checked slices instead of unaligned pointer reads. The `paranoid` feature
   has no effect today.
+- Build canonical code maps without a counter update for unused symbols.
+  Output is unchanged.
 
 ## [0.3.3] - 2026-09-25
 

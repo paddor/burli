@@ -10,7 +10,7 @@ use burli_core::{
 };
 
 mod transform;
-use transform::{transform_dictionary_word, transformed_dictionary_word_len};
+use transform::TransformedWord;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RawDictionary<'a> {
@@ -100,6 +100,9 @@ pub(crate) fn copy_raw_lz77(
 
 /// Writes the static dictionary word for `distance` to `output[pos..]`, and
 /// returns the new end. The caller makes sure `output` holds `needed` bytes.
+///
+/// It inlines into the caller's cold path, so a word costs one call.
+#[inline(always)]
 pub(crate) fn copy_lookup(
     output: &mut [u8],
     pos: usize,
@@ -108,18 +111,18 @@ pub(crate) fn copy_lookup(
     copy_len: usize,
     needed: usize,
 ) -> Result<usize, DecompressError> {
-    let (word, transform_index) = lookup_word(distance, max_allowed_distance, copy_len)?;
-    let transformed_len = transformed_dictionary_word_len(word.len(), transform_index)
+    let (tail, transform_index) = lookup_word(distance, max_allowed_distance, copy_len)?;
+    let word = TransformedWord::new(tail, copy_len, transform_index)
         .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
     let end = pos
-        .checked_add(transformed_len)
+        .checked_add(word.len())
         .ok_or(BurliError::Format("Brotli dictionary copy length overflow"))?;
     if end > needed {
         return Err(BurliError::Format(
             "Brotli dictionary copy exceeds meta-block size",
         ));
     }
-    transform_dictionary_word(&mut output[pos..end], word, transform_index)
+    word.write(output, pos)
         .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
     Ok(end)
 }
@@ -130,16 +133,19 @@ pub(crate) fn lookup(
     max_allowed_distance: usize,
     copy_len: usize,
 ) -> Result<Vec<u8>, DecompressError> {
-    let (word, transform_index) = lookup_word(distance, max_allowed_distance, copy_len)?;
-    let transformed_len = transformed_dictionary_word_len(word.len(), transform_index)
+    let (tail, transform_index) = lookup_word(distance, max_allowed_distance, copy_len)?;
+    let word = TransformedWord::new(tail, copy_len, transform_index)
         .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
-    let mut output = alloc::vec![0; transformed_len];
+    let mut output = alloc::vec![0; word.len()];
 
-    transform_dictionary_word(&mut output, word, transform_index)
+    word.write(&mut output, 0)
         .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
     Ok(output)
 }
 
+/// Returns the dictionary from the `copy_len`-byte word of `distance` on,
+/// and the word's transform.
+#[inline(always)]
 fn lookup_word(
     distance: usize,
     max_allowed_distance: usize,
@@ -159,17 +165,12 @@ fn lookup_word(
     let word_count = 1_usize << size_bits;
     let word_index = word_id & (word_count - 1);
     let transform_index = word_id >> size_bits;
-    let base_offset = kBrotliDictionaryOffsetsByLength[copy_len] as usize;
-    let offset = base_offset
-        .checked_add(word_index.saturating_mul(copy_len))
-        .ok_or(BurliError::Format("Brotli dictionary offset overflow"))?;
-    let end = offset
-        .checked_add(copy_len)
-        .ok_or(BurliError::Format("Brotli dictionary word overflow"))?;
-    let word = kBrotliDictionary
-        .get(offset..end)
-        .ok_or(BurliError::Format("Brotli dictionary word out of bounds"))?;
-    Ok((word, transform_index))
+    // At most 2^11 words of at most 24 bytes, so the offset cannot overflow.
+    let offset = kBrotliDictionaryOffsetsByLength[copy_len] as usize + word_index * copy_len;
+    if offset + copy_len > kBrotliDictionary.len() {
+        return Err(BurliError::Format("Brotli dictionary word out of bounds"));
+    }
+    Ok((&kBrotliDictionary[offset..], transform_index))
 }
 
 #[cfg(test)]
@@ -179,6 +180,26 @@ mod tests {
     #[test]
     fn identity_transform_resolves_first_len4_word() {
         assert_eq!(lookup(1, 0, 4).unwrap(), b"time");
+    }
+
+    /// `copy_lookup` with room writes fixed-size windows; `lookup` writes
+    /// into an exact buffer. Both must agree for every transform, including
+    /// the last words of the dictionary.
+    #[test]
+    fn windowed_words_match_exact_words() {
+        let mut output = [0xaa; 64];
+        for (copy_len, &size_bits) in kBrotliDictionarySizeBitsByLength.iter().enumerate().skip(4) {
+            let words = 1_usize << size_bits;
+            for transform in 0..=transform::kNumTransforms as usize {
+                for word_index in [0, 1, words / 2, words - 1] {
+                    let distance = 1 + ((transform << size_bits) | word_index);
+                    let exact = lookup(distance, 0, copy_len);
+                    let windowed = copy_lookup(&mut output, 0, distance, 0, copy_len, 48)
+                        .map(|end| output[..end].to_vec());
+                    assert_eq!(windowed, exact, "len {copy_len} transform {transform}");
+                }
+            }
+        }
     }
 
     #[test]
