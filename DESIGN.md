@@ -25,7 +25,8 @@ failed decodes do not partially modify caller buffers.
 ## Bit I/O
 
 `BitReader` reads Brotli's little-endian bit stream from an immutable byte
-slice. Checked methods validate width and remaining input. Trusted methods are
+slice. It keeps the unread input as a shrinking slice, so a refill tests one
+length. Checked methods validate width and remaining input. Trusted methods are
 hidden and used only after nearby code has proven enough input bits.
 
 `BitWriter` accumulates pending bits in a 64-bit buffer and flushes full bytes
@@ -46,6 +47,12 @@ Compressed meta-block decoding reads block category metadata, literal,
 command, and distance prefix codes, then executes the command stream. Output
 limit checks happen before each meta-block body can grow the output.
 
+The command loop writes into zeroed room past the decoded bytes, as a slice.
+The output grows 64 KiB at a time, up to the meta-block end plus 32 bytes of
+slack, so writes need no capacity checks and the zeroed lines are still cached
+when the loop writes them. Block counts, the current command code, and the
+distance codes live in locals and change only at block switches.
+
 ## Huffman Tables
 
 Prefix codes are canonical Huffman codes. Each non-single code builds a fixed
@@ -62,11 +69,14 @@ The decoder tracks Brotli's four-entry recent-distance ring. Distance symbols
 resolve either to direct distances or recent-distance transforms. Invalid zero
 distances are rejected before copy execution.
 
-Copy execution has three paths:
+Copy execution:
 
-- distance 1 repeats the previous byte;
-- non-overlapping copies use one `Vec::extend_from_within`;
-- overlapping copies extend from already-produced bytes in chunks.
+- a copy of up to 32 bytes that does not overlap its source moves one whole
+  16- or 32-byte window; bytes past the copy land in room that later writes
+  replace;
+- longer non-overlapping copies use `copy_within`;
+- overlapping copies repeat the pattern in 16- or 8-byte chunks; distance 1
+  fills, and distances 2 to 7 first write the pattern up to 8 bytes or more.
 
 ## Dictionaries
 

@@ -1,3 +1,4 @@
+#[cfg(test)]
 use alloc::vec::Vec;
 
 use burli_core::{
@@ -34,16 +35,20 @@ impl<'a> RawDictionary<'a> {
     }
 }
 
-pub(crate) fn append_raw_lz77_copy(
-    output: &mut Vec<u8>,
+/// Copies `copy_len` bytes for a `distance` that reaches into the raw
+/// dictionary to `output[pos..]`, and returns the new end. Bytes past the
+/// dictionary end continue at the window start. The caller makes sure
+/// `output` holds `needed` bytes.
+pub(crate) fn copy_raw_lz77(
+    output: &mut [u8],
+    pos: usize,
     dictionary: RawDictionary<'_>,
     distance: usize,
     max_allowed_distance: usize,
     copy_len: usize,
     needed: usize,
-) -> Result<(), DecompressError> {
-    let end = output
-        .len()
+) -> Result<usize, DecompressError> {
+    let end = pos
         .checked_add(copy_len)
         .ok_or(BurliError::Format("Brotli raw dictionary copy overflow"))?;
     if end > needed {
@@ -62,52 +67,51 @@ pub(crate) fn append_raw_lz77_copy(
         .get(dictionary_address..)
         .ok_or(BurliError::Format("invalid Brotli raw dictionary distance"))?;
     let copied_from_dictionary = copy_len.min(dictionary_suffix.len());
-    output.extend_from_slice(&dictionary_suffix[..copied_from_dictionary]);
+    let mut dst = pos + copied_from_dictionary;
+    output[pos..dst].copy_from_slice(&dictionary_suffix[..copied_from_dictionary]);
 
     let mut remaining = copy_len - copied_from_dictionary;
     if remaining == 0 {
-        debug_assert_eq!(output.len(), end);
-        return Ok(());
+        return Ok(end);
     }
 
-    let mut source = output
-        .len()
-        .checked_sub(copied_from_dictionary)
-        .and_then(|old_len| old_len.checked_sub(max_allowed_distance))
+    let mut source = pos
+        .checked_sub(max_allowed_distance)
         .ok_or(BurliError::Format(
             "Brotli raw dictionary continuation underflow",
         ))?;
     while remaining != 0 {
-        let available = output.len().checked_sub(source).ok_or(BurliError::Format(
-            "Brotli raw dictionary continuation underflow",
-        ))?;
+        let available = dst - source;
         if available == 0 {
             return Err(BurliError::Format(
                 "invalid Brotli raw dictionary continuation",
             ));
         }
         let chunk = available.min(remaining);
-        output.extend_from_within(source..source + chunk);
+        output.copy_within(source..source + chunk, dst);
         source += chunk;
+        dst += chunk;
         remaining -= chunk;
     }
 
-    debug_assert_eq!(output.len(), end);
-    Ok(())
+    debug_assert_eq!(dst, end);
+    Ok(end)
 }
 
-pub(crate) fn append_lookup(
-    output: &mut Vec<u8>,
+/// Writes the static dictionary word for `distance` to `output[pos..]`, and
+/// returns the new end. The caller makes sure `output` holds `needed` bytes.
+pub(crate) fn copy_lookup(
+    output: &mut [u8],
+    pos: usize,
     distance: usize,
     max_allowed_distance: usize,
     copy_len: usize,
     needed: usize,
-) -> Result<(), DecompressError> {
+) -> Result<usize, DecompressError> {
     let (word, transform_index) = lookup_word(distance, max_allowed_distance, copy_len)?;
     let transformed_len = transformed_dictionary_word_len(word.len(), transform_index)
         .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
-    let end = output
-        .len()
+    let end = pos
         .checked_add(transformed_len)
         .ok_or(BurliError::Format("Brotli dictionary copy length overflow"))?;
     if end > needed {
@@ -115,10 +119,9 @@ pub(crate) fn append_lookup(
             "Brotli dictionary copy exceeds meta-block size",
         ));
     }
-    transform_dictionary_word(output, word, transform_index)
+    transform_dictionary_word(&mut output[pos..end], word, transform_index)
         .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
-    debug_assert_eq!(output.len(), end);
-    Ok(())
+    Ok(end)
 }
 
 #[cfg(test)]
@@ -130,7 +133,7 @@ pub(crate) fn lookup(
     let (word, transform_index) = lookup_word(distance, max_allowed_distance, copy_len)?;
     let transformed_len = transformed_dictionary_word_len(word.len(), transform_index)
         .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
-    let mut output = Vec::with_capacity(transformed_len);
+    let mut output = alloc::vec![0; transformed_len];
 
     transform_dictionary_word(&mut output, word, transform_index)
         .ok_or(BurliError::Format("invalid Brotli dictionary transform"))?;
@@ -186,34 +189,45 @@ mod tests {
         ));
     }
 
+    /// Runs [`copy_raw_lz77`] on `history` followed by zeroed room for
+    /// `needed`, and returns the output up to the copy end.
+    fn raw_copy(
+        history: &[u8],
+        dictionary: &[u8],
+        distance: usize,
+        max_allowed_distance: usize,
+        copy_len: usize,
+        needed: usize,
+    ) -> Vec<u8> {
+        let mut output = history.to_vec();
+        output.resize(needed, 0);
+        let end = copy_raw_lz77(
+            &mut output,
+            history.len(),
+            RawDictionary::new(dictionary),
+            distance,
+            max_allowed_distance,
+            copy_len,
+            needed,
+        )
+        .unwrap();
+        output.truncate(end);
+        output
+    }
+
     #[test]
     fn raw_lz77_copy_reads_dictionary_suffix() {
-        let mut output = b"abc".to_vec();
-        let dictionary = RawDictionary::new(b"012345");
-
-        append_raw_lz77_copy(&mut output, dictionary, 5, 3, 2, 5).unwrap();
-
-        assert_eq!(output, b"abc45");
+        assert_eq!(raw_copy(b"abc", b"012345", 5, 3, 2, 5), b"abc45");
     }
 
     #[test]
     fn raw_lz77_copy_continues_into_window_beginning() {
-        let mut output = b"abcdef".to_vec();
-        let dictionary = RawDictionary::new(b"XYZ");
-
-        append_raw_lz77_copy(&mut output, dictionary, 9, 6, 7, 13).unwrap();
-
-        assert_eq!(output, b"abcdefXYZabcd");
+        assert_eq!(raw_copy(b"abcdef", b"XYZ", 9, 6, 7, 13), b"abcdefXYZabcd");
     }
 
     #[test]
     fn raw_lz77_copy_can_overlap_after_dictionary() {
-        let mut output = Vec::new();
-        let dictionary = RawDictionary::new(b"ab");
-
-        append_raw_lz77_copy(&mut output, dictionary, 2, 0, 6, 6).unwrap();
-
-        assert_eq!(output, b"ababab");
+        assert_eq!(raw_copy(b"", b"ab", 2, 0, 6, 6), b"ababab");
     }
 }
 

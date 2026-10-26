@@ -237,7 +237,7 @@ impl<R: Read> StreamDecoder<R> {
         let header = stored::read_meta_block_header(&mut reader)?;
         let before_output = self.output.len();
         let mut output = self.output.clone();
-        let mut distances = self.distances.clone();
+        let mut distances = self.distances;
 
         match header {
             MetaBlockHeader::LastEmpty => {

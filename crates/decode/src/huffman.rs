@@ -311,14 +311,13 @@ impl PrefixCode {
         Ok(lookup.value())
     }
 
-    /// Decodes one symbol from the buffered bits without refilling. The
-    /// caller proves that the buffer holds `max_bits` bits or all remaining
-    /// input, and that the input holds this symbol's code.
+    /// Decodes one symbol from the buffered bits without refilling, single
+    /// symbols included: their zero-length entry consumes no bits. The caller
+    /// proves that the buffer holds `max_bits` bits or all remaining input,
+    /// and that the input holds this symbol's code.
     #[inline(always)]
-    pub(crate) fn decode_non_single_buffered(&self, reader: &mut BitReader<'_>) -> u16 {
-        debug_assert!(self.single_symbol.is_none());
+    pub(crate) fn decode_buffered(&self, reader: &mut BitReader<'_>) -> u16 {
         let lookup = self.lookup(reader.buffer());
-        debug_assert!(lookup.len() != 0);
         reader.drop_bits_trusted(lookup.len());
         lookup.value()
     }

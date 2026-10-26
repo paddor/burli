@@ -4,6 +4,8 @@
 
 - Enforce `#![forbid(unsafe_code)]`. The `paranoid` feature has no effect
   today.
+- `BitReader` keeps the unread input as a slice, so a refill tests one
+  length. Add hidden `read_short_bits` for fields of up to 24 bits.
 
 ## [0.3.1] - 2026-09-25
 

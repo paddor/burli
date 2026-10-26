@@ -14,8 +14,9 @@ pub const MAX_BITS_PER_OP: u8 = 56;
 #[derive(Clone, Debug)]
 pub struct BitReader<'a> {
     input: &'a [u8],
-    /// Next input byte to load into `buffer`.
-    byte_pos: usize,
+    /// The input bytes not yet loaded into `buffer`, a suffix of `input`. A
+    /// refill tests only its length.
+    rest: &'a [u8],
     buffer: u64,
     bit_count: u32,
 }
@@ -24,7 +25,7 @@ impl<'a> BitReader<'a> {
     pub const fn new(input: &'a [u8]) -> Self {
         Self {
             input,
-            byte_pos: 0,
+            rest: input,
             buffer: 0,
             bit_count: 0,
         }
@@ -35,22 +36,23 @@ impl<'a> BitReader<'a> {
             return Err(BurliError::Format("Brotli bit position exceeds input"));
         }
         let mut reader = Self::new(input);
-        reader.byte_pos = bit_pos / 8;
+        let byte_pos = bit_pos / 8;
+        reader.rest = &input[byte_pos..];
         let bit_offset = (bit_pos % 8) as u32;
         if bit_offset != 0 {
-            reader.buffer = u64::from(input[reader.byte_pos] >> bit_offset);
+            reader.buffer = u64::from(input[byte_pos] >> bit_offset);
             reader.bit_count = 8 - bit_offset;
-            reader.byte_pos += 1;
+            reader.rest = &input[byte_pos + 1..];
         }
         Ok(reader)
     }
 
     pub const fn consumed_bits(&self) -> usize {
-        self.byte_pos * 8 - self.bit_count as usize
+        (self.input.len() - self.rest.len()) * 8 - self.bit_count as usize
     }
 
     pub const fn remaining_bits(&self) -> usize {
-        (self.input.len() - self.byte_pos) * 8 + self.bit_count as usize
+        self.rest.len() * 8 + self.bit_count as usize
     }
 
     #[inline(always)]
@@ -79,6 +81,24 @@ impl<'a> BitReader<'a> {
         Ok(value)
     }
 
+    /// Reads `width <= 24` bits, zero included, with one buffer test when
+    /// enough bits are buffered. Extra-bit fields go through here: they
+    /// follow a refill, and a zero-width test would branch on the data.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_short_bits(&mut self, width: u8) -> Result<u64> {
+        debug_assert!(width <= 24);
+        if self.bit_count < u32::from(width) {
+            self.refill();
+            if self.bit_count < u32::from(width) {
+                return Err(BurliError::Format("unexpected end of Brotli input"));
+            }
+        }
+        let value = self.buffer & low_mask(width);
+        self.consume(width);
+        Ok(value)
+    }
+
     #[inline(always)]
     pub fn peek_bits(&self, width: u8) -> Result<u64> {
         Self::validate_bit_width(width, "bit read width exceeds 56 bits")?;
@@ -97,12 +117,7 @@ impl<'a> BitReader<'a> {
         if self.bit_count >= u32::from(width) {
             return self.buffer & low_mask(width);
         }
-        peek_bits_unbuffered(
-            &self.input[self.byte_pos..],
-            self.buffer,
-            self.bit_count,
-            width,
-        )
+        peek_bits_unbuffered(self.rest, self.buffer, self.bit_count, width)
     }
 
     #[inline(always)]
@@ -144,23 +159,21 @@ impl<'a> BitReader<'a> {
     #[doc(hidden)]
     #[inline(always)]
     pub fn refill(&mut self) {
-        match self
-            .input
-            .get(self.byte_pos..)
-            .and_then(<[u8]>::first_chunk::<8>)
-        {
+        match self.rest.first_chunk::<8>() {
             Some(bytes) => {
                 // Bits of the word past the whole bytes taken are the input
                 // bits that follow, which keeps the buffer invariant.
                 self.buffer |= u64::from_le_bytes(*bytes) << self.bit_count;
                 let taken = (63 - self.bit_count) / 8;
-                self.byte_pos += taken as usize;
+                // At most 7 bytes; the bound lets the length test above
+                // cover this slice.
+                self.rest = &self.rest[(taken as usize).min(8)..];
                 self.bit_count += taken * 8;
             }
             None => {
                 let (taken, buffer, bit_count) =
-                    refill_tail(&self.input[self.byte_pos..], self.buffer, self.bit_count);
-                self.byte_pos += taken;
+                    refill_tail(self.rest, self.buffer, self.bit_count);
+                self.rest = &self.rest[taken..];
                 self.buffer = buffer;
                 self.bit_count = bit_count;
             }
@@ -245,15 +258,14 @@ impl<'a> BitReader<'a> {
             .input
             .get(start..end)
             .ok_or(BurliError::Format("unexpected end of Brotli input"))?;
-        self.byte_pos = end;
+        self.rest = &self.input[end..];
         self.buffer = 0;
         self.bit_count = 0;
         Ok(bytes)
     }
 
     pub fn remaining_bits_are_zero(&self) -> bool {
-        self.buffer & low_mask(self.bit_count as u8) == 0
-            && self.input[self.byte_pos..].iter().all(|&b| b == 0)
+        self.buffer & low_mask(self.bit_count as u8) == 0 && self.rest.iter().all(|&b| b == 0)
     }
 }
 

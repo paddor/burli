@@ -5,6 +5,12 @@
 - Enforce `#![forbid(unsafe_code)]`. Backward copies, literal writes, and
   Huffman table lookups use only safe code. The `paranoid` feature has no
   effect today.
+- Decode each compressed meta-block into zeroed room as a slice, so writes
+  need no capacity checks. Short copies move whole 16- or 32-byte windows.
+  Block counts and the current command and distance codes stay in locals
+  between block switches. Literal contexts come from the 512-byte lookup
+  table instead of a 64 KiB pair table. Decoding runs 3% to 27% faster in
+  aggregate.
 
 ## [0.3.4] - 2026-09-27
 

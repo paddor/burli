@@ -4,9 +4,10 @@
 
 - All crates now enforce `#![forbid(unsafe_code)]`. The `paranoid` feature
   remains available and has no effect today.
-- Decoding runs up to 7% slower than the previous default build. Encoding
-  runs up to 8% slower, and up to 22% slower on incompressible inputs below
-  64 KiB at q0 to q2. Output is unchanged.
+- Decoding runs 3% to 27% faster than 0.3.5 on the benchmark corpora in
+  aggregate. Some inputs decode up to 13% slower, mostly copy-heavy ones and
+  inputs below 1 KiB. Encoding runs up to 8% slower, and up to 22% slower on
+  incompressible inputs below 64 KiB at q0 to q2. Output is unchanged.
 
 ## [0.3.5] - 2026-09-27
 

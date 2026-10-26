@@ -107,20 +107,11 @@ pub(crate) static kContextLookup: [[u8; 512]; 4] = [
     ],
 ];
 
-pub(crate) static CONTEXT_PAIR_LOOKUP: [[u8; 256 * 256]; 2] =
-    [build_context_pair_lookup(2), build_context_pair_lookup(3)];
-
-#[allow(clippy::large_stack_arrays)]
-const fn build_context_pair_lookup(mode: usize) -> [u8; 256 * 256] {
-    let mut out = [0_u8; 256 * 256];
-    let mut p1 = 0_usize;
-    while p1 < 256 {
-        let mut p2 = 0_usize;
-        while p2 < 256 {
-            out[(p1 << 8) | p2] = kContextLookup[mode][p1] | kContextLookup[mode][p2 + 256];
-            p2 += 1;
-        }
-        p1 += 1;
-    }
-    out
+/// The literal context of mode `MODE` for the previous bytes `p1` and `p2`.
+/// Two lookups in one 512-byte table, which stays in L1 even when the bytes
+/// are random.
+#[inline(always)]
+pub(crate) fn literal_context<const MODE: usize>(p1: u8, p2: u8) -> u8 {
+    let lookup = &kContextLookup[MODE];
+    lookup[usize::from(p1)] | lookup[256 + usize::from(p2)]
 }
