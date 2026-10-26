@@ -161,14 +161,15 @@ impl<'a> BitReader<'a> {
     pub fn refill(&mut self) {
         match self.rest.first_chunk::<8>() {
             Some(bytes) => {
+                // At most 63 bits are ever buffered. The mask says so, which
+                // bounds the bytes taken by 7 for the length test above.
+                let bit_count = self.bit_count & 63;
                 // Bits of the word past the whole bytes taken are the input
                 // bits that follow, which keeps the buffer invariant.
-                self.buffer |= u64::from_le_bytes(*bytes) << self.bit_count;
-                let taken = (63 - self.bit_count) / 8;
-                // At most 7 bytes; the bound lets the length test above
-                // cover this slice.
-                self.rest = &self.rest[(taken as usize).min(8)..];
-                self.bit_count += taken * 8;
+                self.buffer |= u64::from_le_bytes(*bytes) << bit_count;
+                self.rest = &self.rest[((63 - bit_count) / 8) as usize..];
+                // Adds the bits of the bytes taken, which leaves 56 to 63.
+                self.bit_count = bit_count | 0x38;
             }
             None => {
                 let (taken, buffer, bit_count) =

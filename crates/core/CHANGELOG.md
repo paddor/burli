@@ -6,6 +6,9 @@
   today.
 - `BitReader` keeps the unread input as a slice, so a refill tests one
   length. Add hidden `read_short_bits` for fields of up to 24 bits.
+- Refill `BitReader` with a mask and an OR instead of a clamp and an add.
+- `BurliError` has a `u64` tag. With a byte tag, decoder error paths kept
+  stale values live in the command loop.
 
 ## [0.3.1] - 2026-09-25
 

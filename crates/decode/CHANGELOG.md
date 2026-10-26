@@ -16,7 +16,11 @@
   with one literal code of mostly long codes also builds a 10-bit root.
   Literal context maps with one tree for every context use the single-code
   path.
-- Decoding runs 17% to 52% faster than 0.3.4 in aggregate.
+- Keep the current literal block's context map, mode, and shared tree in
+  locals, like the command and distance codes. One test sends a copy within
+  the output and the window to the hot path; a cold path resolves dictionary
+  references and rejects invalid distances.
+- Decoding runs 34% to 68% faster than 0.3.4 in aggregate.
 
 ## [0.3.4] - 2026-09-27
 

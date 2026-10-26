@@ -113,5 +113,7 @@ pub(crate) static kContextLookup: [[u8; 512]; 4] = [
 #[inline(always)]
 pub(crate) fn literal_context<const MODE: usize>(p1: u8, p2: u8) -> u8 {
     let lookup = &kContextLookup[MODE];
-    lookup[usize::from(p1)] | lookup[256 + usize::from(p2)]
+    // Contexts are below 64. The mask says so, which lets callers index a
+    // 64-entry context map unchecked.
+    (lookup[usize::from(p1)] | lookup[256 + usize::from(p2)]) & 0x3f
 }

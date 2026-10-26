@@ -50,8 +50,9 @@ limit checks happen before each meta-block body can grow the output.
 The command loop writes into zeroed room past the decoded bytes, as a slice.
 The output grows 64 KiB at a time, up to the meta-block end plus 32 bytes of
 slack, so writes need no capacity checks and the zeroed lines are still cached
-when the loop writes them. Block counts, the current command code, and the
-distance codes live in locals and change only at block switches.
+when the loop writes them. Block counts, the current command code, the
+distance codes, and the literal context map and mode live in locals and
+change only at block switches.
 
 ## Huffman Tables
 
@@ -83,8 +84,10 @@ the code length against the bits left.
 ## Backward Copies
 
 The decoder tracks Brotli's four-entry recent-distance ring. Distance symbols
-resolve either to direct distances or recent-distance transforms. Invalid zero
-distances are rejected before copy execution.
+resolve either to direct distances or recent-distance transforms. One test
+sends a distance within both the output and the window to the copy. Every
+other distance takes a cold path, which resolves dictionary references and
+rejects the rest, zero included.
 
 Copy execution:
 

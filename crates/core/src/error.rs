@@ -2,6 +2,10 @@ use core::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Error type used by public Bürli APIs.
+// A full-word tag leaves no padding after it. With a byte tag, results
+// whose `Ok` value overlaps that padding made LLVM keep stale values live
+// in the decoder loop to fill it on error paths.
+#[repr(u64)]
 pub enum BurliError {
     /// Encoder quality was outside Brotli's 0 through 11 range.
     InvalidQuality(u8),
