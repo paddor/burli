@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Enforce `#![forbid(unsafe_code)]`. Backward copies, literal writes, and
+  Huffman table lookups use only safe code. The `paranoid` feature has no
+  effect today.
+
 ## [0.3.4] - 2026-09-27
 
 - Start one-shot output empty instead of reserving the output limit, when the

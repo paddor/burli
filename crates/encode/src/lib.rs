@@ -1,8 +1,7 @@
 //! Brotli encoder implementation for Bürli.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![deny(unsafe_op_in_unsafe_fn)]
-#![cfg_attr(feature = "paranoid", forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;

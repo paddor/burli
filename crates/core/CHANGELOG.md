@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Enforce `#![forbid(unsafe_code)]`. The `paranoid` feature has no effect
+  today.
+
 ## [0.3.1] - 2026-09-25
 
 - Add hidden `BitReader::peek_bits_padded` for batched decoding.

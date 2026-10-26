@@ -344,24 +344,12 @@ impl PrefixCode {
         self.entry(usize::from(root.value()) + ((bits >> ROOT_BITS) as usize & sub_mask))
     }
 
+    /// The table builder sizes `table` for every masked index, so the
+    /// fallback never runs. It keeps a panic path out of the decode loops.
     #[inline(always)]
     fn entry(&self, index: usize) -> Lookup {
         debug_assert!(index < self.table.len());
-
-        #[cfg(not(feature = "paranoid"))]
-        {
-            // SAFETY: `single` builds a one-entry table with a zero root
-            // mask. `from_complete_code` builds all other tables. Root indexes are masked below `root_mask + 1`, which is
-            // the root size. A root pointer's offset plus its masked subtable
-            // index stays below the offset plus subtable size, and the builder
-            // sized `table` to hold every subtable.
-            unsafe { *self.table.get_unchecked(index) }
-        }
-
-        #[cfg(feature = "paranoid")]
-        {
-            self.table[index]
-        }
+        self.table.get(index).copied().unwrap_or(Lookup::EMPTY)
     }
 }
 
@@ -800,27 +788,5 @@ mod tests {
             PrefixCode::read(&mut reader, 256),
             Err(BurliError::Format("invalid Brotli simple Huffman symbol"))
         ));
-    }
-}
-
-#[cfg(kani)]
-mod verification {
-    use super::*;
-
-    #[kani::proof]
-    fn masked_lookup_indexes_stay_in_their_table() {
-        let root_bits = kani::any::<u8>();
-        let pointer_len = kani::any::<u8>();
-        let offset = kani::any::<u16>();
-        let bits = kani::any::<u64>();
-        kani::assume(root_bits <= ROOT_BITS);
-        kani::assume(pointer_len > ROOT_BITS && pointer_len <= MAX_CODE_BITS);
-
-        let root_mask = (1_u64 << root_bits) - 1;
-        assert!(((bits & root_mask) as usize) < (1_usize << root_bits));
-
-        let sub_size = 1_usize << (pointer_len - ROOT_BITS);
-        let index = usize::from(offset) + ((bits >> ROOT_BITS) as usize & (sub_size - 1));
-        assert!(index < usize::from(offset) + sub_size);
     }
 }

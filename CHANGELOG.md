@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- All crates now enforce `#![forbid(unsafe_code)]`. The `paranoid` feature
+  remains available and has no effect today.
+- Decoding runs up to 7% slower than the previous default build. Encoding
+  runs up to 8% slower, and up to 22% slower on incompressible inputs below
+  64 KiB at q0 to q2. Output is unchanged.
+
 ## [0.3.5] - 2026-09-27
 
 - Size decoded output from the stream instead of the output limit:

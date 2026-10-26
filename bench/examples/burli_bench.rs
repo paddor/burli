@@ -860,7 +860,7 @@ fn profile_encode_only(
     let mbs = input.data.len() as f64 / compress_ns * 1000.0;
     println!(
         "{} q{} {}: {} -> {} bytes, encode {:.1} MB/s",
-        codec_label(codec),
+        codec,
         quality,
         input.name,
         input.data.len(),
@@ -920,7 +920,7 @@ fn profile_decode_only(
     let mbs = input.data.len() as f64 / decompress_ns * 1000.0;
     println!(
         "{} q{} {}: {} <- {} bytes, decode {:.1} MB/s",
-        codec_label(codec),
+        codec,
         quality,
         input.name,
         input.data.len(),
@@ -950,7 +950,7 @@ fn bench_codec(
 
     let encoded_by = encoded_by_label(codec);
     let decoded_by = decoded_by_label(codec);
-    let codec = codec_label(codec);
+    let codec = codec.to_owned();
     Ok(Some(BenchResult {
         codec: codec.clone(),
         encoded_by,
@@ -1260,29 +1260,21 @@ fn size_label(size: usize) -> String {
     }
 }
 
-fn codec_label(codec: &str) -> String {
-    if codec == "burli" && cfg!(feature = "paranoid") {
-        "burli paranoid".to_owned()
-    } else {
-        codec.to_owned()
-    }
-}
-
 fn encoded_by_label(codec: &str) -> String {
     match codec {
         "google-brotli-burli" | "google-brotli-mbrotli" | "google-brotli-rust-brotli" => {
             "google-brotli".to_owned()
         }
-        _ => codec_label(codec),
+        _ => codec.to_owned(),
     }
 }
 
 fn decoded_by_label(codec: &str) -> String {
     match codec {
-        "google-brotli-burli" => codec_label("burli"),
+        "google-brotli-burli" => "burli".to_owned(),
         "google-brotli-mbrotli" => "mbrotli".to_owned(),
         "google-brotli-rust-brotli" => "rust-brotli".to_owned(),
-        _ => codec_label(codec),
+        _ => codec.to_owned(),
     }
 }
 

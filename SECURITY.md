@@ -6,6 +6,6 @@ Security design goals:
 
 - bounded-output decode API;
 - no panics on malformed input;
-- no unsafe in `paranoid`;
+- no `unsafe` code;
 - fuzz targets for untrusted decode paths;
 - differential tests against Google Brotli.

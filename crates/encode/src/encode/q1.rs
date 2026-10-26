@@ -1634,18 +1634,19 @@ fn collect_with_u16_table_m4<
     table: &mut [u16; TABLE_LEN],
 ) {
     debug_assert_eq!(TABLE_LEN, 1_usize << TABLE_BITS);
-    let len_limit = input
-        .len()
-        .saturating_sub(4)
-        .min(input.len().saturating_sub(INPUT_MARGIN_BYTES));
-    if len_limit <= 1 {
-        push_literals_to_batch(batch, input, 0, input.len());
-        return;
-    }
+    // `checked_sub` keeps `len_limit + INPUT_MARGIN_BYTES == input.len()`
+    // visible to the compiler, so reads up to `len_limit` need no checks.
+    let len_limit = match input.len().checked_sub(INPUT_MARGIN_BYTES) {
+        Some(limit) if limit > 1 => limit,
+        _ => {
+            push_literals_to_batch(batch, input, 0, input.len());
+            return;
+        }
+    };
 
     let mut pos = 1;
     let mut insert_start = 0;
-    let mut next_word = read_u32_le(input, pos);
+    let mut next_word = read_u32_le_upto(input, pos, len_limit);
     let mut next_hash = hash4_const::<TABLE_BITS>(next_word);
     let mut last_distance = NO_LAST_DISTANCE;
 
@@ -1686,13 +1687,13 @@ fn collect_with_u16_table_m4<
 
             let current_key =
                 store_tail_hashes_in_u16_table_m4::<TABLE_BITS, TABLE_LEN>(table, input, pos);
-            let current_word = read_u32_le(input, pos);
+            let current_word = read_u32_le_upto(input, pos, len_limit);
             let key = current_key.unwrap_or_else(|| hash4_const::<TABLE_BITS>(current_word));
             let entry = table[key];
             table[key] = position_to_u16_entry(pos);
             let next_candidate = usize::from(entry);
             debug_assert!(next_candidate < pos);
-            if read_u32_le(input, next_candidate) != current_word {
+            if read_u32_le_upto(input, next_candidate, len_limit) != current_word {
                 break;
             }
             candidate = next_candidate;
@@ -1702,7 +1703,7 @@ fn collect_with_u16_table_m4<
         if pos > len_limit {
             break;
         }
-        next_word = read_u32_le(input, pos);
+        next_word = read_u32_le_upto(input, pos, len_limit);
         next_hash = hash4_const::<TABLE_BITS>(next_word);
     }
 
@@ -1848,14 +1849,14 @@ fn scan_to_match_in_u16_table_m4<
             }
             next_pos = *pos + step;
             let current_word = *next_word;
-            *next_word = read_u32_le(input, next_pos);
+            *next_word = read_u32_le_upto(input, next_pos, len_limit);
             *next_hash = hash4_const::<TABLE_BITS>(*next_word);
 
             let entry = table[key];
             table[key] = position_to_u16_entry(*pos);
             let candidate = usize::from(entry);
             debug_assert!(candidate < *pos);
-            if read_u32_le(input, candidate) == current_word {
+            if read_u32_le_upto(input, candidate, len_limit) == current_word {
                 return Some(candidate);
             }
         }
@@ -1871,12 +1872,12 @@ fn scan_to_match_in_u16_table_m4<
         }
         next_pos = *pos + step;
         let current_word = *next_word;
-        *next_word = read_u32_le(input, next_pos);
+        *next_word = read_u32_le_upto(input, next_pos, len_limit);
         *next_hash = hash4_const::<TABLE_BITS>(*next_word);
 
         if *pos >= last_distance {
             let candidate = *pos - last_distance;
-            if read_u32_le(input, candidate) == current_word {
+            if read_u32_le_upto(input, candidate, len_limit) == current_word {
                 table[key] = position_to_u16_entry(*pos);
                 return Some(candidate);
             }
@@ -1886,7 +1887,7 @@ fn scan_to_match_in_u16_table_m4<
         table[key] = position_to_u16_entry(*pos);
         let candidate = usize::from(entry);
         debug_assert!(candidate < *pos);
-        if read_u32_le(input, candidate) == current_word {
+        if read_u32_le_upto(input, candidate, len_limit) == current_word {
             return Some(candidate);
         }
     }
@@ -1984,6 +1985,15 @@ fn hash6_word_at_offset_const<const TABLE_BITS: usize>(word: u64, offset: usize)
 fn read_u32_le(input: &[u8], pos: usize) -> u32 {
     debug_assert!(pos.checked_add(4).is_some_and(|end| end <= input.len()));
     read_u32_le_trusted(input, pos)
+}
+
+/// `read_u32_le(input, pos)` for a `pos` at or below `limit`, where the
+/// compiler sees `limit + 4 <= input.len()`. Reading at `pos.min(limit)`
+/// turns both bounds checks into one conditional move.
+#[inline(always)]
+fn read_u32_le_upto(input: &[u8], pos: usize, limit: usize) -> u32 {
+    debug_assert!(pos <= limit);
+    read_u32_le(input, pos.min(limit))
 }
 
 #[inline(always)]

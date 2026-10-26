@@ -9,9 +9,8 @@ all normal quality levels. The encoder currently supports qualities 0 through
 **Fast q0..q5 encoder.** Covers the transfer-oriented part of Brotli's
 speed/ratio curve, with aggressive skip behavior for low-compressibility input.
 
-**Memory safety.** Public API has no unsafe. Unsafe is limited to small
-primitive helpers in the default build. The `paranoid` feature forbids unsafe in
-all Bürli crates.
+**Memory safety.** No `unsafe`. Every Bürli crate is
+`#![forbid(unsafe_code)]`.
 
 **Small API.** One-shot helpers for simple use, caller-buffer variants for tight
 loops, reusable contexts for repeated work, and `std::io` streaming wrappers
@@ -82,7 +81,7 @@ let original = burli::decompress_with_raw_dictionary(&compressed, &dictionary)?;
 
 ## Safety
 
-[SAFETY.md](SAFETY.md) documents the unsafe boundary and Brotli bug classes
+[SAFETY.md](SAFETY.md) documents the no-`unsafe` rule and Brotli bug classes
 that Bürli is designed to prevent.
 
 Bounded decompression is first-class: use `decompress_with_options`,

@@ -19,4 +19,6 @@ default = ["std"]
 std = ["alloc"]
 alloc = []
 nightly = []
+# No effect today: every build is safe Rust. Kept so existing feature lists
+# build, and to keep any future `unsafe` out of builds that enable it.
 paranoid = []

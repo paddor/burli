@@ -65,12 +65,8 @@ distances are rejected before copy execution.
 Copy execution has three paths:
 
 - distance 1 repeats the previous byte;
-- non-overlapping copies use one bulk copy in the default build;
+- non-overlapping copies use one `Vec::extend_from_within`;
 - overlapping copies extend from already-produced bytes in chunks.
-
-The default build uses a small unsafe copy primitive for non-overlapping
-backward copies. The `paranoid` feature replaces it with safe
-`Vec::extend_from_within`.
 
 ## Dictionaries
 
@@ -124,14 +120,8 @@ may still contain unread bits and keeps only the decoded window history needed
 for future backward copies. Reads return decoded bytes as soon as a meta-block
 produces output.
 
-## Unsafe Boundary
+## Safety
 
-Unsafe code is allowed only in small primitives with local contracts and
-`debug_assert!` guards. Current default-build unsafe is limited to:
-
-- unaligned little-endian loads in the encoder match scanner;
-- non-overlapping backward-copy append in the decoder;
-- trusted literal bulk writes in the decoder;
-- checked Huffman fast-table indexing.
-
-The `paranoid` feature swaps these paths for safe equivalents.
+No crate has `unsafe`; every crate is `#![forbid(unsafe_code)]`. The
+`paranoid` feature has no effect today. If a later release adds `unsafe` for
+speed, builds with `paranoid` leave it out.

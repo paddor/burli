@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Enforce `#![forbid(unsafe_code)]`. The match scanner reads words through
+  checked slices instead of unaligned pointer reads. The `paranoid` feature
+  has no effect today.
+
 ## [0.3.3] - 2026-09-25
 
 - Emit token literals in pairs in the q2 to q5 writers, and store length and
