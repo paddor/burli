@@ -4,8 +4,23 @@ use alloc::vec::Vec;
 use burli_core::{BurliError, DecompressError, bits::BitReader};
 
 const MAX_CODE_BITS: u8 = 15;
-/// Index bits of the first-level table. Longer codes continue in a subtable.
-const ROOT_BITS: u8 = 10;
+/// Index bits of a root table. Longer codes continue in a second-level table.
+const ROOT_BITS: u8 = 8;
+pub(crate) const ROOT_SIZE: usize = 1 << ROOT_BITS;
+/// Index bits of the root table a group of one literal code adds when its
+/// codes run longer than [`ROOT_BITS`]. Binary data has many 9- to 11-bit
+/// literal codes, and each second-level lookup costs a mispredicted branch.
+const WIDE_ROOT_BITS: u8 = 10;
+pub(crate) const WIDE_ROOT_SIZE: usize = 1 << WIDE_ROOT_BITS;
+/// The most symbols of any Brotli alphabet: the command alphabet.
+const MAX_ALPHABET_SIZE: usize = 704;
+/// Share of the code space, in 1/32768ths, that codes longer than
+/// [`ROOT_BITS`] must exceed before a group of one code builds the wide root.
+/// Text gives long codes to rare symbols only, and a wider root just costs
+/// building and cache space there.
+const WIDE_ROOT_MIN_SHARE: u32 = 1 << (MAX_CODE_BITS - 3);
+/// Index bits of the code-length code's table. Its codes have at most 5 bits.
+const LENGTH_CODE_BITS: u8 = 5;
 const CODE_LENGTH_CODES: usize = 18;
 const CODE_LENGTH_ORDER: [usize; CODE_LENGTH_CODES] =
     [1, 2, 3, 4, 0, 5, 17, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -13,293 +28,364 @@ const CODE_LENGTH_PREFIX_LEN: [u8; 16] = [2, 2, 2, 3, 2, 2, 2, 4, 2, 2, 2, 3, 2,
 const CODE_LENGTH_PREFIX_VALUE: [u8; 16] = [0, 4, 3, 2, 0, 4, 3, 1, 0, 4, 3, 2, 0, 4, 3, 5];
 const REVERSE_BYTE: [u8; 256] = reverse_byte_table();
 
-/// Two-level canonical Huffman decoder.
-///
-/// `table` starts with `1 << min(max_bits, ROOT_BITS)` root entries. A root
-/// entry with `len > ROOT_BITS` points at a subtable of
-/// `1 << (len - ROOT_BITS)` entries that `table` holds after the root.
-#[derive(Clone, Debug)]
-pub(crate) struct PrefixCode {
-    table: Vec<Lookup>,
-    root_mask: u64,
-    single_symbol: Option<u16>,
-    max_bits: u8,
-}
-
+/// One table entry. A leaf holds a symbol and its code length. A root entry
+/// for codes longer than [`ROOT_BITS`] holds the offset of their
+/// second-level table in the group buffer, and `ROOT_BITS` plus that
+/// table's index bits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Lookup(u32);
 
 impl Lookup {
     const EMPTY: Self = Self(0);
 
-    /// Leaf: `value` is the symbol and `len` the full code length. Root
-    /// pointer: `value` is the subtable offset and `len - ROOT_BITS` its
-    /// index bits.
-    const fn new(value: u16, len: u8) -> Self {
-        Self(((len as u32) << 16) | value as u32)
+    const fn new(value: usize, len: u8) -> Self {
+        debug_assert!(value < 1 << 24);
+        Self(((value as u32) << 8) | len as u32)
     }
 
     #[inline(always)]
-    const fn value(self) -> u16 {
-        self.0 as u16
+    const fn value(self) -> usize {
+        (self.0 >> 8) as usize
     }
 
     #[inline(always)]
     const fn len(self) -> u8 {
-        (self.0 >> 16) as u8
+        self.0 as u8
     }
 }
 
-impl PrefixCode {
-    pub(crate) fn single(symbol: u16) -> Self {
+/// The prefix codes of one alphabet in a meta-block header, in one buffer:
+/// a root table of [`ROOT_SIZE`] entries per code, then the second-level
+/// tables. A single-symbol code fills its root with zero-length entries, so
+/// it decodes like any other code.
+#[derive(Clone, Debug)]
+pub(crate) struct CodeGroup {
+    entries: Vec<Lookup>,
+    count: usize,
+    /// Longest code length in the group.
+    max_bits: u8,
+    /// Whether a group of one code builds `wide` as well.
+    wants_wide: bool,
+    /// A root of [`WIDE_ROOT_SIZE`] entries and its second-level tables for
+    /// the one code, or empty.
+    wide: Vec<Lookup>,
+}
+
+impl CodeGroup {
+    /// Reads `count` prefix codes over `alphabet_size` symbols. With `wide`,
+    /// a group of one code with codes longer than [`ROOT_BITS`] also builds a
+    /// [`WIDE_ROOT_SIZE`] root.
+    pub(crate) fn read(
+        reader: &mut BitReader<'_>,
+        count: usize,
+        alphabet_size: usize,
+        wide: bool,
+    ) -> Result<Self, DecompressError> {
+        if alphabet_size == 0 || alphabet_size > MAX_ALPHABET_SIZE {
+            return Err(BurliError::Format("invalid Brotli Huffman alphabet size"));
+        }
+        let mut group = Self::with_count(count, wide && count == 1);
+        let mut lists = SymbolLists::new();
+        for tree in 0..count {
+            let hskip = reader.read_bits(2)? as u8;
+            if hskip == 1 {
+                read_simple_prefix_code(reader, alphabet_size, &mut lists)?;
+            } else {
+                read_complex_prefix_code(reader, alphabet_size, hskip, &mut lists)?;
+            }
+            group.set_code(tree, &lists)?;
+        }
+        Ok(group)
+    }
+
+    fn with_count(count: usize, wants_wide: bool) -> Self {
         Self {
-            // One zero-length entry lets `lookup_bits` skip the single check.
-            table: vec![Lookup::new(symbol, 0)],
-            root_mask: 0,
-            single_symbol: Some(symbol),
+            entries: vec![Lookup::EMPTY; count * ROOT_SIZE],
+            count,
             max_bits: 0,
+            wants_wide,
+            wide: Vec::new(),
         }
     }
 
+    /// The tables of the one code with a [`WIDE_ROOT_SIZE`] root, when the
+    /// group built them.
     #[inline(always)]
-    pub(crate) const fn single_symbol(&self) -> Option<u16> {
-        self.single_symbol
+    pub(crate) fn wide_table(&self) -> Option<Table<'_, WIDE_ROOT_SIZE>> {
+        self.wide.first_chunk::<WIDE_ROOT_SIZE>().map(|root| Table {
+            root,
+            entries: &self.wide,
+        })
     }
 
+    /// Every table of the group, borrowed for decoding.
     #[inline(always)]
+    pub(crate) fn tables(&self) -> Tables<'_> {
+        Tables {
+            roots: self.entries[..self.count * ROOT_SIZE]
+                .as_chunks::<ROOT_SIZE>()
+                .0,
+            entries: &self.entries,
+        }
+    }
+
+    pub(crate) const fn len(&self) -> usize {
+        self.count
+    }
+
+    /// Longest code length in the group, zero when every code has a single
+    /// symbol.
     pub(crate) const fn max_bits(&self) -> u8 {
         self.max_bits
     }
 
-    pub(crate) fn from_lengths(lengths: &[u8]) -> Result<Self, DecompressError> {
-        let mut counts = [0_u16; MAX_CODE_BITS as usize + 1];
-        let mut non_zero = 0_usize;
-        let mut max_bits = 0_u8;
-
-        for &len in lengths {
-            if len > MAX_CODE_BITS {
-                return Err(BurliError::Format("Brotli Huffman code length exceeds 15"));
-            }
-            if len != 0 {
-                counts[usize::from(len)] += 1;
-                non_zero += 1;
-                max_bits = max_bits.max(len);
-            }
-        }
-
-        if non_zero > 1 {
-            validate_complete_counts(&counts)?;
-        }
-        Self::from_lengths_prechecked(lengths, counts, non_zero, max_bits)
+    pub(crate) fn single_symbol(&self, tree: usize) -> Option<u16> {
+        // Built codes have lengths of at least one bit, so a zero-length
+        // first entry marks a single-symbol code.
+        let first = self.entries.get(tree * ROOT_SIZE)?;
+        (first.len() == 0).then(|| first.value() as u16)
     }
 
-    fn from_lengths_prechecked(
-        lengths: &[u8],
-        counts: [u16; MAX_CODE_BITS as usize + 1],
-        non_zero: usize,
-        max_bits: u8,
-    ) -> Result<Self, DecompressError> {
-        if non_zero == 0 {
-            return Err(BurliError::Format("empty Brotli Huffman code"));
+    /// Builds the tables of code `tree` from `lists`, which hold a complete
+    /// code or one symbol.
+    fn set_code(&mut self, tree: usize, lists: &SymbolLists) -> Result<(), DecompressError> {
+        let base = tree * ROOT_SIZE;
+        match lists.total {
+            0 => Err(BurliError::Format("empty Brotli Huffman code")),
+            1 => {
+                let symbol = lists.only_symbol();
+                self.entries[base..base + ROOT_SIZE].fill(Lookup::new(symbol, 0));
+                Ok(())
+            }
+            _ => {
+                let max_bits = lists.max_bits();
+                build_code::<ROOT_SIZE>(&mut self.entries, base, lists, max_bits);
+                if self.wants_wide && long_code_share(&lists.counts) > WIDE_ROOT_MIN_SHARE {
+                    self.wide = vec![Lookup::EMPTY; WIDE_ROOT_SIZE];
+                    build_code::<WIDE_ROOT_SIZE>(&mut self.wide, 0, lists, max_bits);
+                }
+                self.max_bits = self.max_bits.max(max_bits);
+                Ok(())
+            }
         }
-        if non_zero == 1 {
-            let symbol = lengths
-                .iter()
-                .position(|&len| len != 0)
-                .ok_or(BurliError::Format("empty Brotli Huffman code"))?;
-            return Ok(Self::single(symbol as u16));
-        }
-
-        let symbols = lengths
-            .iter()
-            .enumerate()
-            .filter(|&(_, &len)| len != 0)
-            .map(|(symbol, &len)| (symbol as u16, len));
-        Ok(Self::from_complete_code(symbols, &counts, max_bits))
     }
+}
 
-    fn from_simple_lengths(symbol_lengths: &mut [(usize, u8)]) -> Result<Self, DecompressError> {
-        if symbol_lengths.is_empty() {
-            return Err(BurliError::Format("empty Brotli Huffman code"));
-        }
-        symbol_lengths.sort_unstable_by_key(|&(symbol, _)| symbol);
+/// Slots of [`SymbolLists::links`] that head the list of each code length.
+const LIST_HEADS: usize = MAX_CODE_BITS as usize + 1;
 
-        let mut counts = [0_u16; MAX_CODE_BITS as usize + 1];
-        let mut max_bits = 0_u8;
-        for &(symbol, len) in symbol_lengths.iter() {
-            if symbol > usize::from(u16::MAX) {
-                return Err(BurliError::Format("Brotli Huffman symbol exceeds range"));
-            }
-            if len == 0 || len > MAX_CODE_BITS {
-                return Err(BurliError::Format("Brotli Huffman code length exceeds 15"));
-            }
-            counts[usize::from(len)] += 1;
-            max_bits = max_bits.max(len);
-        }
+/// The symbols of one code with a nonzero length, as one linked list per
+/// length in increasing symbol order. Canonical order is by length, then by
+/// symbol, so building a table walks the lists without sorting.
+struct SymbolLists {
+    /// Slot `len` links to the first symbol of length `len`, and slot
+    /// `LIST_HEADS + symbol` to the next symbol of the same length. Each
+    /// list is as long as its count, so it needs no terminator.
+    links: [u16; LIST_HEADS + MAX_ALPHABET_SIZE],
+    /// The last slot of each list.
+    tails: [usize; MAX_CODE_BITS as usize + 1],
+    counts: [u16; MAX_CODE_BITS as usize + 1],
+    total: usize,
+}
 
-        if symbol_lengths.len() == 1 {
-            return Ok(Self::single(symbol_lengths[0].0 as u16));
-        }
-
-        validate_complete_counts(&counts)?;
-
-        let symbols = symbol_lengths
-            .iter()
-            .map(|&(symbol, len)| (symbol as u16, len));
-        Ok(Self::from_complete_code(symbols, &counts, max_bits))
-    }
-
-    /// Builds the lookup table for a validated complete code. `symbols`
-    /// yields `(symbol, len)` with `len != 0` in increasing symbol order.
-    fn from_complete_code(
-        symbols: impl Iterator<Item = (u16, u8)> + Clone,
-        counts: &[u16; MAX_CODE_BITS as usize + 1],
-        max_bits: u8,
-    ) -> Self {
-        debug_assert!((1..=MAX_CODE_BITS).contains(&max_bits));
-        let mut first_code = [0_u16; MAX_CODE_BITS as usize + 1];
-        let mut code = 0_u16;
-        for bits in 1..=MAX_CODE_BITS {
-            code = (code + counts[usize::from(bits - 1)]) << 1;
-            first_code[usize::from(bits)] = code;
-        }
-
-        let root_bits = max_bits.min(ROOT_BITS);
-        let root_size = 1_usize << root_bits;
-        let root_mask = (1_u64 << root_bits) - 1;
-
-        // A complete code covers every root slot. Each root prefix of a long
-        // code heads a complete subcode, so its subtable is covered as well.
-        let mut sub_bits = [0_u8; 1 << ROOT_BITS];
-        let mut table_size = root_size;
-        if max_bits > ROOT_BITS {
-            let mut next_code = first_code;
-            for (_, len) in symbols.clone() {
-                let code = next_code[usize::from(len)];
-                next_code[usize::from(len)] += 1;
-                if len > ROOT_BITS {
-                    let prefix = usize::from(reverse_low_bits(code, len)) & (root_size - 1);
-                    sub_bits[prefix] = sub_bits[prefix].max(len - ROOT_BITS);
-                }
-            }
-        }
-
-        let mut table = Vec::new();
-        if max_bits > ROOT_BITS {
-            for &bits in &sub_bits {
-                if bits != 0 {
-                    table_size += 1 << bits;
-                }
-            }
-        }
-        table.resize(table_size, Lookup::EMPTY);
-
-        if max_bits > ROOT_BITS {
-            let mut offset = root_size;
-            for (prefix, &bits) in sub_bits.iter().enumerate() {
-                if bits != 0 {
-                    table[prefix] = Lookup::new(offset as u16, ROOT_BITS + bits);
-                    offset += 1 << bits;
-                }
-            }
-        }
-
-        let mut next_code = first_code;
-        for (symbol, len) in symbols {
-            let code = next_code[usize::from(len)];
-            next_code[usize::from(len)] += 1;
-            let reversed = usize::from(reverse_low_bits(code, len));
-            let entry = Lookup::new(symbol, len);
-            if len <= root_bits {
-                let mut index = reversed;
-                while index < root_size {
-                    table[index] = entry;
-                    index += 1 << len;
-                }
-            } else {
-                let pointer = table[reversed & (root_size - 1)];
-                let start = usize::from(pointer.value());
-                let size = 1_usize << (pointer.len() - ROOT_BITS);
-                let mut index = reversed >> ROOT_BITS;
-                while index < size {
-                    table[start + index] = entry;
-                    index += 1 << (len - ROOT_BITS);
-                }
-            }
-        }
-
+impl SymbolLists {
+    fn new() -> Self {
         Self {
-            table,
-            root_mask,
-            single_symbol: None,
-            max_bits,
+            links: [0; LIST_HEADS + MAX_ALPHABET_SIZE],
+            tails: core::array::from_fn(|len| len),
+            counts: [0; MAX_CODE_BITS as usize + 1],
+            total: 0,
         }
     }
 
-    pub(crate) fn read(
-        reader: &mut BitReader<'_>,
-        alphabet_size: usize,
-    ) -> Result<Self, DecompressError> {
-        if alphabet_size == 0 || alphabet_size > usize::from(u16::MAX) + 1 {
-            return Err(BurliError::Format("invalid Brotli Huffman alphabet size"));
-        }
-
-        let hskip = reader.read_bits(2)? as u8;
-        if hskip == 1 {
-            return read_simple_prefix_code(reader, alphabet_size);
-        }
-        read_complex_prefix_code(reader, alphabet_size, hskip)
+    fn clear(&mut self) {
+        self.tails = core::array::from_fn(|len| len);
+        self.counts = [0; MAX_CODE_BITS as usize + 1];
+        self.total = 0;
     }
 
+    /// Appends `symbol` to the list of `len`. Symbols arrive in increasing
+    /// order.
     #[inline(always)]
-    pub(crate) fn decode(&self, reader: &mut BitReader<'_>) -> Result<u16, DecompressError> {
-        if let Some(symbol) = self.single_symbol {
-            return Ok(symbol);
+    fn push(&mut self, symbol: usize, len: u8) {
+        let len = usize::from(len);
+        let slot = LIST_HEADS + symbol;
+        self.links[self.tails[len]] = slot as u16;
+        self.tails[len] = slot;
+        self.counts[len] += 1;
+        self.total += 1;
+    }
+
+    /// Appends the symbols `start..end` to the list of `len`.
+    fn push_run(&mut self, start: usize, end: usize, len: u8) {
+        debug_assert!(start < end);
+        let len = usize::from(len);
+        let (first, last) = (LIST_HEADS + start, LIST_HEADS + end - 1);
+        self.links[self.tails[len]] = first as u16;
+        for (slot, link) in (first + 1..).zip(&mut self.links[first..last]) {
+            *link = slot as u16;
         }
-
-        self.decode_non_single(reader)
+        self.tails[len] = last;
+        self.counts[len] += (end - start) as u16;
+        self.total += end - start;
     }
 
+    /// The symbols of length `len` in increasing order.
     #[inline(always)]
-    pub(crate) fn decode_non_single(
-        &self,
-        reader: &mut BitReader<'_>,
-    ) -> Result<u16, DecompressError> {
-        debug_assert!(self.single_symbol.is_none());
+    fn symbols(&self, len: usize) -> impl Iterator<Item = usize> + '_ {
+        let mut slot = len;
+        (0..self.counts[len]).map(move |_| {
+            slot = usize::from(self.links[slot]);
+            slot - LIST_HEADS
+        })
+    }
 
-        // After the fill, either `max_bits` bits are buffered or all remaining
-        // input is, with zeros above it. Both give the right table entry.
-        reader.fill(self.max_bits);
-        let lookup = self.lookup(reader.buffer());
-        let len = lookup.len();
-        debug_assert!(len != 0);
-        if u32::from(len) > reader.buffered_bits() {
-            return Err(BurliError::Format("unexpected end of Brotli input"));
+    /// The symbol of a code of one symbol.
+    fn only_symbol(&self) -> usize {
+        let len = self
+            .counts
+            .iter()
+            .position(|&count| count != 0)
+            .unwrap_or(0);
+        usize::from(self.links[len]).saturating_sub(LIST_HEADS)
+    }
+
+    fn max_bits(&self) -> u8 {
+        self.counts
+            .iter()
+            .rposition(|&count| count != 0)
+            .unwrap_or(0) as u8
+    }
+}
+
+/// Builds the tables of a complete code into `entries`: a root of `ROOT`
+/// entries at `base`, and second-level tables appended at the end.
+fn build_code<const ROOT: usize>(
+    entries: &mut Vec<Lookup>,
+    base: usize,
+    lists: &SymbolLists,
+    max_bits: u8,
+) {
+    debug_assert!((1..=MAX_CODE_BITS).contains(&max_bits));
+    let root_bits = ROOT.trailing_zeros() as usize;
+    let max_bits = usize::from(max_bits);
+
+    // Canonical codes count up within a length and double between lengths.
+    // The root fills to the width of its longest code, then repeats.
+    let table_bits = max_bits.min(root_bits);
+    let root: &mut [Lookup; ROOT] = (&mut entries[base..base + ROOT])
+        .try_into()
+        .expect("root has ROOT entries");
+    let filled = &mut root[..1 << table_bits];
+    let mut code = 0_usize;
+    for len in 1..=table_bits {
+        for symbol in lists.symbols(len) {
+            let entry = Lookup::new(symbol, len as u8);
+            let mut slot = if ROOT <= ROOT_SIZE {
+                reverse_short(code, len)
+            } else {
+                usize::from(reverse_low_bits(code as u16, len as u8))
+            };
+            while slot < filled.len() {
+                filled[slot] = entry;
+                slot += 1 << len;
+            }
+            code += 1;
         }
-        reader.drop_bits_trusted(len);
-        Ok(lookup.value())
+        code <<= 1;
+    }
+    let mut size = 1 << table_bits;
+    while size < ROOT {
+        root.copy_within(..size, size);
+        size <<= 1;
     }
 
-    /// Decodes one symbol. The caller proves that the input holds
-    /// `max_bits` bits.
+    if max_bits <= root_bits {
+        return;
+    }
+    // The long codes of one root prefix are consecutive and form a complete
+    // subcode. Its longest code sets the size of its second-level table.
+    // Sizing the tables first takes one resize for all of them.
+    let second_base = entries.len();
+    let second_size = second_level_size(&lists.counts, code, root_bits, max_bits);
+    entries.resize(second_base + second_size, Lookup::EMPTY);
+    let (front, second) = entries.split_at_mut(second_base);
+    let root = &mut front[base..base + ROOT];
+    let mut remaining = lists.counts;
+    let mut prefix = usize::MAX;
+    let mut table: &mut [Lookup] = &mut [];
+    let mut end = 0;
+    for len in root_bits + 1..=max_bits {
+        let sub_bits = len - root_bits;
+        for (placed, symbol) in lists.symbols(len).enumerate() {
+            if code >> sub_bits != prefix {
+                prefix = code >> sub_bits;
+                remaining[len] = lists.counts[len] - placed as u16;
+                let bits = next_table_bits(&remaining, len, root_bits);
+                let start = end;
+                end += 1 << bits;
+                let key = if ROOT <= ROOT_SIZE {
+                    reverse_short(prefix, root_bits)
+                } else {
+                    usize::from(reverse_low_bits(prefix as u16, root_bits as u8))
+                };
+                root[key] = Lookup::new(second_base + start, (root_bits + bits) as u8);
+                table = &mut second[start..end];
+            }
+            let entry = Lookup::new(symbol, len as u8);
+            let mut slot = reverse_short(code & ((1 << sub_bits) - 1), sub_bits);
+            while slot < table.len() {
+                table[slot] = entry;
+                slot += 1 << sub_bits;
+            }
+            code += 1;
+        }
+        code <<= 1;
+    }
+}
+
+/// Every table of a [`CodeGroup`], borrowed for decoding.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Tables<'a> {
+    roots: &'a [[Lookup; ROOT_SIZE]],
+    /// The whole group buffer, which root entries address absolutely.
+    entries: &'a [Lookup],
+}
+
+impl<'a> Tables<'a> {
+    /// The tables of code `tree`. Only selecting the root is bounds checked.
     #[inline(always)]
-    pub(crate) fn decode_non_single_trusted_fast(&self, reader: &mut BitReader<'_>) -> u16 {
-        debug_assert!(self.single_symbol.is_none());
-        debug_assert!(reader.has_bits(self.max_bits));
+    pub(crate) fn table(self, tree: usize) -> Table<'a> {
+        Table {
+            root: &self.roots[tree],
+            entries: self.entries,
+        }
+    }
+}
 
-        reader.fill(self.max_bits);
-        let lookup = self.lookup(reader.buffer());
-        debug_assert!(lookup.len() != 0);
-        reader.drop_bits_trusted(lookup.len());
-        lookup.value()
+/// The tables of one prefix code, with a root of `N` entries.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Table<'a, const N: usize = ROOT_SIZE> {
+    root: &'a [Lookup; N],
+    entries: &'a [Lookup],
+}
+
+impl<const N: usize> Table<'_, N> {
+    const ROOT_BITS: u8 = N.trailing_zeros() as u8;
+
+    /// Decodes one symbol. Fails only when the input ends inside the code.
+    #[inline(always)]
+    pub(crate) fn decode(self, reader: &mut BitReader<'_>) -> Result<u16, DecompressError> {
+        reader.fill(MAX_CODE_BITS);
+        self.decode_refilled(reader)
     }
 
-    /// Decodes one symbol, single-symbol codes included, right after
-    /// [`BitReader::refill`]. The refill buffers `max_bits` bits or all
-    /// remaining input, so only a truncated code fails.
+    /// Decodes one symbol right after [`BitReader::refill`]. The refill
+    /// buffers 15 bits or all remaining input, so only a truncated code
+    /// fails.
     #[inline(always)]
     pub(crate) fn decode_refilled(
-        &self,
+        self,
         reader: &mut BitReader<'_>,
     ) -> Result<u16, DecompressError> {
         let lookup = self.lookup(reader.buffer());
@@ -308,50 +394,215 @@ impl PrefixCode {
             return Err(BurliError::Format("unexpected end of Brotli input"));
         }
         reader.drop_bits_trusted(len);
-        Ok(lookup.value())
+        Ok(lookup.value() as u16)
     }
 
-    /// Decodes one symbol from the buffered bits without refilling, single
-    /// symbols included: their zero-length entry consumes no bits. The caller
-    /// proves that the buffer holds `max_bits` bits or all remaining input,
-    /// and that the input holds this symbol's code.
+    /// Decodes one symbol from the buffered bits without refilling. The
+    /// caller proves that the buffer holds this symbol's code.
     #[inline(always)]
-    pub(crate) fn decode_buffered(&self, reader: &mut BitReader<'_>) -> u16 {
+    pub(crate) fn decode_buffered(self, reader: &mut BitReader<'_>) -> u16 {
         let lookup = self.lookup(reader.buffer());
         reader.drop_bits_trusted(lookup.len());
-        lookup.value()
+        lookup.value() as u16
+    }
+
+    /// Decodes one symbol. The caller proves that the input holds it.
+    #[inline(always)]
+    pub(crate) fn decode_trusted(self, reader: &mut BitReader<'_>) -> u16 {
+        reader.fill(MAX_CODE_BITS);
+        self.decode_buffered(reader)
     }
 
     /// Decodes one symbol from the low bits of `bits` and returns it with its
-    /// code length. A single-symbol code consumes no bits. The caller checks
-    /// that the input holds `max_bits` bits.
+    /// code length.
     #[inline(always)]
-    pub(crate) fn lookup_bits(&self, bits: u64) -> (u16, u8) {
+    pub(crate) fn lookup_bits(self, bits: u64) -> (u16, u8) {
         let lookup = self.lookup(bits);
-        (lookup.value(), lookup.len())
+        (lookup.value() as u16, lookup.len())
     }
 
     /// Resolves the entry for the low bits of `bits`. Bits past the input end
     /// must be zero.
     #[inline(always)]
-    fn lookup(&self, bits: u64) -> Lookup {
-        let root = self.entry((bits & self.root_mask) as usize);
-        if root.len() <= ROOT_BITS {
+    fn lookup(self, bits: u64) -> Lookup {
+        let root = self.root[bits as usize & (N - 1)];
+        if root.len() <= Self::ROOT_BITS {
             return root;
         }
-        let sub_mask = (1_usize << (root.len() - ROOT_BITS)) - 1;
-        self.entry(usize::from(root.value()) + ((bits >> ROOT_BITS) as usize & sub_mask))
-    }
-
-    /// The table builder sizes `table` for every masked index, so the
-    /// fallback never runs. It keeps a panic path out of the decode loops.
-    #[inline(always)]
-    fn entry(&self, index: usize) -> Lookup {
-        debug_assert!(index < self.table.len());
-        self.table.get(index).copied().unwrap_or(Lookup::EMPTY)
+        let sub_mask = (1_usize << (root.len() - Self::ROOT_BITS)) - 1;
+        // The builder sizes each second-level table for every masked index,
+        // so the fallback never runs. It keeps a panic path out of the decode
+        // loops.
+        self.entries
+            .get(root.value() + ((bits >> Self::ROOT_BITS) as usize & sub_mask))
+            .copied()
+            .unwrap_or(Lookup::EMPTY)
     }
 }
 
+/// One prefix code outside the literal, command, and distance groups: block
+/// type and count codes and context map codes.
+#[derive(Clone, Debug)]
+pub(crate) struct PrefixCode(CodeGroup);
+
+impl PrefixCode {
+    pub(crate) fn read(
+        reader: &mut BitReader<'_>,
+        alphabet_size: usize,
+    ) -> Result<Self, DecompressError> {
+        CodeGroup::read(reader, 1, alphabet_size, false).map(Self)
+    }
+
+    #[inline(always)]
+    pub(crate) fn table(&self) -> Table<'_> {
+        self.0.tables().table(0)
+    }
+
+    #[inline(always)]
+    pub(crate) fn decode(&self, reader: &mut BitReader<'_>) -> Result<u16, DecompressError> {
+        self.table().decode(reader)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_lengths(lengths: &[u8]) -> Result<Self, DecompressError> {
+        let mut lists = SymbolLists::new();
+        for (symbol, &len) in lengths.iter().enumerate() {
+            if len > MAX_CODE_BITS {
+                return Err(BurliError::Format("Brotli Huffman code length exceeds 15"));
+            }
+            if len != 0 {
+                lists.push(symbol, len);
+            }
+        }
+        if lists.total > 1 {
+            validate_complete_counts(&lists.counts)?;
+        }
+        let mut group = CodeGroup::with_count(1, false);
+        group.set_code(0, &lists)?;
+        Ok(Self(group))
+    }
+}
+
+/// The code-length code of a complex prefix code: 18 symbols of at most 5
+/// bits, in one table on the stack.
+struct LengthCode([Lookup; 1 << LENGTH_CODE_BITS]);
+
+impl LengthCode {
+    /// Builds the table from lengths that form a complete code, or that hold
+    /// one symbol, which decodes with zero bits.
+    fn new(lengths: &[u8; CODE_LENGTH_CODES], non_zero: usize) -> Self {
+        let mut table = [Lookup::EMPTY; 1 << LENGTH_CODE_BITS];
+        if non_zero == 1 {
+            let symbol = lengths.iter().position(|&len| len != 0).unwrap_or(0);
+            table.fill(Lookup::new(symbol, 0));
+            return Self(table);
+        }
+        let mut counts = [0_u16; MAX_CODE_BITS as usize + 1];
+        for &len in lengths {
+            if len != 0 {
+                counts[usize::from(len)] += 1;
+            }
+        }
+        let mut next_code = first_codes(&counts);
+        for (symbol, &len) in lengths.iter().enumerate() {
+            if len == 0 {
+                continue;
+            }
+            let code = next_code[usize::from(len)];
+            next_code[usize::from(len)] += 1;
+            let entry = Lookup::new(symbol, len);
+            let mut index = usize::from(reverse_low_bits(code, len));
+            while index < table.len() {
+                table[index] = entry;
+                index += 1 << len;
+            }
+        }
+        Self(table)
+    }
+
+    fn decode(&self, reader: &mut BitReader<'_>) -> Result<u8, DecompressError> {
+        reader.fill(LENGTH_CODE_BITS);
+        let lookup = self.0[(reader.buffer() & ((1 << LENGTH_CODE_BITS) - 1)) as usize];
+        if u32::from(lookup.len()) > reader.buffered_bits() {
+            return Err(BurliError::Format("unexpected end of Brotli input"));
+        }
+        reader.drop_bits_trusted(lookup.len());
+        Ok(lookup.value() as u8)
+    }
+}
+
+/// The share of the code space, in 1/32768ths, that codes longer than
+/// [`ROOT_BITS`] take. A complete code decodes a symbol of length `len`
+/// with probability `2^-len`, so this is the expected share of second-level
+/// lookups.
+fn long_code_share(counts: &[u16; MAX_CODE_BITS as usize + 1]) -> u32 {
+    (ROOT_BITS + 1..=MAX_CODE_BITS)
+        .map(|len| u32::from(counts[usize::from(len)]) << (MAX_CODE_BITS - len))
+        .sum()
+}
+
+/// The index bits of the second-level table whose first code has length
+/// `len`, given the codes of each length not yet placed. The table ends
+/// where those codes fill the subtree of its root prefix.
+fn next_table_bits(
+    remaining: &[u16; MAX_CODE_BITS as usize + 1],
+    mut len: usize,
+    root_bits: usize,
+) -> usize {
+    let mut left = 1_i32 << (len - root_bits);
+    while len < usize::from(MAX_CODE_BITS) {
+        left -= i32::from(remaining[len]);
+        if left <= 0 {
+            break;
+        }
+        len += 1;
+        left <<= 1;
+    }
+    len - root_bits
+}
+
+/// The second-level entries of a complete code with these length counts and
+/// a root of `root_bits`. `code` is the first code of length `root_bits + 1`.
+/// Replays the canonical walk of [`build_code`]: a table starts where the
+/// root prefix changes, at the width [`next_table_bits`] gives.
+fn second_level_size(
+    counts: &[u16; MAX_CODE_BITS as usize + 1],
+    mut code: usize,
+    root_bits: usize,
+    max_bits: usize,
+) -> usize {
+    let mut remaining = *counts;
+    let mut prefix = usize::MAX;
+    let mut size = 0;
+    for len in root_bits + 1..=max_bits {
+        let sub_bits = len - root_bits;
+        let end = code + usize::from(counts[len]);
+        while code < end {
+            if code >> sub_bits != prefix {
+                prefix = code >> sub_bits;
+                remaining[len] = (end - code) as u16;
+                size += 1 << next_table_bits(&remaining, len, root_bits);
+            }
+            // Skip the other codes of this length under the prefix.
+            code = end.min((prefix + 1) << sub_bits);
+        }
+        code <<= 1;
+    }
+    size
+}
+
+/// The first canonical code of each length.
+fn first_codes(counts: &[u16; MAX_CODE_BITS as usize + 1]) -> [u16; MAX_CODE_BITS as usize + 1] {
+    let mut first_code = [0_u16; MAX_CODE_BITS as usize + 1];
+    let mut code = 0_u16;
+    for bits in 1..=MAX_CODE_BITS {
+        code = (code + counts[usize::from(bits - 1)]) << 1;
+        first_code[usize::from(bits)] = code;
+    }
+    first_code
+}
+
+#[cfg(test)]
 fn validate_complete_counts(
     counts: &[u16; MAX_CODE_BITS as usize + 1],
 ) -> Result<(), DecompressError> {
@@ -366,6 +617,15 @@ fn validate_complete_counts(
         return Err(BurliError::Format("incomplete Brotli Huffman code"));
     }
     Ok(())
+}
+
+/// `value` of `width` bits, at most eight, with its bits reversed. Table
+/// indexes are reversed codes, since the stream delivers the first code bit
+/// lowest.
+#[inline(always)]
+fn reverse_short(value: usize, width: usize) -> usize {
+    debug_assert!(width <= 8 && value < 1 << width);
+    usize::from(REVERSE_BYTE[value & 0xff]) >> (8 - width)
 }
 
 fn reverse_low_bits(value: u16, width: u8) -> u16 {
@@ -384,52 +644,43 @@ const fn reverse_byte_table() -> [u8; 256] {
     table
 }
 
+/// Reads a simple prefix code into `lists`.
 fn read_simple_prefix_code(
     reader: &mut BitReader<'_>,
     alphabet_size: usize,
-) -> Result<PrefixCode, DecompressError> {
+    lists: &mut SymbolLists,
+) -> Result<(), DecompressError> {
     let nsym = reader.read_bits(2)? as usize + 1;
     let alphabet_bits = alphabet_bits(alphabet_size);
-    let mut symbols = Vec::with_capacity(nsym);
-    for _ in 0..nsym {
+    let mut symbols = [0_usize; 4];
+    for index in 0..nsym {
         let symbol = reader.read_bits(alphabet_bits)? as usize;
-        if symbol >= alphabet_size || symbols.contains(&symbol) {
+        if symbol >= alphabet_size || symbols[..index].contains(&symbol) {
             return Err(BurliError::Format("invalid Brotli simple Huffman symbol"));
         }
-        symbols.push(symbol);
+        symbols[index] = symbol;
     }
 
-    if nsym == 1 {
-        return Ok(PrefixCode::single(symbols[0] as u16));
+    let lengths: [u8; 4] = match nsym {
+        1 => [0, 0, 0, 0],
+        2 => [1, 1, 0, 0],
+        3 => [1, 2, 2, 0],
+        _ if reader.read_bit()? => [1, 2, 3, 3],
+        _ => [2, 2, 2, 2],
+    };
+    let mut pairs = [(0_usize, 0_u8); 4];
+    for (pair, (&symbol, &len)) in pairs.iter_mut().zip(symbols.iter().zip(&lengths)) {
+        *pair = (symbol, len);
     }
-
-    let mut symbol_lengths = [(0_usize, 0_u8); 4];
-    match nsym {
-        2 => {
-            symbol_lengths[0] = (symbols[0], 1);
-            symbol_lengths[1] = (symbols[1], 1);
-        }
-        3 => {
-            symbol_lengths[0] = (symbols[0], 1);
-            symbol_lengths[1] = (symbols[1], 2);
-            symbol_lengths[2] = (symbols[2], 2);
-        }
-        4 => {
-            if reader.read_bit()? {
-                symbol_lengths[0] = (symbols[0], 1);
-                symbol_lengths[1] = (symbols[1], 2);
-                symbol_lengths[2] = (symbols[2], 3);
-                symbol_lengths[3] = (symbols[3], 3);
-            } else {
-                for (slot, symbol) in symbol_lengths.iter_mut().zip(symbols) {
-                    *slot = (symbol, 2);
-                }
-            }
-        }
-        _ => unreachable!(),
+    // Lists take their symbols in increasing order.
+    let pairs = &mut pairs[..nsym];
+    pairs.sort_unstable_by_key(|&(symbol, _)| symbol);
+    lists.clear();
+    for &(symbol, len) in pairs.iter() {
+        // A code of one symbol has no length; any list holds it.
+        lists.push(symbol, len.max(1));
     }
-
-    PrefixCode::from_simple_lengths(&mut symbol_lengths[..nsym])
+    Ok(())
 }
 
 fn alphabet_bits(alphabet_size: usize) -> u8 {
@@ -437,11 +688,13 @@ fn alphabet_bits(alphabet_size: usize) -> u8 {
     (usize::BITS - value.leading_zeros()) as u8
 }
 
+/// Reads a complex prefix code into `lists`.
 fn read_complex_prefix_code(
     reader: &mut BitReader<'_>,
     alphabet_size: usize,
     hskip: u8,
-) -> Result<PrefixCode, DecompressError> {
+    lists: &mut SymbolLists,
+) -> Result<(), DecompressError> {
     if hskip > 3 {
         return Err(BurliError::Format("invalid Brotli Huffman hskip"));
     }
@@ -468,28 +721,14 @@ fn read_complex_prefix_code(
         }
     }
 
-    let code_length_code = if non_zero == 1 {
-        let symbol = code_length_code_lengths
-            .iter()
-            .position(|&len| len != 0)
-            .ok_or(BurliError::Format("empty Brotli code-length Huffman code"))?;
-        PrefixCode::single(symbol as u16)
-    } else {
-        if space != 0 {
-            return Err(BurliError::Format(
-                "incomplete Brotli code-length Huffman code",
-            ));
-        }
-        PrefixCode::from_lengths(&code_length_code_lengths)?
-    };
+    if non_zero != 1 && space != 0 {
+        return Err(BurliError::Format(
+            "incomplete Brotli code-length Huffman code",
+        ));
+    }
+    let code_length_code = LengthCode::new(&code_length_code_lengths, non_zero);
 
-    let code_lengths = read_symbol_code_lengths(reader, alphabet_size, &code_length_code)?;
-    PrefixCode::from_lengths_prechecked(
-        &code_lengths.lengths,
-        code_lengths.counts,
-        code_lengths.non_zero,
-        code_lengths.max_bits,
-    )
+    read_symbol_code_lengths(reader, alphabet_size, &code_length_code, lists)
 }
 
 fn read_code_length_code_len(reader: &mut BitReader<'_>) -> Result<u8, DecompressError> {
@@ -507,221 +746,66 @@ fn read_code_length_code_len(reader: &mut BitReader<'_>) -> Result<u8, Decompres
     Ok(CODE_LENGTH_PREFIX_VALUE[index])
 }
 
-#[derive(Clone, Debug)]
-struct CodeLengths {
-    lengths: Vec<u8>,
-    counts: [u16; MAX_CODE_BITS as usize + 1],
-    non_zero: usize,
-    max_bits: u8,
-}
-
-#[derive(Clone, Debug)]
-struct CodeLengthStats {
-    counts: [u16; MAX_CODE_BITS as usize + 1],
-    non_zero: usize,
-    max_bits: u8,
-}
-
+/// Reads the code length of each symbol into `lists`, until the lengths
+/// form a complete code.
 fn read_symbol_code_lengths(
     reader: &mut BitReader<'_>,
     alphabet_size: usize,
-    code_length_code: &PrefixCode,
-) -> Result<CodeLengths, DecompressError> {
-    let mut lengths = vec![0_u8; alphabet_size];
-    let mut stats = CodeLengthStats {
-        counts: [0_u16; MAX_CODE_BITS as usize + 1],
-        non_zero: 0,
-        max_bits: 0,
-    };
-    let mut cursor = 0_usize;
+    code_length_code: &LengthCode,
+    lists: &mut SymbolLists,
+) -> Result<(), DecompressError> {
+    lists.clear();
+    let mut symbol = 0_usize;
     let mut space = 1_i32 << MAX_CODE_BITS;
     let mut previous_non_zero = 8_u8;
-    let mut pending_repeat: Option<Repeat> = None;
+    let mut repeat = 0_usize;
+    let mut repeat_len = 0_u8;
 
-    while cursor < alphabet_size && space > 0 {
-        if pending_repeat_finishes_tree(alphabet_size, cursor, space, pending_repeat)? {
-            apply_pending_repeat(
-                &mut lengths,
-                &mut cursor,
-                &mut space,
-                &mut stats,
-                &mut previous_non_zero,
-                &mut pending_repeat,
-            )?;
+    while symbol < alphabet_size && space > 0 {
+        let code = code_length_code.decode(reader)?;
+        if code <= 15 {
+            repeat = 0;
+            if code != 0 {
+                lists.push(symbol, code);
+                previous_non_zero = code;
+                space -= 1_i32 << (MAX_CODE_BITS - code);
+            }
+            symbol += 1;
             continue;
         }
 
-        let symbol = code_length_code.decode(reader)? as u8;
-        if symbol <= 15 {
-            apply_pending_repeat(
-                &mut lengths,
-                &mut cursor,
-                &mut space,
-                &mut stats,
-                &mut previous_non_zero,
-                &mut pending_repeat,
-            )?;
-            if cursor >= alphabet_size {
-                return Err(BurliError::Format("Brotli code length exceeds alphabet"));
-            }
-            lengths[cursor] = symbol;
-            cursor += 1;
-            if symbol != 0 {
-                previous_non_zero = symbol;
-                space -= 1_i32 << (MAX_CODE_BITS - symbol);
-                if space < 0 {
-                    return Err(BurliError::Format("oversubscribed Brotli Huffman code"));
-                }
-                stats.counts[usize::from(symbol)] += 1;
-                stats.non_zero += 1;
-                stats.max_bits = stats.max_bits.max(symbol);
-            }
-            continue;
+        // Code 16 repeats the previous nonzero length and code 17 repeats
+        // zero. A repeat right after one of the same code extends its run:
+        // the run length so far, less two, scales by the extra bits' range.
+        let extra_bits = code - 14;
+        let len = if code == 16 { previous_non_zero } else { 0 };
+        if len != repeat_len {
+            repeat = 0;
+            repeat_len = len;
         }
-
-        let repeat = read_repeat(reader, symbol, previous_non_zero)?;
-        match pending_repeat.as_mut() {
-            Some(pending) if pending.code == repeat.code => {
-                pending.count = repeat.factor * (pending.count - 2) + repeat.count;
-            }
-            _ => {
-                apply_pending_repeat(
-                    &mut lengths,
-                    &mut cursor,
-                    &mut space,
-                    &mut stats,
-                    &mut previous_non_zero,
-                    &mut pending_repeat,
-                )?;
-                pending_repeat = Some(repeat);
-            }
+        let before = repeat;
+        if repeat > 0 {
+            repeat = (repeat - 2) << extra_bits;
         }
-    }
-
-    apply_pending_repeat(
-        &mut lengths,
-        &mut cursor,
-        &mut space,
-        &mut stats,
-        &mut previous_non_zero,
-        &mut pending_repeat,
-    )?;
-
-    if space != 0 {
-        return Err(BurliError::Format("incomplete Brotli Huffman code"));
-    }
-
-    lengths.truncate(cursor);
-
-    Ok(CodeLengths {
-        lengths,
-        counts: stats.counts,
-        non_zero: stats.non_zero,
-        max_bits: stats.max_bits,
-    })
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Repeat {
-    code: u8,
-    value: u8,
-    count: usize,
-    factor: usize,
-}
-
-fn read_repeat(
-    reader: &mut BitReader<'_>,
-    symbol: u8,
-    previous_non_zero: u8,
-) -> Result<Repeat, DecompressError> {
-    match symbol {
-        16 => Ok(Repeat {
-            code: 16,
-            value: previous_non_zero,
-            count: reader.read_bits(2)? as usize + 3,
-            factor: 4,
-        }),
-        17 => Ok(Repeat {
-            code: 17,
-            value: 0,
-            count: reader.read_bits(3)? as usize + 3,
-            factor: 8,
-        }),
-        _ => Err(BurliError::Format("invalid Brotli code-length repeat code")),
-    }
-}
-
-fn apply_pending_repeat(
-    lengths: &mut [u8],
-    cursor: &mut usize,
-    space: &mut i32,
-    stats: &mut CodeLengthStats,
-    previous_non_zero: &mut u8,
-    pending_repeat: &mut Option<Repeat>,
-) -> Result<(), DecompressError> {
-    let Some(repeat) = pending_repeat.take() else {
-        return Ok(());
-    };
-
-    let end = cursor
-        .checked_add(repeat.count)
-        .ok_or(BurliError::Format("Brotli code length repeat overflow"))?;
-    if end > lengths.len() {
-        return Err(BurliError::Format(
-            "Brotli code length repeat exceeds alphabet",
-        ));
-    }
-
-    for len in &mut lengths[*cursor..end] {
-        *len = repeat.value;
-    }
-    *cursor = end;
-
-    if repeat.value != 0 {
-        *previous_non_zero = repeat.value;
-        *space -= (repeat.count as i32) << (MAX_CODE_BITS - repeat.value);
-        if *space < 0 {
-            return Err(BurliError::Format("oversubscribed Brotli Huffman code"));
+        repeat += reader.read_bits(extra_bits)? as usize + 3;
+        let end = symbol + (repeat - before);
+        if end > alphabet_size {
+            return Err(BurliError::Format(
+                "Brotli code length repeat exceeds alphabet",
+            ));
         }
-        let count = u16::try_from(repeat.count)
-            .map_err(|_| BurliError::Format("Brotli code length repeat exceeds alphabet"))?;
-        let slot = &mut stats.counts[usize::from(repeat.value)];
-        *slot = slot
-            .checked_add(count)
-            .ok_or(BurliError::Format("Brotli code length repeat overflow"))?;
-        stats.non_zero += repeat.count;
-        stats.max_bits = stats.max_bits.max(repeat.value);
+        if len != 0 {
+            lists.push_run(symbol, end, len);
+            space -= ((end - symbol) as i32) << (MAX_CODE_BITS - len);
+        }
+        symbol = end;
     }
 
-    Ok(())
-}
-
-fn pending_repeat_finishes_tree(
-    alphabet_size: usize,
-    cursor: usize,
-    space: i32,
-    pending_repeat: Option<Repeat>,
-) -> Result<bool, DecompressError> {
-    let Some(repeat) = pending_repeat else {
-        return Ok(false);
-    };
-    let end = cursor
-        .checked_add(repeat.count)
-        .ok_or(BurliError::Format("Brotli code length repeat overflow"))?;
-    if end > alphabet_size {
-        return Err(BurliError::Format(
-            "Brotli code length repeat exceeds alphabet",
-        ));
+    match space {
+        0 => Ok(()),
+        ..0 => Err(BurliError::Format("oversubscribed Brotli Huffman code")),
+        _ => Err(BurliError::Format("incomplete Brotli Huffman code")),
     }
-    if end == alphabet_size {
-        return Ok(true);
-    }
-    if repeat.value == 0 {
-        return Ok(false);
-    }
-
-    let remaining = space - ((repeat.count as i32) << (MAX_CODE_BITS - repeat.value));
-    Ok(remaining == 0)
 }
 
 #[cfg(test)]

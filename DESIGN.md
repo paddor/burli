@@ -55,13 +55,30 @@ distance codes live in locals and change only at block switches.
 
 ## Huffman Tables
 
-Prefix codes are canonical Huffman codes. Each non-single code builds a fixed
-fast lookup table with `1 << fast_bits` entries. A fast entry stores symbol and
-bit length in a packed value. Single-symbol codes bypass bit reads.
+Prefix codes are canonical Huffman codes. The codes of one alphabet in a
+meta-block share one buffer: a 256-entry root per code, then second-level
+tables for codes longer than 8 bits. An entry packs a symbol and its code
+length. A root entry for longer codes packs the offset of their second-level
+table and its total width. A single-symbol code fills its root with
+zero-length entries, so it decodes like any other code.
 
-The hot decode path peeks bits, reads the fast lookup entry, drops the encoded
-bit length, and returns the symbol. The padded lookup path is cold and handles
-valid streams that end with fewer physical bits than the table width.
+Reading code lengths links the symbols of each length into a list in symbol
+order. That is canonical order, so building a table walks the lists, with no
+length array and no sort. The root fills to the width of its longest code and
+then doubles. Second-level sizes come from the length counts first, so the
+buffer grows once per code.
+
+A meta-block of 4 KiB or more with one literal code also builds a 10-bit root
+when codes longer than 8 bits cover over 1/8 of the code space. Binary data
+has many 9- to 11-bit literal codes, and each second-level lookup costs a
+mispredicted branch. Literal context maps that pick the same tree for all 64
+contexts decode like a single code.
+
+The hot decode path reads the root entry for the low buffered bits, follows a
+second-level entry for long codes, drops the code length, and returns the
+symbol. Roots are fixed-size arrays indexed by masked bits, so lookups need no
+bounds checks. Bits past the input end read as zero, and the decoder checks
+the code length against the bits left.
 
 ## Backward Copies
 

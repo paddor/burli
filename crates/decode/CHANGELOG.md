@@ -9,8 +9,14 @@
   need no capacity checks. Short copies move whole 16- or 32-byte windows.
   Block counts and the current command and distance codes stay in locals
   between block switches. Literal contexts come from the 512-byte lookup
-  table instead of a 64 KiB pair table. Decoding runs 3% to 27% faster in
-  aggregate.
+  table instead of a 64 KiB pair table.
+- Keep the prefix codes of each alphabet in one buffer with 8-bit roots.
+  Build tables from per-length symbol lists collected while reading code
+  lengths, and size second-level tables before filling them. A meta-block
+  with one literal code of mostly long codes also builds a 10-bit root.
+  Literal context maps with one tree for every context use the single-code
+  path.
+- Decoding runs 17% to 52% faster than 0.3.4 in aggregate.
 
 ## [0.3.4] - 2026-09-27
 

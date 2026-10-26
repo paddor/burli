@@ -3,12 +3,18 @@ use alloc::vec::Vec;
 
 use burli_core::{BurliError, DecompressError, bits::BitReader};
 
-use crate::{dictionary::RawDictionary, huffman::PrefixCode};
+use crate::{
+    dictionary::RawDictionary,
+    huffman::{CodeGroup, PrefixCode, ROOT_SIZE, Table, Tables, WIDE_ROOT_SIZE},
+};
 
 const LITERAL_ALPHABET_SIZE: usize = 256;
 const COMMAND_ALPHABET_SIZE: usize = 704;
 const BLOCK_LENGTH_ALPHABET_SIZE: usize = 26;
 const LAST_DISTANCES: [usize; 4] = [16, 15, 11, 4];
+/// Meta-blocks shorter than this decode too few literals to pay for building
+/// a wide literal root.
+const WIDE_ROOT_MIN_LEN: usize = 4 * 1024;
 /// Bytes of zeroed room the command loop adds at a time.
 const ZERO_AHEAD: usize = 64 * 1024;
 /// Zeroed room past the meta-block end. Short copies write whole 16- or
@@ -133,13 +139,23 @@ pub(crate) fn decode_meta_block_with_base_and_policy(
 
     let mut header = read_header(reader)?;
 
-    let literal_codes =
-        read_prefix_codes(reader, header.literal_tree_count, LITERAL_ALPHABET_SIZE)?;
-    let command_codes = read_prefix_codes(reader, header.commands.types(), COMMAND_ALPHABET_SIZE)?;
-    let distance_codes = read_prefix_codes(
+    let literal_codes = CodeGroup::read(
+        reader,
+        header.literal_tree_count,
+        LITERAL_ALPHABET_SIZE,
+        params.len >= WIDE_ROOT_MIN_LEN,
+    )?;
+    let command_codes = CodeGroup::read(
+        reader,
+        header.commands.types(),
+        COMMAND_ALPHABET_SIZE,
+        false,
+    )?;
+    let distance_codes = CodeGroup::read(
         reader,
         header.distance_tree_count,
         header.distance_alphabet_size,
+        false,
     )?;
     if distance_policy == DistancePolicy::LocalOnly && literal_codes.len() != 1 {
         return Err(BurliError::Format(
@@ -147,7 +163,7 @@ pub(crate) fn decode_meta_block_with_base_and_policy(
         ));
     }
     let window_size = (1_usize << params.window_bits) - 16;
-    let body = MetaBlockBody {
+    let body: MetaBlockBody<'_> = MetaBlockBody {
         start,
         needed,
         room,
@@ -157,14 +173,38 @@ pub(crate) fn decode_meta_block_with_base_and_policy(
         command_codes: &command_codes,
         distance_codes: &distance_codes,
         raw_dictionary: params.raw_dictionary,
+        single_literal_code: None,
     };
-    let result = match distance_policy {
-        DistancePolicy::Standard => {
-            decode_meta_block_body::<false>(reader, output, &mut header, distances, body)
+    // A meta-block with one literal code decodes literals through it alone.
+    // Its body is built for one root size, so the command loop holds one copy
+    // of the literal loop.
+    let single = header.literals.types() == 1 && literal_codes.len() == 1;
+    let narrow = body.with_single_literal_code(single.then(|| literal_codes.tables().table(0)));
+    let result = match (distance_policy, literal_codes.wide_table()) {
+        (DistancePolicy::Standard, Some(wide)) if single => {
+            let wide = body.with_single_literal_code(Some(wide));
+            decode_meta_block_body::<false, WIDE_ROOT_SIZE>(
+                reader,
+                output,
+                &mut header,
+                distances,
+                wide,
+            )
         }
-        DistancePolicy::LocalOnly => {
-            decode_meta_block_body::<true>(reader, output, &mut header, distances, body)
-        }
+        (DistancePolicy::Standard, _) => decode_meta_block_body::<false, ROOT_SIZE>(
+            reader,
+            output,
+            &mut header,
+            distances,
+            narrow,
+        ),
+        (DistancePolicy::LocalOnly, _) => decode_meta_block_body::<true, ROOT_SIZE>(
+            reader,
+            output,
+            &mut header,
+            distances,
+            narrow,
+        ),
     };
     output.truncate(if result.is_ok() { needed } else { start });
     result
@@ -172,7 +212,7 @@ pub(crate) fn decode_meta_block_with_base_and_policy(
 
 /// The read-only inputs of one meta-block's command loop.
 #[derive(Clone, Copy)]
-struct MetaBlockBody<'a> {
+struct MetaBlockBody<'a, const N: usize = ROOT_SIZE> {
     /// Output position where the meta-block starts.
     start: usize,
     /// Output position where the meta-block ends.
@@ -181,26 +221,48 @@ struct MetaBlockBody<'a> {
     room: usize,
     output_base: usize,
     window_size: usize,
-    literal_codes: &'a [PrefixCode],
-    command_codes: &'a [PrefixCode],
-    distance_codes: &'a [PrefixCode],
+    literal_codes: &'a CodeGroup,
+    command_codes: &'a CodeGroup,
+    distance_codes: &'a CodeGroup,
     raw_dictionary: RawDictionary<'a>,
+    /// The meta-block's one literal code, with a root of `N` entries.
+    single_literal_code: Option<Table<'a, N>>,
+}
+
+impl<'a, const N: usize> MetaBlockBody<'a, N> {
+    const fn with_single_literal_code<const M: usize>(
+        self,
+        single_literal_code: Option<Table<'a, M>>,
+    ) -> MetaBlockBody<'a, M> {
+        MetaBlockBody {
+            start: self.start,
+            needed: self.needed,
+            room: self.room,
+            output_base: self.output_base,
+            window_size: self.window_size,
+            literal_codes: self.literal_codes,
+            command_codes: self.command_codes,
+            distance_codes: self.distance_codes,
+            raw_dictionary: self.raw_dictionary,
+            single_literal_code,
+        }
+    }
 }
 
 /// Runs the command loop on local copies of `reader` and `distances`. The
 /// loop never takes their addresses outside inlined code, so their fields
 /// stay in registers. `LOCAL_ONLY` selects [`DistancePolicy::LocalOnly`].
 #[inline(never)]
-fn decode_meta_block_body<const LOCAL_ONLY: bool>(
+fn decode_meta_block_body<const LOCAL_ONLY: bool, const N: usize>(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
     header: &mut CompressedHeader,
     distances: &mut DistanceRing,
-    body: MetaBlockBody<'_>,
+    body: MetaBlockBody<'_, N>,
 ) -> Result<bool, DecompressError> {
     let mut local_reader = reader.clone();
     let mut local_distances = *distances;
-    let result = decode_commands::<LOCAL_ONLY>(
+    let result = decode_commands::<LOCAL_ONLY, N>(
         &mut local_reader,
         output,
         header,
@@ -230,11 +292,11 @@ fn with_reader_copy<'a, T>(
 /// context.
 fn distance_trees<'a>(
     header: &CompressedHeader,
-    distance_codes: &'a [PrefixCode],
+    distance_tables: Tables<'a>,
     block_type: usize,
-) -> [&'a PrefixCode; 4] {
+) -> [Table<'a>; 4] {
     let map = &header.distance_context_map[block_type * 4..block_type * 4 + 4];
-    core::array::from_fn(|context| &distance_codes[map[context]])
+    core::array::from_fn(|context| distance_tables.table(map[context]))
 }
 
 /// Decodes commands until `output` holds `body.needed` bytes.
@@ -249,12 +311,12 @@ fn distance_trees<'a>(
 /// block type counts down from `usize::MAX`, which a meta-block of at most
 /// 16 MiB never reaches, so the loop needs no single-type flags.
 #[inline(always)]
-fn decode_commands<const LOCAL_ONLY: bool>(
+fn decode_commands<const LOCAL_ONLY: bool, const N: usize>(
     reader: &mut BitReader<'_>,
     output: &mut Vec<u8>,
     header: &mut CompressedHeader,
     distances: &mut DistanceRing,
-    body: MetaBlockBody<'_>,
+    body: MetaBlockBody<'_, N>,
 ) -> Result<bool, DecompressError> {
     let MetaBlockBody {
         start,
@@ -266,26 +328,21 @@ fn decode_commands<const LOCAL_ONLY: bool>(
         command_codes,
         distance_codes,
         raw_dictionary,
+        single_literal_code,
     } = body;
-    let single_literal_code = if header.literals.types() == 1 && literal_codes.len() == 1 {
-        Some(&literal_codes[0])
-    } else {
-        None
-    };
-    let literal_max_bits = literal_codes
-        .iter()
-        .map(|code| usize::from(code.max_bits()))
-        .max()
-        .unwrap_or(0);
+    let literal_tables = literal_codes.tables();
+    let command_tables = command_codes.tables();
+    let distance_tables = distance_codes.tables();
     let literal_shape = LiteralDecodeShape {
-        max_bits: literal_max_bits,
+        max_bits: usize::from(literal_codes.max_bits()),
+        single_symbol: literal_codes.single_symbol(0),
     };
     let no_postfix_distances = header.npostfix == 0 && header.ndirect == 0;
     let mut command_remaining = header.commands.remaining;
-    let mut command_code = &command_codes[header.commands.current_type];
+    let mut command_code = command_tables.table(header.commands.current_type);
     let mut distance_remaining = header.distances.remaining;
     let mut distance_codes_by_context =
-        distance_trees(header, distance_codes, header.distances.current_type);
+        distance_trees(header, distance_tables, header.distances.current_type);
     let mut has_copy = false;
     let mut pos = start;
     let mut out = output.as_mut_slice();
@@ -294,7 +351,7 @@ fn decode_commands<const LOCAL_ONLY: bool>(
         if command_remaining == 0 {
             let block_type = header.commands.next_block(reader)?;
             command_remaining = header.commands.remaining;
-            command_code = &command_codes[block_type];
+            command_code = command_tables.table(block_type);
         }
         command_remaining -= 1;
         let command = read_command(reader, command_code)?;
@@ -310,8 +367,16 @@ fn decode_commands<const LOCAL_ONLY: bool>(
                     "Brotli literal run exceeds meta-block size",
                 ));
             }
-            if let Some(literal_code) = single_literal_code {
-                copy_literals_single_code(reader, out, &mut pos, command.insert_len, literal_code)?;
+            if let Some(table) = single_literal_code {
+                copy_literals_single_code(
+                    reader,
+                    out,
+                    &mut pos,
+                    command.insert_len,
+                    table,
+                    literal_shape.single_symbol,
+                    literal_shape.max_bits,
+                )?;
             } else {
                 copy_literals(
                     reader,
@@ -319,8 +384,9 @@ fn decode_commands<const LOCAL_ONLY: bool>(
                     &mut pos,
                     command.insert_len,
                     literal_codes,
+                    literal_tables,
                     header,
-                    literal_shape,
+                    literal_shape.max_bits,
                 )?;
             }
         }
@@ -341,7 +407,7 @@ fn decode_commands<const LOCAL_ONLY: bool>(
             if distance_remaining == 0 {
                 let block_type = header.distances.next_block(reader)?;
                 distance_remaining = header.distances.remaining;
-                distance_codes_by_context = distance_trees(header, distance_codes, block_type);
+                distance_codes_by_context = distance_trees(header, distance_tables, block_type);
             }
             distance_remaining -= 1;
             let code = distance_codes_by_context[command.distance_context & 3];
@@ -408,6 +474,8 @@ struct CopyRequest {
 struct LiteralDecodeShape {
     /// Longest literal code length across all literal trees.
     max_bits: usize,
+    /// The symbol of literal tree 0 when it has one symbol.
+    single_symbol: Option<u16>,
 }
 
 /// Writes the bytes of a command's copy to `output[*pos..]` and advances
@@ -596,6 +664,9 @@ struct CompressedHeader {
     literal_tree_count: usize,
     distance_tree_count: usize,
     literal_context_map: Vec<usize>,
+    /// The one tree of each literal block type whose context map sends every
+    /// context to the same tree. Such a run needs no context.
+    literal_trivial_trees: Vec<Option<usize>>,
     distance_context_map: Vec<usize>,
     distance_alphabet_size: usize,
 }
@@ -710,6 +781,10 @@ fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, Decompres
 
     let literal_trees = read_var_len_u8(reader)? + 1;
     let literal_context_map = read_context_map(reader, literals.types() * 64, literal_trees)?;
+    let literal_trivial_trees = literal_context_map
+        .chunks_exact(64)
+        .map(|map| map.iter().all(|&tree| tree == map[0]).then_some(map[0]))
+        .collect();
 
     let distance_trees = read_var_len_u8(reader)? + 1;
     let distance_context_map = read_context_map(reader, distances.types() * 4, distance_trees)?;
@@ -725,6 +800,7 @@ fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, Decompres
         literal_tree_count: literal_trees,
         distance_tree_count: distance_trees,
         literal_context_map,
+        literal_trivial_trees,
         distance_context_map,
         distance_alphabet_size,
     })
@@ -761,18 +837,6 @@ fn read_var_len_u8(reader: &mut BitReader<'_>) -> Result<usize, DecompressError>
 
     let extra = reader.read_bits(width)?;
     Ok((1_usize << width) + extra as usize)
-}
-
-fn read_prefix_codes(
-    reader: &mut BitReader<'_>,
-    count: usize,
-    alphabet_size: usize,
-) -> Result<Vec<PrefixCode>, DecompressError> {
-    let mut codes = Vec::with_capacity(count);
-    for _ in 0..count {
-        codes.push(PrefixCode::read(reader, alphabet_size)?);
-    }
-    Ok(codes)
 }
 
 fn read_context_map(
@@ -1065,7 +1129,7 @@ const COPY_LENGTH_PREFIXES: [(usize, u8); 24] = [
 #[inline(always)]
 fn read_command(
     reader: &mut BitReader<'_>,
-    command_code: &PrefixCode,
+    command_code: Table<'_>,
 ) -> Result<Command, DecompressError> {
     let code = usize::from(decode_prefix_symbol(reader, command_code)? & 0x0fff);
     debug_assert!(code < COMMAND_ALPHABET_SIZE);
@@ -1088,7 +1152,7 @@ fn read_command(
 #[inline(always)]
 fn decode_prefix_symbol(
     reader: &mut BitReader<'_>,
-    code: &PrefixCode,
+    code: Table<'_>,
 ) -> Result<u16, DecompressError> {
     reader.refill();
     code.decode_refilled(reader)
@@ -1133,29 +1197,29 @@ fn command_code_parts(code: usize) -> Result<(usize, usize, bool, usize), Decomp
 
 /// Decodes `count` literals to `output[*pos..]` and advances `pos`. The
 /// caller checked that they fit before `needed`.
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn copy_literals(
     reader: &mut BitReader<'_>,
     output: &mut [u8],
     pos: &mut usize,
     count: usize,
-    literal_codes: &[PrefixCode],
+    literal_codes: &CodeGroup,
+    literal_tables: Tables<'_>,
     header: &mut CompressedHeader,
-    shape: LiteralDecodeShape,
+    max_bits: usize,
 ) -> Result<(), DecompressError> {
     if header.literals.types() == 1 {
-        if literal_codes.len() == 1 {
-            return copy_literals_single_code(reader, output, pos, count, &literal_codes[0]);
-        }
-        return copy_literals_single_block(
+        return copy_literal_run(
             reader,
             output,
             pos,
             count,
             literal_codes,
-            &header.literal_context_map[..64],
-            header.context_modes[0],
-            shape.max_bits,
+            literal_tables,
+            header,
+            0,
+            max_bits,
         );
     }
 
@@ -1165,16 +1229,16 @@ fn copy_literals(
     while remaining != 0 {
         let block_type = header.literals.current_type_multi(reader)?;
         let run = remaining.min(header.literals.remaining);
-        let map_start = block_type * 64;
-        copy_literals_single_block(
+        copy_literal_run(
             reader,
             output,
             pos,
             run,
             literal_codes,
-            &header.literal_context_map[map_start..map_start + 64],
-            header.context_modes[block_type],
-            shape.max_bits,
+            literal_tables,
+            header,
+            block_type,
+            max_bits,
         )?;
         header.literals.consume_multi(run);
         remaining -= run;
@@ -1182,31 +1246,73 @@ fn copy_literals(
     Ok(())
 }
 
+/// Decodes `count` literals of literal block type `block_type`. A block type
+/// whose contexts all share one tree skips the context per literal.
+#[allow(clippy::too_many_arguments)]
 #[inline(always)]
-fn copy_literals_single_code(
+fn copy_literal_run(
     reader: &mut BitReader<'_>,
     output: &mut [u8],
     pos: &mut usize,
     count: usize,
-    code: &PrefixCode,
+    literal_codes: &CodeGroup,
+    literal_tables: Tables<'_>,
+    header: &CompressedHeader,
+    block_type: usize,
+    max_bits: usize,
+) -> Result<(), DecompressError> {
+    if let Some(tree) = header.literal_trivial_trees[block_type] {
+        return copy_literals_single_code(
+            reader,
+            output,
+            pos,
+            count,
+            literal_tables.table(tree),
+            literal_codes.single_symbol(tree),
+            max_bits,
+        );
+    }
+    let map_start = block_type * 64;
+    copy_literals_single_block(
+        reader,
+        output,
+        pos,
+        count,
+        literal_tables,
+        &header.literal_context_map[map_start..map_start + 64],
+        header.context_modes[block_type],
+        max_bits,
+    )
+}
+
+/// Decodes `count` literals of the one literal code `table`, whose only
+/// symbol is `single` when it has one.
+#[inline(always)]
+fn copy_literals_single_code<const N: usize>(
+    reader: &mut BitReader<'_>,
+    output: &mut [u8],
+    pos: &mut usize,
+    count: usize,
+    table: Table<'_, N>,
+    single: Option<u16>,
+    max_bits: usize,
 ) -> Result<(), DecompressError> {
     let slots = &mut output[*pos..*pos + count];
     *pos += count;
-    if let Some(symbol) = code.single_symbol() {
+    if let Some(symbol) = single {
         slots.fill(symbol as u8);
         return Ok(());
     }
-    let max_bits = usize::from(code.max_bits());
     if max_bits != 0
         && count
             .checked_mul(max_bits)
             .is_some_and(|bits| bits <= reader.remaining_bits())
     {
-        copy_literals_single_code_trusted_fast(reader, slots, code);
+        copy_literals_single_code_trusted_fast(reader, slots, table);
         return Ok(());
     }
     for slot in slots {
-        *slot = code.decode_non_single(reader)? as u8;
+        *slot = table.decode(reader)? as u8;
     }
     Ok(())
 }
@@ -1215,33 +1321,36 @@ fn copy_literals_single_code(
 const LITERALS_PER_REFILL: usize = 3;
 
 /// Decodes three literals from one bit refill. The caller proves that the
-/// input holds `3 * code.max_bits()` bits.
+/// input holds three codes of the longest length.
 #[inline(always)]
-fn decode_three_literals(reader: &mut BitReader<'_>, code: &PrefixCode) -> [u8; 3] {
+fn decode_three_literals<const N: usize>(
+    reader: &mut BitReader<'_>,
+    table: Table<'_, N>,
+) -> [u8; 3] {
     let mut bits = reader.peek_bits_padded();
-    let (a, a_len) = code.lookup_bits(bits);
+    let (a, a_len) = table.lookup_bits(bits);
     bits >>= a_len;
-    let (b, b_len) = code.lookup_bits(bits);
+    let (b, b_len) = table.lookup_bits(bits);
     bits >>= b_len;
-    let (c, c_len) = code.lookup_bits(bits);
+    let (c, c_len) = table.lookup_bits(bits);
     reader.drop_bits_trusted(a_len + b_len + c_len);
     [a as u8, b as u8, c as u8]
 }
 
-/// Fills `slots` with literals of `code`. The caller proves that the input
-/// holds `slots.len() * code.max_bits()` bits.
+/// Fills `slots` with literals of `table`. The caller proves that the input
+/// holds `slots.len()` codes of the longest length.
 #[inline(always)]
-fn copy_literals_single_code_trusted_fast(
+fn copy_literals_single_code_trusted_fast<const N: usize>(
     reader: &mut BitReader<'_>,
     slots: &mut [u8],
-    code: &PrefixCode,
+    table: Table<'_, N>,
 ) {
     let (triples, rest) = slots.as_chunks_mut::<LITERALS_PER_REFILL>();
     for triple in triples {
-        *triple = decode_three_literals(reader, code);
+        *triple = decode_three_literals(reader, table);
     }
     for slot in rest {
-        *slot = code.decode_non_single_trusted_fast(reader) as u8;
+        *slot = table.decode_trusted(reader) as u8;
     }
 }
 
@@ -1252,7 +1361,7 @@ fn copy_literals_single_block(
     output: &mut [u8],
     pos: &mut usize,
     count: usize,
-    literal_codes: &[PrefixCode],
+    literal_tables: Tables<'_>,
     context_map: &[usize],
     mode: u8,
     max_bits: usize,
@@ -1268,7 +1377,7 @@ fn copy_literals_single_block(
             reader,
             slots,
             previous,
-            literal_codes,
+            literal_tables,
             context_map,
             mode,
         );
@@ -1279,7 +1388,7 @@ fn copy_literals_single_block(
         0 => {
             for slot in slots {
                 let tree_index = context_map[usize::from(previous.0 & 0x3f)];
-                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                let literal = read_literal(reader, literal_tables.table(tree_index))?;
                 *slot = literal;
                 previous = (literal, previous.0);
             }
@@ -1287,7 +1396,7 @@ fn copy_literals_single_block(
         1 => {
             for slot in slots {
                 let tree_index = context_map[usize::from(previous.0 >> 2)];
-                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                let literal = read_literal(reader, literal_tables.table(tree_index))?;
                 *slot = literal;
                 previous = (literal, previous.0);
             }
@@ -1296,7 +1405,7 @@ fn copy_literals_single_block(
             for slot in slots {
                 let context = crate::context_lookup::literal_context::<2>(previous.0, previous.1);
                 let tree_index = context_map[usize::from(context)];
-                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                let literal = read_literal(reader, literal_tables.table(tree_index))?;
                 *slot = literal;
                 previous = (literal, previous.0);
             }
@@ -1305,7 +1414,7 @@ fn copy_literals_single_block(
             for slot in slots {
                 let context = crate::context_lookup::literal_context::<3>(previous.0, previous.1);
                 let tree_index = context_map[usize::from(context)];
-                let literal = read_literal(reader, &literal_codes[tree_index])?;
+                let literal = read_literal(reader, literal_tables.table(tree_index))?;
                 *slot = literal;
                 previous = (literal, previous.0);
             }
@@ -1320,7 +1429,7 @@ fn copy_literals_single_block_trusted(
     reader: &mut BitReader<'_>,
     slots: &mut [u8],
     previous: (u8, u8),
-    literal_codes: &[PrefixCode],
+    literal_tables: Tables<'_>,
     context_map: &[usize],
     mode: u8,
 ) {
@@ -1329,28 +1438,28 @@ fn copy_literals_single_block_trusted(
             reader,
             slots,
             previous,
-            literal_codes,
+            literal_tables,
             context_map,
         ),
         1 => copy_literals_single_block_trusted_mode::<1>(
             reader,
             slots,
             previous,
-            literal_codes,
+            literal_tables,
             context_map,
         ),
         2 => copy_literals_single_block_trusted_mode::<2>(
             reader,
             slots,
             previous,
-            literal_codes,
+            literal_tables,
             context_map,
         ),
         3 => copy_literals_single_block_trusted_mode::<3>(
             reader,
             slots,
             previous,
-            literal_codes,
+            literal_tables,
             context_map,
         ),
         _ => unreachable!(),
@@ -1359,12 +1468,14 @@ fn copy_literals_single_block_trusted(
 
 /// Fills `slots` with literals that follow the bytes `previous`. The caller
 /// proves that the input holds `slots.len()` codes of the longest length.
+/// A single-symbol code decodes through its zero-length entries, so every
+/// literal takes the same path.
 #[inline(always)]
 fn copy_literals_single_block_trusted_mode<const MODE: u8>(
     reader: &mut BitReader<'_>,
     slots: &mut [u8],
     mut previous: (u8, u8),
-    literal_codes: &[PrefixCode],
+    literal_tables: Tables<'_>,
     context_map: &[usize],
 ) {
     let (triples, rest) = slots.as_chunks_mut::<LITERALS_PER_REFILL>();
@@ -1373,35 +1484,28 @@ fn copy_literals_single_block_trusted_mode<const MODE: u8>(
     for triple in triples {
         reader.refill();
         for slot in triple {
-            let code = &literal_codes[context_map[literal_context_for_mode(previous, MODE)]];
-            let literal = match code.single_symbol() {
-                Some(symbol) => symbol as u8,
-                None => code.decode_buffered(reader) as u8,
-            };
+            let table = literal_tables.table(context_map[literal_context_for_mode(previous, MODE)]);
+            let literal = table.decode_buffered(reader) as u8;
             *slot = literal;
             previous = (literal, previous.0);
         }
     }
     for slot in rest {
-        let code = &literal_codes[context_map[literal_context_for_mode(previous, MODE)]];
-        let literal = read_literal_trusted(reader, code);
+        let table = literal_tables.table(context_map[literal_context_for_mode(previous, MODE)]);
+        let literal = read_literal_trusted(reader, table);
         *slot = literal;
         previous = (literal, previous.0);
     }
 }
 
 #[inline(always)]
-fn read_literal(reader: &mut BitReader<'_>, code: &PrefixCode) -> Result<u8, DecompressError> {
-    Ok(code.decode(reader)? as u8)
+fn read_literal(reader: &mut BitReader<'_>, table: Table<'_>) -> Result<u8, DecompressError> {
+    Ok(table.decode(reader)? as u8)
 }
 
 #[inline(always)]
-fn read_literal_trusted(reader: &mut BitReader<'_>, code: &PrefixCode) -> u8 {
-    if let Some(symbol) = code.single_symbol() {
-        symbol as u8
-    } else {
-        code.decode_non_single_trusted_fast(reader) as u8
-    }
+fn read_literal_trusted(reader: &mut BitReader<'_>, table: Table<'_>) -> u8 {
+    table.decode_trusted(reader) as u8
 }
 
 #[inline(always)]
@@ -1649,7 +1753,7 @@ mod tests {
         let mut reader = BitReader::new(&bytes);
         let mut slots = [0xff_u8; 6];
 
-        copy_literals_single_code_trusted_fast(&mut reader, &mut slots, &code);
+        copy_literals_single_code_trusted_fast(&mut reader, &mut slots, code.table());
 
         assert_eq!(slots, [0, 1, 0, 1, 1, 0]);
     }
