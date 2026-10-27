@@ -54,15 +54,19 @@ pub(super) const LOW_COMPRESS_LITERAL_MIN_INPUT: [usize; 6] =
 /// about this size, each with its own code. On Silesia `x-ray` this gives
 /// ratio 1.249 instead of 1.208 for one 8 MiB block, 2% slower.
 pub(super) const LOW_COMPRESS_LITERAL_BLOCK_SIZE: usize = 256 * 1024;
-/// From this size up, low-compressibility blocks at q2 and up get literal
+/// From this size up, low-compressibility blocks at q1 and up get literal
 /// codes by the context of the previous byte, in meta-blocks of about
 /// `LOW_COMPRESS_CONTEXT_BLOCK_SIZE`, with at most this many codes per
 /// quality. Merges of codes look at neighbors until at most
 /// `LOW_COMPRESS_CONTEXT_ALL_PAIRS` codes remain, then at all pairs.
 pub(super) const LOW_COMPRESS_CONTEXT_MIN_INPUT: usize = 64 * 1024;
 pub(super) const LOW_COMPRESS_CONTEXT_BLOCK_SIZE: usize = 1 << 20;
-pub(super) const LOW_COMPRESS_CONTEXT_CODES: [usize; 6] = [1, 1, 2, 4, 16, 64];
+pub(super) const LOW_COMPRESS_CONTEXT_CODES: [usize; 6] = [1, 2, 3, 4, 16, 64];
 pub(super) const LOW_COMPRESS_CONTEXT_ALL_PAIRS: [usize; 6] = [0, 0, 0, 0, 24, 32];
+/// Per quality, the counts take the first this many bytes of every
+/// `context_literals::SAMPLE_PERIOD`, or all of them at that size. Fewer
+/// counts make q1 faster than q2.
+pub(super) const LOW_COMPRESS_CONTEXT_SAMPLE: [usize; 6] = [1024, 128, 1024, 1024, 1024, 1024];
 pub(super) const LOW_COMPRESS_DUP6_STORE_MAX: usize = 45;
 pub(super) const LOW_COMPRESS_ZERO_RATIO_NUM: usize = 1;
 pub(super) const LOW_COMPRESS_ZERO_RATIO_DEN: usize = 50;

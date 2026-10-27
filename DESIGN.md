@@ -207,11 +207,15 @@ codes instead.
 ### Low-Compressibility Literals
 
 Blocks that the low-compressibility sampler flags take literal-only
-meta-blocks. From 64 KiB up at q2 to q5, literals are coded by the top six
+meta-blocks. From 64 KiB up at q1 to q5, literals are coded by the top six
 bits of the byte before, as binary data such as 16-bit samples often depends
-on it. The 64 context histograms merge greedily into at most 2, 4, 16, or
-64 codes by quality, always the pair whose merge costs the fewest estimated
-bits: first among neighboring contexts, then at q4 and q5 among all pairs.
+on it. The 64 context histograms merge greedily into at most 2, 3, 4, 16,
+or 64 codes by quality, always the pair whose merge costs the fewest
+estimated bits: first among neighboring contexts, then at q4 and q5 among
+all pairs. q1 counts only the first 128 bytes of each KiB, which keeps it
+faster than q2, and stores meta-blocks whose literals would take more bytes
+than the block. The literals go out through the same writer as q0's, with
+the code of each from a table by code and literal.
 
 ## Entropy Coding
 

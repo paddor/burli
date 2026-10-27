@@ -14,13 +14,16 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use burli_core::{CompressError, bits::BitWriter};
 
 use super::{
-    COMMAND_ALPHABET_SIZE, LITERAL_ALPHABET_SIZE, command_symbol_for_insert, insert_length_code,
-    prefix_code::{self, LiteralCodes},
-    symbol_code, symbol_code_map, write_meta_block_len, write_prefix_code_from_frequencies,
-    write_simple_prefix_code_single, write_var_len_u8,
+    COMMAND_ALPHABET_SIZE, FAST_CODE_BITS, LITERAL_ALPHABET_SIZE, command_symbol_for_insert,
+    insert_length_code, literal_runs, prefix_code, symbol_code, symbol_code_map,
+    write_meta_block_len, write_prefix_code_from_frequencies, write_simple_prefix_code_single,
+    write_var_len_u8,
 };
 
 const CONTEXTS: usize = 64;
+
+/// [`write`] counts the first bytes of each this many of a sampled input.
+pub(super) const SAMPLE_PERIOD: usize = 1024;
 
 /// Brotli's literal context mode that takes the top six bits of the
 /// previous byte.
@@ -42,31 +45,44 @@ pub(super) const COST_SHIFT: u32 = 16;
 /// Writes `input` as one meta-block of literals coded by the context of
 /// the byte before each, with at most `max_codes` literal codes. `previous`
 /// is the byte before `input` in the stream, or zero at its start. See
-/// [`merge`] for `all_pairs_codes`.
+/// [`merge`] for `all_pairs_codes`. The counts take the first `sample`
+/// bytes of every [`SAMPLE_PERIOD`], or all of them from `SAMPLE_PERIOD` up.
+/// Returns `false` when the literals would take more bytes than `input`, so
+/// the caller can store it instead.
 pub(super) fn write(
     writer: &mut BitWriter,
     input: &[u8],
     previous: u8,
     max_codes: usize,
     all_pairs_codes: usize,
-) -> Result<(), CompressError> {
+    sample: usize,
+) -> Result<bool, CompressError> {
     debug_assert!((1..=CONTEXTS).contains(&max_codes));
     let mut counts = vec![[0_u32; LITERAL_ALPHABET_SIZE]; CONTEXTS];
-    let mut last = previous;
-    let (quads, rest) = input.as_chunks::<4>();
-    for quad in quads {
-        for &byte in quad {
-            counts[usize::from(last >> 2)][usize::from(byte)] += 1;
-            last = byte;
+    let exact = sample >= SAMPLE_PERIOD;
+    if exact {
+        count(&mut counts, input, previous);
+    } else {
+        for (index, period) in input.chunks(SAMPLE_PERIOD).enumerate() {
+            let before = match index {
+                0 => previous,
+                _ => input[index * SAMPLE_PERIOD - 1],
+            };
+            count(&mut counts, &period[..period.len().min(sample)], before);
         }
     }
-    for &byte in rest {
-        counts[usize::from(last >> 2)][usize::from(byte)] += 1;
-        last = byte;
-    }
     let (codes, context_map) = merge(&mut counts, max_codes, all_pairs_codes);
+    if !exact {
+        // The sample may miss literals, so each counts once more.
+        for &context in &codes {
+            for count in &mut counts[context] {
+                *count += 1;
+            }
+        }
+    }
 
     let insert = insert_length_code(input.len())?;
+    let header_start = writer.written_bits();
     write_meta_block_len(writer, input.len())?;
     // One block type each for literals, commands, and distances, and no
     // postfix or direct distance codes.
@@ -79,14 +95,22 @@ pub(super) fn write(
     // One distance code.
     write_var_len_u8(writer, 0)?;
 
-    let mut literal_codes: Box<[LiteralCodes; CONTEXTS]> =
-        vec![[0; LITERAL_ALPHABET_SIZE]; CONTEXTS]
-            .try_into()
-            .expect("one code per context");
+    // Code bits and lengths by `code << 8 | literal`, apart, so a literal
+    // takes two loads and no unpacking. A mask keeps indexes in bounds
+    // without checks.
+    let mut code_bits: Box<[u16; CONTEXTS << 8]> = vec![0; CONTEXTS << 8]
+        .try_into()
+        .expect("one row per context");
+    let mut code_lens: Box<[u8; CONTEXTS << 8]> = vec![0; CONTEXTS << 8]
+        .try_into()
+        .expect("one row per context");
     let mut literal_bits = 0;
-    for (slot, &context) in literal_codes.iter_mut().zip(&codes) {
-        let (codes, bits) = prefix_code::write_tuned(writer, &counts[context])?;
-        *slot = codes;
+    for (index, &context) in codes.iter().enumerate() {
+        let (literal_codes, bits) = prefix_code::write_tuned(writer, &counts[context])?;
+        for (literal, &code) in literal_codes.iter().enumerate() {
+            code_bits[index << 8 | literal] = (code >> 8) as u16;
+            code_lens[index << 8 | literal] = code as u8;
+        }
         literal_bits += bits;
     }
     write_simple_prefix_code_single(
@@ -97,34 +121,50 @@ pub(super) fn write(
     write_simple_prefix_code_single(writer, 64, 0)?;
     writer.write_bits_trusted(insert.extra_bits, u64::from(insert.extra));
 
-    // The code of each previous byte. Code indexes are below `CONTEXTS`, so
-    // the modulo below changes nothing, but spares a bounds check.
-    let by_previous: [u8; 256] = core::array::from_fn(|byte| context_map[byte >> 2]);
-    let code = |last: u8, byte: u8| {
-        literal_codes[usize::from(by_previous[usize::from(last)]) % CONTEXTS][usize::from(byte)]
+    // The offset of each previous byte's code in the tables.
+    let by_previous: [u16; 256] =
+        core::array::from_fn(|byte| u16::from(context_map[byte >> 2]) << 8);
+    // A stored meta-block takes at most 4 header bytes, and the literals
+    // may take what is left of that. Exact codes tell their bits up front.
+    // Sampled ones take an unknown number, and get room for that many. The
+    // room past the literals spares the last run its check.
+    let header_bits = writer.written_bits() - header_start;
+    let Some(max_bits) = ((input.len() + 4) * 8).checked_sub(header_bits) else {
+        return Ok(false);
     };
-    writer.write_bits_with(literal_bits, |sink| {
+    if exact && literal_bits > max_bits {
+        return Ok(false);
+    }
+    let fits = writer.write_bits_raw(max_bits + literal_runs::SLACK_BITS, |out, start| {
         let mut last = previous;
-        // Codes are at most 14 bits, so four fit one write.
-        let (quads, rest) = input.as_chunks::<4>();
-        for quad in quads {
-            let mut bits = 0_u64;
-            let mut width = 0_u8;
-            for &byte in quad {
-                let code = code(last, byte);
-                bits |= u64::from(code >> 8) << width;
-                width += code as u8;
+        let (end, fits) =
+            literal_runs::write::<{ FAST_CODE_BITS as usize }, 4, 32>(out, start, input, |byte| {
+                let index = (usize::from(by_previous[usize::from(last)]) | usize::from(byte))
+                    & ((CONTEXTS << 8) - 1);
                 last = byte;
-            }
-            sink.write(width, bits);
-        }
-        for &byte in rest {
-            let code = code(last, byte);
-            sink.write(code as u8, u64::from(code >> 8));
+                (u64::from(code_bits[index]), u32::from(code_lens[index]))
+            });
+        debug_assert!(!exact || (fits && end == start + literal_bits));
+        (end, fits && end - start <= max_bits)
+    });
+    Ok(fits)
+}
+
+/// Counts each byte of `input` by the context of the byte before it, which
+/// is `previous` for the first.
+fn count(counts: &mut [[u32; LITERAL_ALPHABET_SIZE]], input: &[u8], previous: u8) {
+    let mut last = previous;
+    let (quads, rest) = input.as_chunks::<4>();
+    for quad in quads {
+        for &byte in quad {
+            counts[usize::from(last >> 2)][usize::from(byte)] += 1;
             last = byte;
         }
-    });
-    Ok(())
+    }
+    for &byte in rest {
+        counts[usize::from(last >> 2)][usize::from(byte)] += 1;
+        last = byte;
+    }
 }
 
 /// Merges the counts of contexts until at most `max_codes` remain and no

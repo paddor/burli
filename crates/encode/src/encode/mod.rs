@@ -8,6 +8,7 @@ use burli_core::{
 
 mod context_literals;
 mod fixed_codes;
+mod literal_runs;
 mod load;
 mod one_pass;
 mod prefix_code;
@@ -761,13 +762,18 @@ impl EncoderPlan {
                 let blocks = input.len().div_ceil(tune::LOW_COMPRESS_CONTEXT_BLOCK_SIZE);
                 let mut previous = workspace.last_byte;
                 for chunk in input.chunks(input.len().div_ceil(blocks)) {
-                    context_literals::write(
+                    let mark = writer.mark();
+                    if !context_literals::write(
                         writer,
                         chunk,
                         previous,
                         tune::LOW_COMPRESS_CONTEXT_CODES[usize::from(self.quality)],
                         tune::LOW_COMPRESS_CONTEXT_ALL_PAIRS[usize::from(self.quality)],
-                    )?;
+                        tune::LOW_COMPRESS_CONTEXT_SAMPLE[usize::from(self.quality)],
+                    )? {
+                        writer.rewind(mark);
+                        crate::metablock::write_uncompressed_meta_block(writer, chunk)?;
+                    }
                     previous = chunk[chunk.len() - 1];
                 }
             } else {
@@ -3251,7 +3257,6 @@ mod tests {
         // Several meta-blocks per chunk, and with 16 window bits several
         // chunks, so literal contexts start from earlier meta-blocks.
         for window_bits in [22, 16] {
-            let mut q1_len = 0;
             for quality in 1..=5 {
                 let options = Options::default()
                     .with_quality(quality)
@@ -3264,18 +3269,32 @@ mod tests {
                     input,
                     "window {window_bits} q{quality}"
                 );
-                if quality == 1 {
-                    q1_len = encoded.len();
-                } else {
-                    // Order-0 codes take about 6.9 bits per byte, codes by
-                    // context about 6.
-                    assert!(
-                        encoded.len() < q1_len * 15 / 16,
-                        "window {window_bits} q{quality}"
-                    );
-                }
+                // Order-0 codes take about 6.9 bits per byte, codes by
+                // context about 6.
+                assert!(
+                    encoded.len() < input.len() * 13 / 16,
+                    "window {window_bits} q{quality}"
+                );
             }
         }
+
+        // Uniform bytes get sampled codes at q1, which take more bytes than
+        // storing, so their meta-block is stored. A first one of samples,
+        // which codes well, keeps the whole input from being stored.
+        let samples = &input[..1 << 20];
+        let uniform: Vec<u8> = (0..1 << 20)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect();
+        let options = Options::default().with_quality(1).unwrap();
+        let samples_len = compress_with_options(samples, &options).unwrap().len();
+        let mixed = [samples, &uniform].concat();
+        assert!(sparse::is_low_compressibility_block(&mixed));
+        let encoded = compress_with_options(&mixed, &options).unwrap();
+        assert!(encoded.len() <= samples_len + uniform.len() + 8);
+        assert_eq!(burli_decode::decompress(&encoded).unwrap(), mixed);
     }
 
     #[test]

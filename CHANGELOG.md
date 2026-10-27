@@ -26,6 +26,9 @@
 - q0 compresses low-compressibility input above 64 KiB a little where it
   stored it before: Silesia `sao` and `x-ray` by 1.067 and 1.247, at about
   1 GB/s.
+- q1 codes low-compressibility input above 64 KiB by the byte before as
+  well, with up to two codes, and q2 with up to three. Silesia `sao` and
+  `x-ray` reach 1.093 and 1.397 at q1, where q1 reached 1.069 and 1.249.
 
 ## [0.3.5] - 2026-09-27
 

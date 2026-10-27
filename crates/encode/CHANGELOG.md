@@ -65,6 +65,15 @@
   bytes of each KiB, written five literals per store. Blocks whose sample
   saves less than 1 in 32 bits stay stored. Silesia `sao` and `x-ray` go
   from ratio 1.000 to 1.067 and 1.247, at about 1080 MB/s.
+- Low-compressibility blocks of 64 KiB and more at q1 get up to two
+  literal codes by the byte before, from the counts of the first 128 bytes
+  of each KiB, and q2 gets up to three. A meta-block whose literals would
+  take more bytes than storing it is stored. On Silesia `sao` and
+  `x-ray`, q1 goes from ratio 1.069 and 1.249 to 1.093 and 1.397 at about
+  730 MB/s, and q2 from 1.093 and 1.401 to 1.114 and 1.425.
+- Literals by context go out through the q0 literal writer, with the code
+  of each from tables by code and literal. Output is unchanged at q3 to
+  q5.
 
 ## [0.3.3] - 2026-09-25
 

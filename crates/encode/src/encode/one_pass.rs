@@ -24,7 +24,7 @@ use super::{
         Code, CodeTables, Flat, LONG_COMMAND_LENGTHS, LONG_DISTANCE_LENGTHS, Long, Short,
         explicit_symbol, implicit_symbol,
     },
-    hash_word_q0,
+    hash_word_q0, literal_runs,
     prefix_code::{self, LiteralCodes},
     read_u64_le, write_block_and_context_header, write_meta_block_len,
     write_simple_prefix_code_single,
@@ -53,23 +53,11 @@ const LITERAL_SAMPLE_STRIDE: usize = 29;
 /// of bytes take every field of short records alike.
 const LITERAL_ONLY_PERIOD: usize = 1024;
 const LITERAL_ONLY_SAMPLE: usize = 64;
-/// Literal-only codes take at most this many bits, so a group of
-/// `LITERAL_ONLY_GROUP` fits one write, after up to 7 waiting bits.
+/// Literal-only codes take at most this many bits, so five fit one store.
 const LITERAL_ONLY_CODE_BITS: u8 = 11;
-const LITERAL_ONLY_GROUP: usize = 5;
-const _: () = assert!(LITERAL_ONLY_GROUP * LITERAL_ONLY_CODE_BITS as usize + 7 <= 64);
 /// [`write_long`] stores low-compressibility blocks whose literal-only code
 /// would save fewer than 1 in this many bits.
 const LITERAL_ONLY_MIN_SAVING: u64 = 32;
-/// Literal-only meta-blocks go out in runs of this many literals, with one
-/// room check per run. A run and the up to 7 bits that wait before it take
-/// at most 56 bytes, so its 8-byte stores start at most 56 bytes in.
-const LITERAL_ONLY_RUN: usize = 40;
-const LITERAL_ONLY_WINDOW: usize = 72;
-const _: () = assert!(
-    (LITERAL_ONLY_RUN * LITERAL_ONLY_CODE_BITS as usize + 7).div_ceil(8) + 8 <= 64
-        && 64 + 8 <= LITERAL_ONLY_WINDOW
-);
 
 const MIN_MATCH: usize = 5;
 /// Matching stops this many bytes before the end, so every hash load reads
@@ -269,83 +257,18 @@ fn write_literal_block(
     // and no unpacking.
     let code_bits: [u64; LITERAL_ALPHABET_SIZE] = codes.map(|code| u64::from(code >> 8));
     let code_lens: [u8; LITERAL_ALPHABET_SIZE] = codes.map(|code| code as u8);
-    // The bits from the partial byte on wait in `bits`, and each store
-    // writes all 8 bytes of them, so it does not wait on the store before
-    // it. The stores of a run stay in a window of `LITERAL_ONLY_WINDOW`
-    // bytes, at offsets that need no bounds check.
     let fits = writer.write_bits_raw(max_bits, |out, start| {
-        let mut literals = Literals {
-            pos: 0,
-            bits: u64::from(out[0]),
-            count: start as u32,
-        };
-        // Full runs have a fixed length, so their groups unroll.
-        let (runs, tail) = block.as_chunks::<LITERAL_ONLY_RUN>();
-        let fits = runs
-            .iter()
-            .all(|run| literals.write_run(out, run, &code_bits, &code_lens))
-            && (tail.is_empty() || literals.write_run(out, tail, &code_bits, &code_lens));
-        (literals.pos * 8 + literals.count as usize, fits)
+        literal_runs::write::<{ LITERAL_ONLY_CODE_BITS as usize }, 5, 40>(
+            out,
+            start,
+            block,
+            |byte| {
+                let byte = usize::from(byte);
+                (code_bits[byte], u32::from(code_lens[byte]))
+            },
+        )
     });
     Ok(fits)
-}
-
-/// Output state of [`write_literal_block`]. The bits from the partial byte
-/// on wait in `bits`, and each store writes all 8 bytes of them, so it does
-/// not wait on the store before it.
-struct Literals {
-    /// Bytes before the partial one.
-    pos: usize,
-    bits: u64,
-    /// Bits in `bits`, fewer than 8 between runs.
-    count: u32,
-}
-
-impl Literals {
-    /// Writes `run`, of at most [`LITERAL_ONLY_RUN`] literals, with their
-    /// code bits and lengths. Its stores stay in a window of
-    /// [`LITERAL_ONLY_WINDOW`] bytes, at offsets that need no bounds check.
-    /// Returns `false` when `out` has no room for the window.
-    #[inline(always)]
-    fn write_run(
-        &mut self,
-        out: &mut [u8],
-        run: &[u8],
-        code_bits: &[u64; LITERAL_ALPHABET_SIZE],
-        code_lens: &[u8; LITERAL_ALPHABET_SIZE],
-    ) -> bool {
-        let Some(window) = out.get_mut(self.pos..self.pos + LITERAL_ONLY_WINDOW) else {
-            return false;
-        };
-        let window: &mut [u8; LITERAL_ONLY_WINDOW] = window.try_into().unwrap();
-        let mut offset = 0;
-        // Fewer than 8 bits wait, so a group of literals more fits in
-        // `bits`. Each group comes together on its own, so its shifts do not
-        // wait on the group before.
-        let mut write = |group: &[u8]| {
-            let mut value = 0_u64;
-            let mut width = 0_u32;
-            for &byte in group {
-                value |= code_bits[usize::from(byte)] << width;
-                width += u32::from(code_lens[usize::from(byte)]);
-            }
-            self.bits |= value << self.count;
-            self.count += width;
-            window[offset & 63..][..8].copy_from_slice(&self.bits.to_le_bytes());
-            offset += (self.count / 8) as usize;
-            self.bits >>= self.count & !7;
-            self.count %= 8;
-        };
-        let (groups, rest) = run.as_chunks::<LITERAL_ONLY_GROUP>();
-        for group in groups {
-            write(group);
-        }
-        if !rest.is_empty() {
-            write(rest);
-        }
-        self.pos += offset;
-        true
-    }
 }
 
 /// Writes `input` as stored meta-blocks, as few as their size limit allows.
