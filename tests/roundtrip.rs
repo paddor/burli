@@ -125,6 +125,46 @@ fn distance_ring_survives_collector_switches() {
 }
 
 #[test]
+fn long_inputs_round_trip_by_window() {
+    let mut text = mixed_collector_input();
+    text.extend_from_within(..);
+    // 16-bit samples, whose zero high bytes make the input look binary.
+    let binary: Vec<u8> = (0..150_000_u32)
+        .flat_map(|index| [(index * 7 % 251) as u8, 0, (index % 13) as u8, 0])
+        .collect();
+    // Random bytes from 128 up, each the AND of two random ones: little to
+    // match, but a literal code helps.
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let skewed: Vec<u8> = (0..700_000)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            0x80 | (state as u8 & (state >> 8) as u8)
+        })
+        .collect();
+    let mut failures = Vec::new();
+    for (name, input) in [("text", &text), ("binary", &binary), ("skewed", &skewed)] {
+        for window_bits in [16, 17, 18, 22] {
+            for quality in 0..=2 {
+                let options = burli::Options::default()
+                    .with_quality(quality)
+                    .unwrap()
+                    .with_window_bits(window_bits)
+                    .unwrap();
+                let encoded = burli::compress_with_options(input, &options).unwrap();
+                failures.extend(decode_failures(
+                    &encoded,
+                    input,
+                    &format!("{name} window {window_bits} q{quality}"),
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[test]
 #[cfg(feature = "std")]
 fn streaming_distance_ring_survives_collector_switches() {
     use std::io::Write as _;

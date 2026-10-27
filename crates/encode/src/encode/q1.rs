@@ -55,8 +55,7 @@ struct LiteralSpan {
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Workspace {
-    table: Vec<u32>,
-    small_table: Vec<u16>,
+    pub(super) table: Vec<u32>,
     batch: Batch,
     prefix: PrefixCodeScratch,
 }
@@ -477,9 +476,8 @@ impl Sink for Batch {
 }
 
 /// Collects the commands of `input`, of at most 64 KiB, into `sink`, with
-/// the matcher that [`collect`] picks for its size, but skipping less. Copies
-/// reach back at most `max_backward_distance`, or `input.len()` less
-/// [`INPUT_MARGIN_BYTES`].
+/// a hash table by its size. Copies reach back at most
+/// `max_backward_distance`, or `input.len()` less [`INPUT_MARGIN_BYTES`].
 pub(super) fn collect_short<S: Sink>(
     input: &[u8],
     max_backward_distance: usize,
@@ -553,22 +551,6 @@ impl Default for Batch {
     }
 }
 
-pub(super) fn collect<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> Result<&'a Batch, CompressError> {
-    workspace.collect(input, max_backward_distance)
-}
-
-pub(super) fn collect_with_64k_medium_skip<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_with_64k_medium_skip(input, max_backward_distance)
-}
-
 pub(super) fn collect_with_64k_sparse_stride<'a>(
     input: &[u8],
     max_backward_distance: usize,
@@ -627,230 +609,6 @@ impl Workspace {
         )
     }
 
-    fn collect(
-        &mut self,
-        input: &[u8],
-        max_backward_distance: usize,
-    ) -> Result<&Batch, CompressError> {
-        self.reset(input.len());
-
-        if input.len() < INPUT_MARGIN_BYTES {
-            self.push_literals(input, 0, input.len());
-            return Ok(&self.batch);
-        }
-
-        let table_size = table_size(input.len());
-        if self.collect_stack_u16_for_size::<{ tune::Q1_DEFAULT_U16_SKIP_START }>(
-            input,
-            max_backward_distance,
-            table_size,
-        ) {
-            return Ok(&self.batch);
-        }
-
-        let table_bits = table_size.trailing_zeros() as usize;
-        if table_size <= 32768 {
-            if self.small_table.len() != table_size {
-                self.small_table.resize(table_size, NO_POSITION_16);
-            } else {
-                self.small_table.fill(NO_POSITION_16);
-            }
-            collect_with_u16_table(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-                &mut self.small_table,
-                table_bits,
-            )?;
-            return Ok(&self.batch);
-        }
-
-        if self.table.len() != table_size {
-            self.table.resize(table_size, 0);
-        } else {
-            self.table.fill(0);
-        }
-
-        let min_match = if table_bits <= 15 { 4 } else { 6 };
-        match table_bits {
-            16 => {
-                collect_with_u32_table_m6::<16, { tune::Q1_DEFAULT_U32_SKIP_START }, true, true, _>(
-                    &mut self.batch,
-                    input,
-                    max_backward_distance,
-                    &mut self.table,
-                );
-                return Ok(&self.batch);
-            }
-            17 => {
-                collect_with_u32_table_m6::<17, { tune::Q1_DEFAULT_U32_SKIP_START }, true, true, _>(
-                    &mut self.batch,
-                    input,
-                    max_backward_distance,
-                    &mut self.table,
-                );
-                return Ok(&self.batch);
-            }
-            _ => {}
-        }
-        let max_distance = max_backward_distance.min(MAX_DISTANCE);
-        let len_limit = input
-            .len()
-            .saturating_sub(min_match)
-            .min(input.len().saturating_sub(INPUT_MARGIN_BYTES));
-        if len_limit <= 1 {
-            self.push_literals(input, 0, input.len());
-            return Ok(&self.batch);
-        }
-
-        let mut pos = 1;
-        let mut insert_start = 0;
-        let mut next_hash = hash(input, pos, table_bits, min_match);
-        let mut last_distance = NO_LAST_DISTANCE;
-
-        while let Some(mut candidate) = self.scan_to_match(
-            input,
-            &mut pos,
-            &mut next_hash,
-            len_limit,
-            max_distance,
-            table_bits,
-            min_match,
-            last_distance,
-        ) {
-            loop {
-                let distance = pos - candidate;
-                let max_copy_len =
-                    (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
-                if max_copy_len < min_match {
-                    break;
-                }
-                let copy_len = min_match
-                    + match_len(
-                        input,
-                        candidate + min_match,
-                        pos + min_match,
-                        max_copy_len - min_match,
-                    );
-
-                self.batch.push_copy(
-                    input,
-                    insert_start,
-                    pos - insert_start,
-                    copy_len,
-                    distance,
-                    last_distance,
-                );
-                pos += copy_len;
-                insert_start = pos;
-                last_distance = distance;
-                self.store_tail_hashes(input, pos, table_bits, min_match);
-
-                if pos > len_limit {
-                    break;
-                }
-
-                let key = hash(input, pos, table_bits, min_match);
-                candidate = self.table[key] as usize;
-                self.table[key] = pos as u32;
-                if candidate == NO_POSITION as usize
-                    || candidate >= pos
-                    || pos - candidate > max_distance
-                    || !is_match(input, candidate, pos, min_match)
-                {
-                    break;
-                }
-            }
-
-            pos += 1;
-            if pos > len_limit {
-                break;
-            }
-            next_hash = hash(input, pos, table_bits, min_match);
-        }
-
-        if insert_start < input.len() {
-            self.push_literals(input, insert_start, input.len() - insert_start);
-        }
-
-        Ok(&self.batch)
-    }
-
-    fn collect_stack_u16_for_size<const SKIP_START: usize>(
-        &mut self,
-        input: &[u8],
-        max_backward_distance: usize,
-        table_size: usize,
-    ) -> bool {
-        match table_size {
-            256 => collect_with_stack_u16_table::<8, 256, SKIP_START, true, _>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            512 => collect_with_stack_u16_table::<9, 512, SKIP_START, true, _>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            1024 => collect_with_stack_u16_table::<10, 1024, SKIP_START, true, _>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            2048 => collect_with_stack_u16_table::<11, 2048, SKIP_START, true, _>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            4096 => collect_with_stack_u16_table::<12, 4096, SKIP_START, true, _>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            8192 => collect_with_stack_u16_table::<13, 8192, SKIP_START, true, _>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            16384 => collect_with_stack_u16_table::<14, 16384, SKIP_START, true, _>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            32768 => collect_with_stack_u16_table::<15, 32768, SKIP_START, true, _>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            _ => return false,
-        }
-        true
-    }
-
-    #[allow(clippy::large_stack_arrays)]
-    fn collect_with_64k_medium_skip(
-        &mut self,
-        input: &[u8],
-        max_backward_distance: usize,
-    ) -> &Batch {
-        self.reset(input.len());
-
-        if input.len() < INPUT_MARGIN_BYTES {
-            self.push_literals(input, 0, input.len());
-            return &self.batch;
-        }
-
-        let mut table = [0_u32; 1 << 16];
-        collect_with_u32_table_m6::<16, { tune::Q1_MEDIUM_U32_SKIP_START }, true, true, _>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-            &mut table,
-        );
-        &self.batch
-    }
-
     #[allow(clippy::large_stack_arrays)]
     fn collect_with_64k_sparse_stride(
         &mut self,
@@ -883,127 +641,6 @@ impl Workspace {
             return;
         }
         self.batch.push_literals(input, insert_start, insert_len);
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn scan_to_match(
-        &mut self,
-        input: &[u8],
-        pos: &mut usize,
-        next_hash: &mut usize,
-        len_limit: usize,
-        max_distance: usize,
-        table_bits: usize,
-        min_match: usize,
-        last_distance: usize,
-    ) -> Option<usize> {
-        let mut skip = 32_usize;
-        let mut next_pos = *pos;
-
-        loop {
-            let key = *next_hash;
-            let step = skip >> 5;
-            skip += 1;
-            *pos = next_pos;
-            if step > len_limit - *pos {
-                return None;
-            }
-            next_pos = *pos + step;
-            *next_hash = hash(input, next_pos, table_bits, min_match);
-
-            if last_distance != NO_LAST_DISTANCE && *pos >= last_distance {
-                let candidate = *pos - last_distance;
-                if is_match(input, candidate, *pos, min_match) {
-                    self.table[key] = *pos as u32;
-                    return Some(candidate);
-                }
-            }
-
-            let candidate = self.table[key] as usize;
-            self.table[key] = *pos as u32;
-            if candidate != NO_POSITION as usize
-                && candidate < *pos
-                && *pos - candidate <= max_distance
-                && is_match(input, candidate, *pos, min_match)
-            {
-                return Some(candidate);
-            }
-        }
-    }
-
-    fn store_tail_hashes(
-        &mut self,
-        input: &[u8],
-        copy_end: usize,
-        table_bits: usize,
-        min_match: usize,
-    ) {
-        if min_match == 4 && copy_end >= 3 && copy_end + 5 <= input.len() {
-            let word = read_u64_le(input, copy_end - 3);
-            for offset in 0..3 {
-                let key = hash_word_at_offset(word, offset, table_bits, min_match);
-                self.table[key] = (copy_end - 3 + offset) as u32;
-            }
-            return;
-        }
-        if min_match == 6 && copy_end >= 5 && copy_end + 6 <= input.len() {
-            let word = read_u64_le(input, copy_end - 5);
-            for offset in 0..3 {
-                let key = hash_word_at_offset(word, offset, table_bits, min_match);
-                self.table[key] = (copy_end - 5 + offset) as u32;
-            }
-            let word = read_u64_le(input, copy_end - 2);
-            for offset in 0..2 {
-                let key = hash_word_at_offset(word, offset, table_bits, min_match);
-                self.table[key] = (copy_end - 2 + offset) as u32;
-            }
-            return;
-        }
-
-        let start = copy_end.saturating_sub(min_match - 1);
-        for pos in start..copy_end {
-            if pos + 8 > input.len() {
-                break;
-            }
-            let key = hash(input, pos, table_bits, min_match);
-            self.table[key] = pos as u32;
-        }
-    }
-}
-
-fn collect_with_u16_table(
-    batch: &mut Batch,
-    input: &[u8],
-    max_backward_distance: usize,
-    table: &mut [u16],
-    table_bits: usize,
-) -> Result<(), CompressError> {
-    match table_bits {
-        14 => {
-            let table: &mut [u16; 16384] = table
-                .try_into()
-                .map_err(|_| BurliError::Format("invalid Brotli q1 table size"))?;
-            collect_with_u16_table_m4::<14, 16384, { tune::Q1_DEFAULT_U16_SKIP_START }, true, _>(
-                batch,
-                input,
-                max_backward_distance,
-                table,
-            );
-            Ok(())
-        }
-        15 => {
-            let table: &mut [u16; 32768] = table
-                .try_into()
-                .map_err(|_| BurliError::Format("invalid Brotli q1 table size"))?;
-            collect_with_u16_table_m4::<15, 32768, { tune::Q1_DEFAULT_U16_SKIP_START }, true, _>(
-                batch,
-                input,
-                max_backward_distance,
-                table,
-            );
-            Ok(())
-        }
-        _ => Err(BurliError::Format("invalid Brotli q1 table size")),
     }
 }
 
@@ -1503,29 +1140,6 @@ fn table_size(input_len: usize) -> usize {
 }
 
 #[inline(always)]
-fn hash(input: &[u8], pos: usize, table_bits: usize, min_match: usize) -> usize {
-    if min_match == 4 {
-        return hash4(read_u32_le(input, pos), table_bits);
-    }
-    let word = read_u64_le(input, pos) << ((8 - min_match) * 8);
-    ((word.wrapping_mul(HASH_MUL)) >> (64 - table_bits)) as usize
-}
-
-#[inline(always)]
-fn hash_word_at_offset(word: u64, offset: usize, table_bits: usize, min_match: usize) -> usize {
-    if min_match == 4 {
-        return hash4((word >> (8 * offset)) as u32, table_bits);
-    }
-    let shifted = (word >> (8 * offset)) << ((8 - min_match) * 8);
-    ((shifted.wrapping_mul(HASH_MUL)) >> (64 - table_bits)) as usize
-}
-
-#[inline(always)]
-fn hash4(word: u32, table_bits: usize) -> usize {
-    (word.wrapping_mul(HASH_MUL_32) >> (32 - table_bits)) as usize
-}
-
-#[inline(always)]
 fn hash4_const<const TABLE_BITS: usize>(word: u32) -> usize {
     (word.wrapping_mul(HASH_MUL_32) >> (32 - TABLE_BITS)) as usize
 }
@@ -1575,17 +1189,6 @@ fn is_match6(input: &[u8], candidate: usize, pos: usize) -> bool {
     const LOW_48_BITS: u64 = 0x0000_ffff_ffff_ffff;
     let diff = read_u64_le(input, candidate) ^ read_u64_le(input, pos);
     diff & LOW_48_BITS == 0
-}
-
-#[inline(always)]
-fn is_match(input: &[u8], candidate: usize, pos: usize, min_match: usize) -> bool {
-    if min_match == 4 {
-        read_u32_le(input, candidate) == read_u32_le(input, pos)
-    } else {
-        const LOW_48_BITS: u64 = 0x0000_ffff_ffff_ffff;
-        let diff = read_u64_le(input, candidate) ^ read_u64_le(input, pos);
-        diff & LOW_48_BITS == 0
-    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! Writes the tokens of the q2 to q5 collectors as compressed meta-blocks.
+//! Writes the tokens of the q1 to q5 collectors as compressed meta-blocks.
 //!
 //! Tokens stream in from a collector, so no list of them is kept. Each one
 //! is packed into a [`Command`] with its symbols and extra bits, and its
@@ -66,7 +66,7 @@ static STATIC_DISTANCE_CODES: Codes<DISTANCE_ALPHABET_SIZE> = {
     codes
 };
 
-/// Where the q2 to q5 collectors put their tokens, in input order.
+/// Where the q1 to q5 collectors put their tokens, in input order.
 pub(super) trait Sink {
     fn push(&mut self, token: Token);
 

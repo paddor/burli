@@ -7,7 +7,8 @@
 //! [`super::fixed_codes`] for commands and distances, by input size. Longer
 //! inputs take meta-blocks of [`LONG_BLOCK`] bytes, which copy from earlier
 //! ones. Their literal codes come from a sample of each block, and their
-//! command and distance codes from the counts of the block before.
+//! command and distance codes from the counts of the block before. Blocks
+//! that look incompressible take only literals, or are stored.
 
 use alloc::{boxed::Box, vec};
 
@@ -17,7 +18,8 @@ use burli_core::{
 };
 
 use super::{
-    DistanceRing, FAST_CODE_BITS, LITERAL_ALPHABET_SIZE, MAX_CODE_BITS,
+    COMMAND_ALPHABET_SIZE, DistanceRing, FAST_CODE_BITS, LITERAL_ALPHABET_SIZE, MAX_CODE_BITS,
+    context_literals::{COST_SHIFT, n_log2_n},
     fixed_codes::{
         Code, CodeTables, Flat, LONG_COMMAND_LENGTHS, LONG_DISTANCE_LENGTHS, Long, Short,
         explicit_symbol, implicit_symbol,
@@ -25,6 +27,7 @@ use super::{
     hash_word_q0,
     prefix_code::{self, LiteralCodes},
     read_u64_le, write_block_and_context_header, write_meta_block_len,
+    write_simple_prefix_code_single,
 };
 
 /// Longest input of [`write`]. Hash table entries hold `u16` positions.
@@ -45,6 +48,28 @@ const LONG_DISTANCE_SYMBOLS: usize = 16 + 2 * (LONG_REACH_BITS as usize - 1);
 
 /// [`write_long`] counts every this many bytes for literal codes.
 const LITERAL_SAMPLE_STRIDE: usize = 29;
+/// [`write_long`] counts the first [`LITERAL_ONLY_SAMPLE`] bytes of every
+/// this many of a low-compressibility block for its literal-only code. Runs
+/// of bytes take every field of short records alike.
+const LITERAL_ONLY_PERIOD: usize = 1024;
+const LITERAL_ONLY_SAMPLE: usize = 64;
+/// Literal-only codes take at most this many bits, so a group of
+/// `LITERAL_ONLY_GROUP` fits one write, after up to 7 waiting bits.
+const LITERAL_ONLY_CODE_BITS: u8 = 11;
+const LITERAL_ONLY_GROUP: usize = 5;
+const _: () = assert!(LITERAL_ONLY_GROUP * LITERAL_ONLY_CODE_BITS as usize + 7 <= 64);
+/// [`write_long`] stores low-compressibility blocks whose literal-only code
+/// would save fewer than 1 in this many bits.
+const LITERAL_ONLY_MIN_SAVING: u64 = 32;
+/// Literal-only meta-blocks go out in runs of this many literals, with one
+/// room check per run. A run and the up to 7 bits that wait before it take
+/// at most 56 bytes, so its 8-byte stores start at most 56 bytes in.
+const LITERAL_ONLY_RUN: usize = 40;
+const LITERAL_ONLY_WINDOW: usize = 72;
+const _: () = assert!(
+    (LITERAL_ONLY_RUN * LITERAL_ONLY_CODE_BITS as usize + 7).div_ceil(8) + 8 <= 64
+        && 64 + 8 <= LITERAL_ONLY_WINDOW
+);
 
 const MIN_MATCH: usize = 5;
 /// Matching stops this many bytes before the end, so every hash load reads
@@ -114,7 +139,9 @@ fn write_with<const TABLE_SIZE: usize, C: Code>(
 /// `ring` past their copies. Copies reach into earlier meta-blocks, up to
 /// [`LONG_MAX_DISTANCE`] back, which the window must allow. Each block takes
 /// command and distance codes for the counts of the block before. Blocks
-/// that look incompressible or do not shrink are stored.
+/// that look incompressible take a literal-only meta-block when a code
+/// from a sample of them saves enough, and are stored otherwise, as are
+/// blocks that do not shrink.
 pub(super) fn write_long(
     writer: &mut BitWriter,
     input: &[u8],
@@ -134,26 +161,36 @@ pub(super) fn write_long(
     while start < input.len() {
         let end = (start + LONG_BLOCK).min(input.len());
         let block = &input[start..end];
-        let stored = super::sparse::is_low_compressibility_block(block) || {
+        let low = super::sparse::is_low_compressibility_block(block);
+        let literal_counts = if low {
+            literal_only_counts(block)
+        } else {
+            None
+        };
+        let stored = (low && literal_counts.is_none()) || {
             if let Some(stored_start) = stored_start.take() {
                 write_stored(writer, &input[stored_start..start])?;
             }
             let mark = writer.mark();
-            write_meta_block_len(writer, block.len())?;
-            write_block_and_context_header(writer)?;
-            let literals = write_sampled_literal_code(writer, block)?;
-            let code = if fresh { &INITIAL_COUNTS } else { &previous }.write_codes(writer)?;
-            current = Counts::default();
-            let fits = write_long_block(
-                writer,
-                &input[..end],
-                start,
-                &mut table,
-                &literals,
-                &code,
-                ring,
-                &mut current,
-            );
+            let fits = if let Some(counts) = &literal_counts {
+                write_literal_block(writer, block, counts)?
+            } else {
+                write_meta_block_len(writer, block.len())?;
+                write_block_and_context_header(writer)?;
+                let literals = write_sampled_literal_code(writer, block)?;
+                let code = if fresh { &INITIAL_COUNTS } else { &previous }.write_codes(writer)?;
+                current = Counts::default();
+                write_long_block(
+                    writer,
+                    &input[..end],
+                    start,
+                    &mut table,
+                    &literals,
+                    &code,
+                    ring,
+                    &mut current,
+                )
+            };
             if !fits {
                 writer.rewind(mark);
             }
@@ -161,6 +198,8 @@ pub(super) fn write_long(
         };
         if stored {
             stored_start.get_or_insert(start);
+            fresh = true;
+        } else if low {
             fresh = true;
         } else {
             core::mem::swap(&mut previous, &mut current);
@@ -172,6 +211,141 @@ pub(super) fn write_long(
         write_stored(writer, &input[stored_start..])?;
     }
     Ok(())
+}
+
+/// Counts of the bytes of `block` that [`LITERAL_ONLY_PERIOD`] picks, with
+/// each byte value counted once more, when a code for them saves at least 1
+/// in [`LITERAL_ONLY_MIN_SAVING`] bits by their entropy.
+fn literal_only_counts(block: &[u8]) -> Option<[u32; LITERAL_ALPHABET_SIZE]> {
+    // Four counters per byte, so repeats of one byte do not chain every
+    // increment to the one before it.
+    let mut tables = [[0_u32; LITERAL_ALPHABET_SIZE]; 4];
+    for period in block.chunks(LITERAL_ONLY_PERIOD) {
+        let (quads, _) = period[..period.len().min(LITERAL_ONLY_SAMPLE)].as_chunks::<4>();
+        for quad in quads {
+            for (table, &byte) in tables.iter_mut().zip(quad) {
+                table[usize::from(byte)] += 1;
+            }
+        }
+    }
+    let counts: [u32; LITERAL_ALPHABET_SIZE] =
+        core::array::from_fn(|byte| 1 + tables.iter().map(|table| table[byte]).sum::<u32>());
+    let total = counts.iter().sum::<u32>();
+    let entropy =
+        n_log2_n(total).saturating_sub(counts.iter().map(|&count| n_log2_n(count)).sum::<u64>());
+    let stored = (u64::from(total) * 8) << COST_SHIFT;
+    (entropy * LITERAL_ONLY_MIN_SAVING < stored * (LITERAL_ONLY_MIN_SAVING - 1)).then_some(counts)
+}
+
+/// Writes `block` as a literal-only meta-block with a literal code for
+/// `counts`. Returns `false` when that takes more bytes than storing the
+/// block, so the caller can store it instead.
+fn write_literal_block(
+    writer: &mut BitWriter,
+    block: &[u8],
+    counts: &[u32; LITERAL_ALPHABET_SIZE],
+) -> Result<bool, CompressError> {
+    let header_start = writer.written_bits();
+    write_meta_block_len(writer, block.len())?;
+    write_block_and_context_header(writer)?;
+    let (codes, _) = prefix_code::write_with_max_bits::<_, LITERAL_ONLY_CODE_BITS>(writer, counts)?;
+    // The meta-block ends after the literals, so the copy length is never
+    // used and no distance follows.
+    let (insert_code, insert_bits, insert_extra) = insert_code(block.len());
+    let symbol = if insert_code < 8 {
+        implicit_symbol(insert_code, 0)
+    } else {
+        explicit_symbol(insert_code, 0)
+    };
+    write_simple_prefix_code_single(writer, COMMAND_ALPHABET_SIZE, symbol as u16)?;
+    write_simple_prefix_code_single(writer, 64, 0)?;
+    writer.write_bits(insert_bits, insert_extra)?;
+    // A stored block takes at most 4 header bytes.
+    let header_bits = writer.written_bits() - header_start;
+    let Some(max_bits) = ((block.len() + 4) * 8).checked_sub(header_bits) else {
+        return Ok(false);
+    };
+    // Code bits and lengths by literal, apart, so a literal takes two loads
+    // and no unpacking.
+    let code_bits: [u64; LITERAL_ALPHABET_SIZE] = codes.map(|code| u64::from(code >> 8));
+    let code_lens: [u8; LITERAL_ALPHABET_SIZE] = codes.map(|code| code as u8);
+    // The bits from the partial byte on wait in `bits`, and each store
+    // writes all 8 bytes of them, so it does not wait on the store before
+    // it. The stores of a run stay in a window of `LITERAL_ONLY_WINDOW`
+    // bytes, at offsets that need no bounds check.
+    let fits = writer.write_bits_raw(max_bits, |out, start| {
+        let mut literals = Literals {
+            pos: 0,
+            bits: u64::from(out[0]),
+            count: start as u32,
+        };
+        // Full runs have a fixed length, so their groups unroll.
+        let (runs, tail) = block.as_chunks::<LITERAL_ONLY_RUN>();
+        let fits = runs
+            .iter()
+            .all(|run| literals.write_run(out, run, &code_bits, &code_lens))
+            && (tail.is_empty() || literals.write_run(out, tail, &code_bits, &code_lens));
+        (literals.pos * 8 + literals.count as usize, fits)
+    });
+    Ok(fits)
+}
+
+/// Output state of [`write_literal_block`]. The bits from the partial byte
+/// on wait in `bits`, and each store writes all 8 bytes of them, so it does
+/// not wait on the store before it.
+struct Literals {
+    /// Bytes before the partial one.
+    pos: usize,
+    bits: u64,
+    /// Bits in `bits`, fewer than 8 between runs.
+    count: u32,
+}
+
+impl Literals {
+    /// Writes `run`, of at most [`LITERAL_ONLY_RUN`] literals, with their
+    /// code bits and lengths. Its stores stay in a window of
+    /// [`LITERAL_ONLY_WINDOW`] bytes, at offsets that need no bounds check.
+    /// Returns `false` when `out` has no room for the window.
+    #[inline(always)]
+    fn write_run(
+        &mut self,
+        out: &mut [u8],
+        run: &[u8],
+        code_bits: &[u64; LITERAL_ALPHABET_SIZE],
+        code_lens: &[u8; LITERAL_ALPHABET_SIZE],
+    ) -> bool {
+        let Some(window) = out.get_mut(self.pos..self.pos + LITERAL_ONLY_WINDOW) else {
+            return false;
+        };
+        let window: &mut [u8; LITERAL_ONLY_WINDOW] = window.try_into().unwrap();
+        let mut offset = 0;
+        // Fewer than 8 bits wait, so a group of literals more fits in
+        // `bits`. Each group comes together on its own, so its shifts do not
+        // wait on the group before.
+        let mut write = |group: &[u8]| {
+            let mut value = 0_u64;
+            let mut width = 0_u32;
+            for &byte in group {
+                value |= code_bits[usize::from(byte)] << width;
+                width += u32::from(code_lens[usize::from(byte)]);
+            }
+            self.bits |= value << self.count;
+            self.count += width;
+            window[offset & 63..][..8].copy_from_slice(&self.bits.to_le_bytes());
+            offset += (self.count / 8) as usize;
+            self.bits >>= self.count & !7;
+            self.count %= 8;
+        };
+        let (groups, rest) = run.as_chunks::<LITERAL_ONLY_GROUP>();
+        for group in groups {
+            write(group);
+        }
+        if !rest.is_empty() {
+            write(rest);
+        }
+        self.pos += offset;
+        true
+    }
 }
 
 /// Writes `input` as stored meta-blocks, as few as their size limit allows.
@@ -670,7 +844,7 @@ fn find_match<E: Entry, const TABLE_SIZE: usize>(
 /// Length of the match of `input[pos..]` with `input[candidate..]`, for
 /// `candidate < pos`.
 #[inline(always)]
-fn match_len(input: &[u8], candidate: usize, pos: usize) -> usize {
+pub(super) fn match_len(input: &[u8], candidate: usize, pos: usize) -> usize {
     let tail = &input[pos..];
     let earlier = &input[candidate..candidate + tail.len()];
     // Words of 8 bytes, which need no bounds checks.
@@ -699,7 +873,7 @@ fn matches5(input: &[u8], pos: usize, word: u64) -> bool {
 /// The 8 bytes at `pos`, which is below 2^32 on this path. Saying so lets
 /// the bounds check skip the overflow test.
 #[inline(always)]
-fn load64(input: &[u8], pos: usize) -> u64 {
+pub(super) fn load64(input: &[u8], pos: usize) -> u64 {
     debug_assert!(u32::try_from(pos).is_ok());
     let pos = pos as u32 as usize;
     u64::from_le_bytes(input[pos..pos + 8].try_into().unwrap())
@@ -853,6 +1027,44 @@ mod tests {
                 ),
                 "distance {distance}"
             );
+        }
+    }
+
+    /// `len` random bytes, or with `skew` bytes from 128 up, each the AND of
+    /// two random ones, with about 5.7 bits of entropy. Neither repeats much.
+    fn random_bytes(len: usize, skew: bool) -> Vec<u8> {
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                if skew {
+                    0x80 | (state as u8 & (state >> 8) as u8)
+                } else {
+                    state as u8
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn low_compressibility_blocks_take_literal_codes() {
+        let skewed = random_bytes(3 * LONG_BLOCK + 1000, true);
+        let mut writer = BitWriter::new();
+        write_long(&mut writer, &skewed, &mut DistanceRing::default()).unwrap();
+        // About 6.7 bits per byte, with the high bit.
+        assert!(writer.written_bits() < skewed.len() * 7);
+
+        // Uniform bytes take no code, and their blocks go out stored.
+        let uniform = random_bytes(2 * LONG_BLOCK, false);
+        let mut writer = BitWriter::new();
+        write_long(&mut writer, &uniform, &mut DistanceRing::default()).unwrap();
+        assert!(writer.written_bits() >= uniform.len() * 8);
+
+        for input in [&skewed, &uniform] {
+            let encoded = crate::compress(input, 0).unwrap();
+            assert_eq!(burli_decode::decompress(&encoded).unwrap(), *input);
         }
     }
 

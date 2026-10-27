@@ -119,8 +119,6 @@ enum Copies {
     None,
     /// Copies from a token collector.
     Tokens(Vec<Token>),
-    /// Copies from the q1 command batch in the workspace.
-    Q1Batch,
     /// The writer advanced the ring itself.
     Tracked,
 }
@@ -701,9 +699,6 @@ impl EncoderPlan {
                     self.max_backward_distance,
                 );
             }
-            Copies::Q1Batch => workspace
-                .q1
-                .advance_distance_ring(&mut workspace.distance_ring),
         }
         if let Some(&last) = input.last() {
             workspace.last_byte = last;
@@ -808,89 +803,33 @@ impl EncoderPlan {
                 )?;
                 return Ok(Copies::Tracked);
             }
-            if !allow_cross_collector_shortcuts {
-                if input.len() >= tune::Q1_LONG_INPUT_MIN {
-                    let has_copy = {
-                        let batch =
-                            q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
-                        batch.has_copy()
-                    };
-                    if !has_copy {
-                        write_compressed_literal_meta_block(writer, input)?;
-                        return Ok(Copies::None);
-                    }
-                    q1::write(
-                        writer,
-                        input,
-                        input.len(),
-                        &mut workspace.q1,
-                        self.q1_fast_literal_prefix,
-                    )?;
-                    return Ok(Copies::Q1Batch);
-                }
-                let markup = q1_large_markup_lazy_is_likely_safe(input);
-                if !markup && q1_no_cross_fast_writer_is_likely_safe(input) {
-                    let batch = q1::collect(input, local_max_backward_distance, &mut workspace.q1)?;
-                    if !batch.has_copy() {
-                        write_compressed_literal_meta_block(writer, input)?;
-                        return Ok(Copies::None);
-                    }
-                    q1::write(
-                        writer,
-                        input,
-                        input.len(),
-                        &mut workspace.q1,
-                        self.q1_fast_literal_prefix,
-                    )?;
-                    return Ok(Copies::Q1Batch);
-                }
-                let q2 = &mut workspace.q2;
-                return self.write_tokens(
-                    writer,
-                    input,
-                    input_base,
-                    tune::Q1_DELAYED_SYMBOLS,
-                    Q2_MAX_STATIC_COMMANDS,
-                    &mut workspace.distance_ring,
-                    |sink| {
-                        let max = local_max_backward_distance;
-                        if markup || q1_no_cross_one_lazy_is_likely_safe(input) {
-                            q2::collect_without_dictionary_one_lazy(input, max, q2, sink);
-                        } else if q1_no_cross_sparse_tail_no_last_is_likely_safe(input) {
-                            q2::collect_without_dictionary_no_lazy_sparse_tail_no_last_distance_probe(
-                                input, max, q2, sink,
-                            );
-                        } else {
-                            q2::collect_without_dictionary_no_lazy_sparse_tail(input, max, q2, sink);
-                        }
-                    },
-                );
-            }
-
-            let has_copy = {
-                let batch = if input.len() >= tune::Q1_LONG_INPUT_MIN {
-                    q1::collect_with_64k_medium_skip(
-                        input,
-                        local_max_backward_distance,
-                        &mut workspace.q1,
-                    )
-                } else {
-                    q1::collect(input, local_max_backward_distance, &mut workspace.q1)?
-                };
-                batch.has_copy()
-            };
-            if !has_copy {
-                write_compressed_literal_meta_block(writer, input)?;
-                return Ok(Copies::None);
-            }
-            q1::write(
+            let table = &mut workspace.q1.table;
+            let last_distance = workspace.distance_ring.last();
+            let max = local_max_backward_distance.min(tune::Q1_LONG_MAX_DISTANCE);
+            return self.write_tokens(
                 writer,
                 input,
-                input.len(),
-                &mut workspace.q1,
-                self.q1_fast_literal_prefix,
-            )?;
-            return Ok(Copies::Q1Batch);
+                input_base,
+                tune::Q1_DELAYED_SYMBOLS,
+                0,
+                &mut workspace.distance_ring,
+                |sink| {
+                    // Binary code and data repeat shorter strings than text.
+                    if two_pass::looks_binary(input) {
+                        two_pass::collect_long::<
+                            { tune::Q1_LONG_BINARY_TABLE_SIZE },
+                            { tune::Q1_LONG_BINARY_MIN_MATCH },
+                            { tune::Q1_LONG_BINARY_TAIL },
+                        >(input, max, last_distance, table, sink);
+                    } else {
+                        two_pass::collect_long::<
+                            { tune::Q1_LONG_TABLE_SIZE },
+                            { tune::Q1_LONG_MIN_MATCH },
+                            { tune::Q1_LONG_TAIL },
+                        >(input, max, last_distance, table, sink);
+                    }
+                },
+            );
         }
 
         let ring = &mut workspace.distance_ring;
@@ -1353,106 +1292,6 @@ const fn min_match_len(quality: u8) -> usize {
         4 => 24,
         _ => 16,
     }
-}
-
-fn q1_large_markup_lazy_is_likely_safe(input: &[u8]) -> bool {
-    let mut lt_count = 0_usize;
-    let mut gt_count = 0_usize;
-    for &byte in input.iter().take(tune::Q1_LARGE_MARKUP_SAMPLE_BYTES) {
-        lt_count += usize::from(byte == b'<');
-        gt_count += usize::from(byte == b'>');
-    }
-    lt_count >= tune::Q1_LARGE_MARKUP_MIN_LT && gt_count >= tune::Q1_LARGE_MARKUP_MIN_GT
-}
-
-fn q1_no_cross_one_lazy_is_likely_safe(input: &[u8]) -> bool {
-    let sample = &input[..input.len().min(tune::Q1_CONTENT_SAMPLE_BYTES)];
-    if sample.is_empty() {
-        return false;
-    }
-
-    let mut whitespace = 0_usize;
-    let mut ascii_printable = 0_usize;
-    let mut high = 0_usize;
-    let mut zero = 0_usize;
-    let mut alpha = 0_usize;
-    for &byte in sample {
-        whitespace += usize::from(matches!(byte, b' ' | b'\n' | b'\r' | b'\t'));
-        ascii_printable +=
-            usize::from((32..=126).contains(&byte) || matches!(byte, b'\n' | b'\r' | b'\t'));
-        high += usize::from(byte >= 128);
-        zero += usize::from(byte == 0);
-        alpha += usize::from(byte.is_ascii_alphabetic());
-    }
-
-    let len = sample.len();
-    let tabular_text = ascii_printable * 100 >= len * tune::Q1_TABULAR_PRINTABLE_PCT
-        && whitespace * 100 >= len * tune::Q1_TABULAR_WHITESPACE_PCT
-        && alpha * 100 < len * tune::Q1_TABULAR_ALPHA_MAX_PCT;
-    let zero_high_mixed = zero * 100 >= len * tune::Q1_ZERO_HIGH_ZERO_PCT
-        && high * 100 >= len * tune::Q1_ZERO_HIGH_HIGH_PCT;
-    tabular_text || zero_high_mixed
-}
-
-fn q1_no_cross_sparse_tail_no_last_is_likely_safe(input: &[u8]) -> bool {
-    let sample = &input[..input.len().min(tune::Q1_CONTENT_SAMPLE_BYTES)];
-    if sample.is_empty() {
-        return false;
-    }
-
-    let mut high = 0_usize;
-    let mut zero = 0_usize;
-    for &byte in sample {
-        high += usize::from(byte >= 128);
-        zero += usize::from(byte == 0);
-    }
-
-    let len = sample.len();
-    zero * 100 >= len * tune::Q1_ZERO_HIGH_ZERO_PCT
-        && high * 100 < len * tune::Q1_ZERO_HIGH_HIGH_PCT
-}
-
-fn q1_no_cross_fast_writer_is_likely_safe(input: &[u8]) -> bool {
-    let sample = &input[..input.len().min(tune::Q1_CONTENT_SAMPLE_BYTES)];
-    if sample.is_empty() {
-        return false;
-    }
-
-    let mut whitespace = 0_usize;
-    let mut ascii_printable = 0_usize;
-    let mut high = 0_usize;
-    let mut zero = 0_usize;
-    let mut alpha = 0_usize;
-    let mut angle = 0_usize;
-    for &byte in sample {
-        whitespace += usize::from(matches!(byte, b' ' | b'\n' | b'\r' | b'\t'));
-        ascii_printable +=
-            usize::from((32..=126).contains(&byte) || matches!(byte, b'\n' | b'\r' | b'\t'));
-        high += usize::from(byte >= 128);
-        zero += usize::from(byte == 0);
-        alpha += usize::from(byte.is_ascii_alphabetic());
-        angle += usize::from(matches!(byte, b'<' | b'>'));
-    }
-
-    let len = sample.len();
-    if zero * 100 >= len * tune::Q1_ZERO_HIGH_ZERO_PCT {
-        return false;
-    }
-    if ascii_printable * 100 >= len * tune::Q1_TABULAR_PRINTABLE_PCT
-        && whitespace * 100 >= len * tune::Q1_FAST_WRITER_WHITESPACE_PCT
-    {
-        return false;
-    }
-    if ascii_printable * 100 >= len * tune::Q1_FAST_WRITER_TEXT_PRINTABLE_PCT
-        && high * 100 < len
-        && alpha * 100 >= len * tune::Q1_FAST_WRITER_TEXT_ALPHA_PCT
-        && whitespace * 100 >= len * tune::Q1_FAST_WRITER_TEXT_WHITESPACE_PCT
-        && angle * 100 < len * tune::Q1_FAST_WRITER_TEXT_ANGLE_MAX_PCT
-    {
-        return false;
-    }
-
-    true
 }
 
 fn q2_tiny_balanced_literal_prefix_is_likely_safe(input: &[u8]) -> bool {
@@ -3509,8 +3348,6 @@ mod tests {
 
     #[test]
     fn routes_by_sparse_outcome() {
-        let script_2k = b"/*! comment */\nfunction demo(){return demo();}\n".repeat(48);
-
         let sparse_binary = sparse_binary_fixture(64 * 1024);
         let zero_heavy_sparse = {
             let mut input = sparse_binary_fixture(64 * 1024);
@@ -3551,41 +3388,6 @@ mod tests {
         assert!(!sparse::q1_store_block(8 << 18, false));
         assert!(!sparse::q1_store_block(9 << 18, false));
         assert!(!sparse::q1_store_block(8 << 18, true));
-        assert!(q1_large_markup_lazy_is_likely_safe(
-            b"<a><b><c><d><e><f><g><h></h></g></f></e></d></c></b></a>"
-        ));
-        assert!(!q1_large_markup_lazy_is_likely_safe(&script_2k));
-        let prose_like =
-            b"Many words in a sentence with enough spaces to look like prose. ".repeat(1200);
-        let numeric_table_like = b"1 2 3 4 5 6 7 8 9 0                         \n".repeat(1600);
-        let dictionary_like = b"word<entry>definition</entry> ".repeat(2600);
-        let zero_high_mixed = (0..64 * 1024)
-            .map(|index| match index % 4 {
-                0 => 0,
-                1 => 200,
-                _ => index as u8,
-            })
-            .collect::<Vec<_>>();
-        let zero_low_mixed = (0..64 * 1024)
-            .map(|index| if index % 4 == 0 { 0 } else { b'a' })
-            .collect::<Vec<_>>();
-        assert!(q1_no_cross_one_lazy_is_likely_safe(&numeric_table_like));
-        assert!(q1_no_cross_one_lazy_is_likely_safe(&zero_high_mixed));
-        assert!(!q1_no_cross_one_lazy_is_likely_safe(&prose_like));
-        assert!(!q1_no_cross_one_lazy_is_likely_safe(&dictionary_like));
-        assert!(q1_no_cross_sparse_tail_no_last_is_likely_safe(
-            &zero_low_mixed
-        ));
-        assert!(!q1_no_cross_sparse_tail_no_last_is_likely_safe(
-            &zero_high_mixed
-        ));
-        assert!(!q1_no_cross_sparse_tail_no_last_is_likely_safe(
-            &numeric_table_like
-        ));
-        assert!(!q1_no_cross_fast_writer_is_likely_safe(&prose_like));
-        assert!(!q1_no_cross_fast_writer_is_likely_safe(&numeric_table_like));
-        assert!(q1_no_cross_fast_writer_is_likely_safe(&sparse_binary));
-        assert!(q1_no_cross_fast_writer_is_likely_safe(&dictionary_like));
     }
 
     #[test]
@@ -3706,17 +3508,8 @@ mod tests {
     fn q1_collects_four_byte_matches_for_small_tables() {
         let input = b"abcd----abcd----abcd----abcd----abcd----abcd----abcd----abcd----";
         let mut workspace = q1::Workspace::default();
-        let batch = q1::collect(input, (1 << 22) - 16, &mut workspace).unwrap();
-
-        assert!(batch.has_copy());
-    }
-
-    #[test]
-    fn q1_collects_six_byte_matches_for_large_tables() {
-        let mut input = b"abcdef0123456789".repeat(5000);
-        input.extend_from_slice(b"abcdef0123456789abcdef0123456789");
-        let mut workspace = q1::Workspace::default();
-        let batch = q1::collect(&input, (1 << 22) - 16, &mut workspace).unwrap();
+        let mut batch = q1::Batch::default();
+        q1::collect_short(input, (1 << 22) - 16, &mut workspace, &mut batch);
 
         assert!(batch.has_copy());
     }

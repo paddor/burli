@@ -9,7 +9,20 @@ pub(super) const Q1_TWO_PASS_MAX_INPUT: usize = 64 * 1024;
 /// Skip start of the q1 matcher up to [`Q1_TWO_PASS_MAX_INPUT`]: after 32
 /// misses it looks at every other position, as in Google's encoder.
 pub(super) const Q1_TWO_PASS_SKIP_START: usize = 32;
-pub(super) const Q1_LONG_INPUT_MIN: usize = 128 * 1024 + 1;
+/// Above [`Q1_TWO_PASS_MAX_INPUT`], q1 matches 6 bytes and more in text,
+/// with a table of this many positions, and puts the last `Q1_LONG_TAIL`
+/// positions of each copy into it. Binary input takes the
+/// `Q1_LONG_BINARY_*` values. On Silesia, more positions or tail entries
+/// compress text past q2, and 5-byte matches lose up to 13% on text.
+pub(super) const Q1_LONG_TABLE_SIZE: usize = 1 << 16;
+pub(super) const Q1_LONG_MIN_MATCH: usize = 6;
+pub(super) const Q1_LONG_TAIL: usize = 4;
+pub(super) const Q1_LONG_BINARY_TABLE_SIZE: usize = 1 << 15;
+pub(super) const Q1_LONG_BINARY_MIN_MATCH: usize = 5;
+pub(super) const Q1_LONG_BINARY_TAIL: usize = 5;
+/// Copies of q1 above [`Q1_TWO_PASS_MAX_INPUT`] reach back at most this
+/// far, as in Google's encoder.
+pub(super) const Q1_LONG_MAX_DISTANCE: usize = (1 << 18) - 16;
 pub(super) const Q2_STATIC_NO_DICTIONARY_MAX_INPUT: usize = 4 * 1024;
 pub(super) const Q2_MEDIUM_H3_MIN_INPUT: usize = 8 * 1024;
 pub(super) const Q2_MEDIUM_H3_MAX_INPUT: usize = 128 * 1024;
@@ -68,24 +81,7 @@ pub(super) const Q3_LOW_COMPRESS_SPARSE_STRIDE: usize = 128;
 pub(super) const Q4_LOW_COMPRESS_SPARSE_STRIDE: usize = 6;
 pub(super) const Q5_LOW_COMPRESS_SPARSE_STRIDE: usize = 1;
 
-pub(super) const Q1_DEFAULT_U16_SKIP_START: usize = 61;
 pub(super) const Q1_DEFAULT_U32_SKIP_START: usize = 32;
-pub(super) const Q1_MEDIUM_U32_SKIP_START: usize = 64;
-pub(super) const Q1_LARGE_MARKUP_SAMPLE_BYTES: usize = 1024;
-pub(super) const Q1_LARGE_MARKUP_MIN_LT: usize = 8;
-pub(super) const Q1_LARGE_MARKUP_MIN_GT: usize = 8;
-pub(super) const Q1_CONTENT_SAMPLE_BYTES: usize = 64 * 1024;
-pub(super) const Q1_TABULAR_PRINTABLE_PCT: usize = 98;
-pub(super) const Q1_TABULAR_WHITESPACE_PCT: usize = 40;
-pub(super) const Q1_TABULAR_ALPHA_MAX_PCT: usize = 20;
-pub(super) const Q1_ZERO_HIGH_ZERO_PCT: usize = 25;
-pub(super) const Q1_ZERO_HIGH_HIGH_PCT: usize = 2;
-pub(super) const Q1_FAST_WRITER_WHITESPACE_PCT: usize = 18;
-pub(super) const Q1_FAST_WRITER_TEXT_PRINTABLE_PCT: usize = 85;
-pub(super) const Q1_FAST_WRITER_TEXT_ALPHA_PCT: usize = 50;
-pub(super) const Q1_FAST_WRITER_TEXT_WHITESPACE_PCT: usize = 10;
-pub(super) const Q1_FAST_WRITER_TEXT_ANGLE_MAX_PCT: usize = 5;
-
 pub(super) const Q2_USE_DICTIONARY_MAX_INPUT: usize = 128 * 1024;
 pub(super) const Q2_TINY_PREFIX_MIN_INPUT: usize = 385;
 pub(super) const Q2_TINY_PREFIX_MAX_INPUT: usize = 1024;

@@ -64,7 +64,15 @@ pub(super) fn write<const N: usize>(
     writer: &mut BitWriter,
     counts: &[u32; N],
 ) -> Result<(Codes<N>, usize), CompressError> {
-    write_with::<N, false>(writer, counts)
+    write_with::<N, false, FAST_CODE_BITS>(writer, counts)
+}
+
+/// [`write`] with codes of at most `MAX_BITS`, up to [`FAST_CODE_BITS`].
+pub(super) fn write_with_max_bits<const N: usize, const MAX_BITS: u8>(
+    writer: &mut BitWriter,
+    counts: &[u32; N],
+) -> Result<(Codes<N>, usize), CompressError> {
+    write_with::<N, false, MAX_BITS>(writer, counts)
 }
 
 /// [`write`], with a code-length code built for the lengths when that takes
@@ -73,15 +81,15 @@ pub(super) fn write_tuned<const N: usize>(
     writer: &mut BitWriter,
     counts: &[u32; N],
 ) -> Result<(Codes<N>, usize), CompressError> {
-    write_with::<N, true>(writer, counts)
+    write_with::<N, true, FAST_CODE_BITS>(writer, counts)
 }
 
 #[inline(always)]
-fn write_with<const N: usize, const TUNED: bool>(
+fn write_with<const N: usize, const TUNED: bool, const MAX_BITS: u8>(
     writer: &mut BitWriter,
     counts: &[u32; N],
 ) -> Result<(Codes<N>, usize), CompressError> {
-    const { assert!(N.is_multiple_of(8) && N <= MAX_SYMBOLS) };
+    const { assert!(N.is_multiple_of(8) && N <= MAX_SYMBOLS && MAX_BITS <= FAST_CODE_BITS) };
     // Sort keys are `count << shift | symbol`.
     let shift = N.next_power_of_two().trailing_zeros();
     let symbol_mask = (1 << shift) - 1;
@@ -127,7 +135,7 @@ fn write_with<const N: usize, const TUNED: bool>(
     let keys = &mut keys[..used];
     keys.sort_unstable();
     let mut lengths = [0_u8; N];
-    let length_counts = huffman_lengths(keys, symbol_mask, &mut lengths);
+    let length_counts = huffman_lengths::<N, MAX_BITS>(keys, symbol_mask, &mut lengths);
 
     let mut next_code = [0_u16; FAST_CODE_BITS as usize + 1];
     let mut code = 0_u16;
@@ -155,12 +163,12 @@ fn write_with<const N: usize, const TUNED: bool>(
     Ok((codes, bits))
 }
 
-/// Writes Huffman code lengths of at most [`FAST_CODE_BITS`] into
+/// Writes Huffman code lengths of at most `MAX_BITS` into
 /// `lengths[symbol]` for `keys`, sorted `count << shift | symbol` for at
 /// least two symbols, and returns the number of codes of each length.
 /// Counts below a floor are raised until the code fits, as Google's encoder
 /// does.
-fn huffman_lengths<const N: usize>(
+fn huffman_lengths<const N: usize, const MAX_BITS: u8>(
     keys: &[u32],
     symbol_mask: u32,
     lengths: &mut [u8; N],
@@ -175,7 +183,7 @@ fn huffman_lengths<const N: usize>(
             *node = (key >> shift).max(floor);
         }
         let length_counts = in_place_lengths(nodes);
-        if nodes[0] <= u32::from(FAST_CODE_BITS) {
+        if nodes[0] <= u32::from(MAX_BITS) {
             break length_counts;
         }
         floor = (floor * 2).max(2);
@@ -684,7 +692,8 @@ mod tests {
                 .collect();
             keys.sort_unstable();
             let mut lengths = [0; N];
-            let length_counts = huffman_lengths(&keys, (1 << shift) - 1, &mut lengths);
+            let length_counts =
+                huffman_lengths::<N, FAST_CODE_BITS>(&keys, (1 << shift) - 1, &mut lengths);
 
             let frequencies: Vec<usize> = counts.iter().map(|&count| count as usize).collect();
             // Codes that need no length limit are optimal, so their cost is
@@ -738,7 +747,7 @@ mod tests {
             .collect();
         keys.sort_unstable();
         let mut lengths = [0; LITERAL_ALPHABET_SIZE];
-        huffman_lengths(&keys, 0xff, &mut lengths);
+        huffman_lengths::<LITERAL_ALPHABET_SIZE, FAST_CODE_BITS>(&keys, 0xff, &mut lengths);
         assert!(
             lengths[..25]
                 .iter()

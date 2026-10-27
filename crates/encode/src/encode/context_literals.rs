@@ -37,7 +37,7 @@ const HEADER_BITS_PER_CODE: u64 = 20;
 const SPARSE_MAX_SYMBOLS: u32 = 160;
 
 /// Fractional bits of the costs.
-const COST_SHIFT: u32 = 16;
+pub(super) const COST_SHIFT: u32 = 16;
 
 /// Writes `input` as one meta-block of literals coded by the context of
 /// the byte before each, with at most `max_codes` literal codes. `previous`
@@ -361,7 +361,7 @@ fn merged_cost(
 /// `n * log2(n)`, scaled by `1 << COST_SHIFT`, with ten bits of the
 /// mantissa.
 #[inline(always)]
-fn n_log2_n(n: u32) -> u64 {
+pub(super) fn n_log2_n(n: u32) -> u64 {
     match SMALL_N_LOG2_N.get(n as usize) {
         Some(&value) => u64::from(value),
         None => n_log2_n_from(n, &LOG2_FRACTIONS),

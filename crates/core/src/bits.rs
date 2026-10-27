@@ -483,6 +483,26 @@ impl BitWriter {
         result
     }
 
+    /// Runs `write` on zeroed room for `max_bits` more bits, for writers that
+    /// keep their own bit buffer. The first byte of the room holds the pending
+    /// bits, and `write` takes the bit position after them. It returns the bit
+    /// position after what it wrote, at most `max_bits` further, and must leave
+    /// the bits past that position zero.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn write_bits_raw<R>(
+        &mut self,
+        max_bits: usize,
+        write: impl FnOnce(&mut [u8], usize) -> (usize, R),
+    ) -> R {
+        let start_bits = usize::from(self.bit_count);
+        let (start, sink) = self.open_sink(max_bits);
+        let (bit_pos, result) = write(sink.out, start_bits);
+        assert!((start_bits..=start_bits + max_bits).contains(&bit_pos));
+        self.close_sink(start, bit_pos);
+        result
+    }
+
     /// Zero-fills room for `max_bits` more bits and moves the pending bits
     /// into it, for a [`BitSink`] that starts on them.
     #[inline(always)]
@@ -688,6 +708,49 @@ mod tests {
         assert_eq!(reader.read_bits(3).unwrap(), 0b111);
         reader.read_zero_padding_to_byte().unwrap();
         assert_eq!(reader.read_aligned_bytes(2).unwrap(), b"ok");
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn raw_writes_keep_bits_in_order() {
+        let writes: Vec<(u8, u64)> = (0..500_u64)
+            .map(|index| {
+                let width = (index * 7 % 57) as u8;
+                let value = index.wrapping_mul(0x9e37_79b9_7f4a_7c15) & low_mask(width);
+                (width, value)
+            })
+            .collect();
+        let total = writes
+            .iter()
+            .map(|&(width, _)| usize::from(width))
+            .sum::<usize>();
+        for pending in 0..8 {
+            let mut expected = BitWriter::new();
+            let mut raw = BitWriter::new();
+            for writer in [&mut expected, &mut raw] {
+                writer
+                    .write_bits(pending, 0x55 & low_mask(pending))
+                    .unwrap();
+            }
+            for &(width, value) in &writes {
+                expected.write_bits(width, value).unwrap();
+            }
+            let room = raw.write_bits_raw(total + 100, |out, mut bit_pos| {
+                for &(width, value) in &writes {
+                    let bytes = &mut out[bit_pos / 8..bit_pos / 8 + 8];
+                    let bits = u64::from_le_bytes(bytes.try_into().unwrap());
+                    bytes.copy_from_slice(&(bits | (value << (bit_pos % 8))).to_le_bytes());
+                    bit_pos += usize::from(width);
+                }
+                (bit_pos, out.len())
+            });
+            // Room rounds up to whole bytes, with 8 bytes of slack.
+            assert_eq!(room, (usize::from(pending) + total + 100).div_ceil(8) + 8);
+            raw.write_bits(5, 0b10110).unwrap();
+            expected.write_bits(5, 0b10110).unwrap();
+            assert_eq!(raw.written_bits(), expected.written_bits());
+            assert_eq!(raw.into_bytes(), expected.into_bytes(), "{pending}");
+        }
     }
 
     #[cfg(feature = "alloc")]

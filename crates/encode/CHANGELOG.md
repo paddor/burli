@@ -50,6 +50,21 @@
   copy.
 - Remove the q0 two-pass collectors for longer inputs and the batch writer
   that prepared every token before writing.
+- q1 compresses inputs above 64 KiB with a matcher like q0's, which
+  pushes its commands into the q2 to q5 token writer, so they take
+  combined insert-and-copy symbols and Huffman codes per meta-block. Text
+  takes matches of 6 bytes and more with a table of 2^16 positions, and
+  input with more than 1 in 12 sampled bytes zero takes 5-byte matches
+  with 2^15. On the compressible benchmark files above 64 KiB, output is
+  1.0% to 9.1% smaller, and smaller than Google Brotli q1 on each, at
+  0.95x to 1.24x the speed. q1 output changes for these inputs.
+- Remove the q1 batch collectors and content heuristics for inputs above
+  64 KiB.
+- Low-compressibility blocks of 256 KiB at q0 take literal-only meta-blocks
+  instead of stored ones, with a code of at most 11 bits from the first 64
+  bytes of each KiB, written five literals per store. Blocks whose sample
+  saves less than 1 in 32 bits stay stored. Silesia `sao` and `x-ray` go
+  from ratio 1.000 to 1.067 and 1.247, at about 1080 MB/s.
 
 ## [0.3.3] - 2026-09-25
 

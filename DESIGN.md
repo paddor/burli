@@ -127,9 +127,9 @@ falls back to a stored stream.
 
 Quality policy is intentionally narrow:
 
-- q0: fastest path, one pass up to 64 KiB, sparse low-compressibility
-  sampling, stored-block fallback;
-- q1: fast two-pass literal/copy coding with low-compressibility block splitting;
+- q0: fastest path, one pass, sampled literal codes, literal-only or stored
+  blocks for low-compressibility input;
+- q1: two passes, with Huffman codes from the counts of the commands;
 - q2..q4: progressively denser sparse match collection;
 - q5: densest implemented scalar path with static dictionary matching.
 
@@ -169,8 +169,11 @@ ones:
   from counts made from that fixed code.
 - The hash table holds 2^15 `u32` entries that keep the low 18 bits of a
   position, so copies reach back up to 256 KiB with no distance check.
-- Blocks that look incompressible are stored, and runs of them go out as
-  one stored meta-block.
+- Blocks that look incompressible take a literal-only meta-block. Its
+  code comes from the first 64 bytes of each KiB and has codes of at most
+  11 bits, so five literals go out in one 64-bit store. Blocks whose
+  sample saves less than 1 in 32 bits by its entropy are stored, and runs
+  of them go out as one stored meta-block.
 
 This needs a window of at least 256 KiB. With a shorter one, the one-pass
 encoder writes meta-blocks of up to 64 KiB, one per window.
@@ -181,6 +184,14 @@ q1 inputs of up to 64 KiB take two passes. The q1 matcher collects commands
 with combined insert-and-copy symbols and counts literals, commands, and
 distances as it goes. Each alphabet then gets a Huffman code from its
 counts, and the commands go out in one pass.
+
+Longer inputs take a matcher like q0's, with whole `u32` positions and
+copies up to 256 KiB back. It pushes each command into the q2 to q5 token
+writer below, which ends meta-blocks by symbol count. Text takes matches of
+6 bytes and more, with a table of 2^16 positions. Input with more than 1 in
+12 of 4096 sampled bytes zero takes 5-byte matches and 2^15 positions, as
+binary code and data repeat shorter strings. Larger tables or more
+positions per copy would compress text past q2.
 
 ### q2 to q5 Token Writer
 

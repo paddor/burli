@@ -20,6 +20,12 @@
 - q2 to q5 encode compressible Silesia files 1.07x to 1.69x faster, and
   inputs of 512 B up to 1.7x faster at q3 to q5. At q2 they no longer keep
   a list of all tokens of a meta-block, about 50 MB for 8 MiB of text.
+- On the compressible benchmark files above 64 KiB, q1 output is 1.0% to
+  9.1% smaller, and smaller than Google Brotli q1 on each, at 0.95x to
+  1.24x the speed. Output changes for these inputs.
+- q0 compresses low-compressibility input above 64 KiB a little where it
+  stored it before: Silesia `sao` and `x-ray` by 1.067 and 1.247, at about
+  1 GB/s.
 
 ## [0.3.5] - 2026-09-27
 

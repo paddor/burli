@@ -18,6 +18,8 @@
   written since a mark.
 - `BitWriter::finish_into` hands over its buffer when the output `Vec` has
   no capacity, instead of copying it.
+- Add hidden `BitWriter::write_bits_raw`, which lends zeroed room for a
+  bound of bits to writers that keep their own bit buffer.
 
 ## [0.3.1] - 2026-09-25
 
