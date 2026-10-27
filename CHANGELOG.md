@@ -8,6 +8,18 @@
   aggregate, and every input decodes faster. Encoding runs up to 8% slower,
   and up to 22% slower on incompressible inputs below 64 KiB at q0 to q2.
   Output is unchanged.
+- q0 encodes inputs of up to 64 KiB in one pass, like Google's fast
+  fragment encoder, with fixed command and distance codes chosen by input
+  size. q0 output changes for these inputs.
+- q0 writes longer inputs in one pass as well. On the ten compressible
+  Silesia files its ratio is 2.7% to 8.2% above Google Brotli q0. q1
+  compresses inputs of up to 64 KiB in two passes. Output changes for
+  these inputs.
+- At q2 to q5, low-compressibility input gets literal codes by the byte
+  before, so ratio rises with quality on Silesia `sao` and `x-ray`.
+- q2 to q5 encode compressible Silesia files 1.07x to 1.69x faster, and
+  inputs of 512 B up to 1.7x faster at q3 to q5. At q2 they no longer keep
+  a list of all tokens of a meta-block, about 50 MB for 8 MiB of text.
 
 ## [0.3.5] - 2026-09-27
 

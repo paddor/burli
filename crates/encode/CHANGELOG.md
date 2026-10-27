@@ -7,6 +7,49 @@
   has no effect today.
 - Build canonical code maps without a counter update for unused symbols.
   Output is unchanged.
+- q0 writes meta-blocks of up to 64 KiB in one pass, like Google's fast
+  fragment encoder. The literal code comes from the input's byte counts,
+  and commands and distances use fixed codes chosen by input size: a flat
+  code up to 4 KiB and two tuned codes up to 16 KiB and 64 KiB. q0 output
+  changes for these inputs.
+- Build the one-pass literal code from the byte values that occur only,
+  with an in-place Huffman pass and a table for the zero runs in its
+  header.
+- One-shot q0 calls on inputs of up to 64 KiB skip the encoder workspace,
+  which took several KiB to clear, and return the writer's buffer without
+  a copy.
+- Remove the q0 collectors and writers for meta-blocks below 64 KiB.
+- q0 writes longer inputs in one pass too, in meta-blocks of 256 KiB. Their
+  literal codes come from a sample of each block, and their command and
+  distance codes from the counts of the block before. Runs of incompressible
+  blocks go out as one stored meta-block. This needs a window of at least
+  256 KiB; shorter windows get one-pass meta-blocks of up to 64 KiB. q0
+  output changes for these inputs.
+- q1 compresses inputs of up to 64 KiB in two passes: the matcher collects
+  commands with combined insert-and-copy symbols and counts their symbols,
+  and each alphabet then gets a Huffman code. q1 output changes for these
+  inputs.
+- Low-compressibility blocks of 64 KiB and more get literal codes by the
+  top six bits of the byte before at q2 to q5, with up to 2, 4, 16, and 64
+  codes merged from 64 context histograms. On Silesia `sao` and `x-ray`,
+  q2 to q5 reach ratios of 1.093 to 1.282 and 1.401 to 1.475, where q1 to
+  q5 all reached 1.069 and 1.249.
+- The q2 to q5 collectors push tokens straight into the writer, which packs
+  each into a 24-byte command, instead of collecting 48-byte tokens for the
+  whole meta-block first. At q2, an 8 MiB meta-block of Silesia `dickens`
+  no longer keeps about 50 MB of tokens. Output is unchanged.
+- Build the q2 to q5 Huffman codes with the q0 and q1 code builder, which
+  works only on the symbols that occur and tunes the code-length code.
+  Output is up to 0.46% smaller on short inputs and never larger on
+  Silesia.
+- With these two writer changes, the ten compressible Silesia files encode
+  1.22x to 1.69x faster at q2, 1.21x to 1.46x at q3, 1.13x to 1.40x at q4,
+  and 1.07x to 1.28x at q5, and inputs of 512 B up to 1.7x faster at q3
+  to q5.
+- One-shot calls at every quality return the writer's buffer without a
+  copy.
+- Remove the q0 two-pass collectors for longer inputs and the batch writer
+  that prepared every token before writing.
 
 ## [0.3.3] - 2026-09-25
 

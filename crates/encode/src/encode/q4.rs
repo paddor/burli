@@ -1,4 +1,4 @@
-use alloc::{vec, vec::Vec};
+use alloc::vec;
 
 use burli_core::dictionary::{
     kBrotliDictionary, kBrotliDictionaryOffsetsByLength, kBrotliDictionarySizeBitsByLength,
@@ -6,10 +6,10 @@ use burli_core::dictionary::{
 };
 
 use super::{
-    INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, distance_code,
-    literal_only, match_len, read_u32_le, read_u64_le, score_distance, score_last_distance,
+    INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, has_distance_code,
+    match_len, read_u32_le, read_u64_le, score_distance, score_last_distance,
     simple_dictionary_match_len, static_dictionary_hash::kStaticDictionaryHash,
-    token_supports_last_distance, tune,
+    token_supports_last_distance, tokens::Sink, tune,
 };
 
 const HASH_TYPE_LEN: usize = 8;
@@ -66,15 +66,40 @@ pub(super) fn collect(
     input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     if input.len() <= tune::Q4_TINY_INPUT_MAX {
-        collect_with_params::<12, 5, true>(input, input_base, max_backward_distance, workspace)
+        collect_with_params::<12, 5, true>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+            sink,
+        );
     } else if input.len() <= tune::Q4_SMALL_MEDIUM_INPUT_MAX {
-        collect_with_params::<16, 5, true>(input, input_base, max_backward_distance, workspace)
+        collect_with_params::<16, 5, true>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+            sink,
+        );
     } else if input.len() >= tune::Q4_LARGE_INPUT_MIN {
-        collect_with_params::<20, 7, true>(input, input_base, max_backward_distance, workspace)
+        collect_with_params::<20, 7, true>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+            sink,
+        );
     } else {
-        collect_with_params::<17, 5, false>(input, input_base, max_backward_distance, workspace)
+        collect_with_params::<17, 5, false>(
+            input,
+            input_base,
+            max_backward_distance,
+            workspace,
+            sink,
+        );
     }
 }
 
@@ -87,13 +112,14 @@ fn collect_with_params<
     input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     if input.len() < HASH_TYPE_LEN {
-        return literal_only(input.len());
+        sink.push_tail(0, input.len());
+        return;
     }
 
     let mut table = vec![0_u32; 1 << TABLE_BITS];
-    let mut tokens = Vec::new();
     let mut pos = 0_usize;
     let mut insert_start = 0_usize;
     let mut dist_cache = workspace.dist_cache;
@@ -171,7 +197,7 @@ fn collect_with_params<
         if distance_code == 0 && token_supports_last_distance(token) {
             token.use_last_distance = true;
         }
-        tokens.push(token);
+        sink.push(token);
         if found.distance <= max_backward_at_pos && distance_code > 0 {
             dist_cache[3] = dist_cache[2];
             dist_cache[2] = dist_cache[1];
@@ -188,20 +214,9 @@ fn collect_with_params<
         insert_start = pos;
     }
 
-    if insert_start < input.len() {
-        tokens.push(Token {
-            insert_start,
-            insert_len: input.len() - insert_start,
-            copy_len: 0,
-            copy_len_code: 0,
-            distance: 0,
-            distance_code: None,
-            use_last_distance: false,
-        });
-    }
+    sink.push_tail(insert_start, input.len());
 
     workspace.dist_cache = dist_cache;
-    tokens
 }
 
 #[inline(always)]
@@ -333,7 +348,7 @@ fn find_static_dictionary_identity(
         .checked_add(dist)?
         .checked_add(transform_id.checked_shl(size_bits as u32)?)?
         .checked_add(1)?;
-    if distance_code(distance).is_err() {
+    if !has_distance_code(distance) {
         return None;
     }
     let score = score_distance(match_len, distance);

@@ -1,4 +1,4 @@
-use alloc::{vec, vec::Vec};
+use alloc::vec;
 
 use burli_core::dictionary::{
     kBrotliDictionary, kBrotliDictionaryOffsetsByLength, kBrotliDictionarySizeBitsByLength,
@@ -6,9 +6,10 @@ use burli_core::dictionary::{
 };
 
 use super::{
-    INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, distance_code,
-    literal_only, match_len, read_u32_le, read_u64_le, score_distance, score_last_distance,
-    static_dictionary_hash::kStaticDictionaryHash, token_supports_last_distance, tune,
+    INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, has_distance_code,
+    match_len, read_u32_le, read_u64_le, score_distance, score_last_distance,
+    static_dictionary_hash::kStaticDictionaryHash, token_supports_last_distance, tokens::Sink,
+    tune,
 };
 
 const TABLE_BITS: usize = 16;
@@ -67,11 +68,12 @@ pub(super) fn collect(
     input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     if input.len() > tune::Q2_USE_DICTIONARY_MAX_INPUT {
-        collect_with_dictionary::<false>(input, input_base, max_backward_distance, workspace)
+        collect_with_dictionary::<false>(input, input_base, max_backward_distance, workspace, sink);
     } else {
-        collect_with_dictionary::<true>(input, input_base, max_backward_distance, workspace)
+        collect_with_dictionary::<true>(input, input_base, max_backward_distance, workspace, sink);
     }
 }
 
@@ -79,60 +81,69 @@ pub(super) fn collect_without_dictionary_no_lazy(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     collect_with_dictionary_lazy::<false, 0, true, true, 4>(
         input,
         0,
         max_backward_distance,
         workspace,
-    )
+        sink,
+    );
 }
 
 pub(super) fn collect_without_dictionary_no_lazy_sparse_tail(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     collect_with_dictionary_lazy::<false, 0, true, true, 8>(
         input,
         0,
         max_backward_distance,
         workspace,
-    )
+        sink,
+    );
 }
 
 pub(super) fn collect_without_dictionary_no_lazy_sparse_tail_no_last_distance_probe(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     collect_with_dictionary_lazy::<false, 0, false, false, 8>(
         input,
         0,
         max_backward_distance,
         workspace,
-    )
+        sink,
+    );
 }
 
 pub(super) fn collect_without_dictionary_one_lazy(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     collect_with_dictionary_lazy::<false, 1, false, false, 8>(
         input,
         0,
         max_backward_distance,
         workspace,
-    )
+        sink,
+    );
 }
 
 pub(super) fn collect_without_dictionary(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
-    collect_with_dictionary::<false>(input, 0, max_backward_distance, workspace)
+    sink: &mut impl Sink,
+) {
+    collect_with_dictionary::<false>(input, 0, max_backward_distance, workspace, sink);
 }
 
 fn collect_with_dictionary<const USE_DICTIONARY: bool>(
@@ -140,13 +151,15 @@ fn collect_with_dictionary<const USE_DICTIONARY: bool>(
     input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     collect_with_dictionary_lazy::<USE_DICTIONARY, 4, true, true, 4>(
         input,
         input_base,
         max_backward_distance,
         workspace,
-    )
+        sink,
+    );
 }
 
 fn collect_with_dictionary_lazy<
@@ -160,7 +173,8 @@ fn collect_with_dictionary_lazy<
     input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     match table_bits_for_input(input.len()) {
         10 => {
             return collect_with_stack_table_10::<
@@ -169,7 +183,7 @@ fn collect_with_dictionary_lazy<
                 PROBE_LAST_DISTANCE,
                 PROBE_LAZY_LAST_DISTANCE,
                 LONG_MATCH_STORE_STEP,
-            >(input, input_base, max_backward_distance, workspace);
+            >(input, input_base, max_backward_distance, workspace, sink);
         }
         12 => {
             return collect_with_stack_table_12::<
@@ -178,7 +192,7 @@ fn collect_with_dictionary_lazy<
                 PROBE_LAST_DISTANCE,
                 PROBE_LAZY_LAST_DISTANCE,
                 LONG_MATCH_STORE_STEP,
-            >(input, input_base, max_backward_distance, workspace);
+            >(input, input_base, max_backward_distance, workspace, sink);
         }
         16 if !USE_DICTIONARY => {
             return collect_with_stack_table_16::<
@@ -187,7 +201,7 @@ fn collect_with_dictionary_lazy<
                 PROBE_LAST_DISTANCE,
                 PROBE_LAZY_LAST_DISTANCE,
                 LONG_MATCH_STORE_STEP,
-            >(input, input_base, max_backward_distance, workspace);
+            >(input, input_base, max_backward_distance, workspace, sink);
         }
         _ => {}
     }
@@ -206,7 +220,8 @@ fn collect_with_dictionary_lazy<
         max_backward_distance,
         workspace,
         &mut table,
-    )
+        sink,
+    );
 }
 
 #[allow(clippy::large_stack_arrays)]
@@ -221,7 +236,8 @@ fn collect_with_stack_table_16<
     input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     let mut table = [NO_POSITION; TABLE_SIZE];
     collect_with_table::<
         USE_DICTIONARY,
@@ -236,7 +252,8 @@ fn collect_with_stack_table_16<
         max_backward_distance,
         workspace,
         &mut table,
-    )
+        sink,
+    );
 }
 
 fn collect_with_stack_table_10<
@@ -250,7 +267,8 @@ fn collect_with_stack_table_10<
     input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     let mut table = [NO_POSITION; 1 << 10];
     collect_with_table::<
         USE_DICTIONARY,
@@ -265,7 +283,8 @@ fn collect_with_stack_table_10<
         max_backward_distance,
         workspace,
         &mut table,
-    )
+        sink,
+    );
 }
 
 #[allow(clippy::large_stack_arrays)]
@@ -280,7 +299,8 @@ fn collect_with_stack_table_12<
     input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     let mut table = [NO_POSITION; 1 << 12];
     collect_with_table::<
         USE_DICTIONARY,
@@ -295,7 +315,8 @@ fn collect_with_stack_table_12<
         max_backward_distance,
         workspace,
         &mut table,
-    )
+        sink,
+    );
 }
 
 fn collect_with_table<
@@ -311,13 +332,14 @@ fn collect_with_table<
     max_backward_distance: usize,
     workspace: &mut Workspace,
     table: &mut [u32],
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     debug_assert_eq!(table.len(), 1_usize << TABLE_BITS_FOR_INPUT);
     if input.len() < HASH_TYPE_LEN {
-        return literal_only(input.len());
+        sink.push_tail(0, input.len());
+        return;
     }
 
-    let mut tokens = Vec::new();
     let mut pos = 0_usize;
     let mut insert_start = 0_usize;
     let mut dist_cache = workspace.dist_cache;
@@ -397,7 +419,7 @@ fn collect_with_table<
         if distance_code == 0 && token_supports_last_distance(token) {
             token.use_last_distance = true;
         }
-        tokens.push(token);
+        sink.push(token);
         if found.distance <= max_backward_at_pos && distance_code > 0 {
             dist_cache[3] = dist_cache[2];
             dist_cache[2] = dist_cache[1];
@@ -414,20 +436,9 @@ fn collect_with_table<
         insert_start = pos;
     }
 
-    if insert_start < input.len() {
-        tokens.push(Token {
-            insert_start,
-            insert_len: input.len() - insert_start,
-            copy_len: 0,
-            copy_len_code: 0,
-            distance: 0,
-            distance_code: None,
-            use_last_distance: false,
-        });
-    }
+    sink.push_tail(insert_start, input.len());
 
     workspace.dist_cache = dist_cache;
-    tokens
 }
 
 #[inline(always)]
@@ -553,7 +564,7 @@ fn find_static_dictionary_identity(
         .checked_add(dist)?
         .checked_add(transform_id.checked_shl(size_bits as u32)?)?
         .checked_add(1)?;
-    if distance_code(distance).is_err() {
+    if !has_distance_code(distance) {
         return None;
     }
     let score = score_distance(match_len, distance);

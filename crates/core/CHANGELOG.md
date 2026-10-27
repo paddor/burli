@@ -9,6 +9,15 @@
 - Refill `BitReader` with a mask and an OR instead of a clamp and an add.
 - `BurliError` has a `u64` tag. With a byte tag, decoder error paths kept
   stale values live in the command loop.
+- `BitSink` ORs each write into the partial byte in memory and keeps only
+  the bit position, like Google's `BrotliWriteBits`. Writer loops keep two
+  fewer registers live.
+- Add hidden `BitWriter::write_bits_up_to` and `BitSink::has_room` for
+  writers that know only a bound on their output, and hidden
+  `BitWriter::mark`, `BitWriter::rewind`, and `BitMark` to drop what was
+  written since a mark.
+- `BitWriter::finish_into` hands over its buffer when the output `Vec` has
+  no capacity, instead of copying it.
 
 ## [0.3.1] - 2026-09-25
 

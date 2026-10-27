@@ -4,20 +4,11 @@ pub(super) const Q4_DELAYED_SYMBOLS: usize = 3840;
 pub(super) const Q5_DELAYED_SYMBOLS: usize = 3584;
 pub(super) const LOW_COMPRESS_DELAYED_SYMBOLS: usize = MAX_DELAYED_SYMBOLS;
 
-pub(super) const Q0_DIRECT_MAX_INPUT: usize = 384;
-pub(super) const Q0_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
-pub(super) const Q0_COLLECT_FAST_NO_LAST_MAX_INPUT: usize = 2 * 1024;
-pub(super) const Q0_COLLECT_NO_LAST_MAX_INPUT: usize = 4 * 1024;
-pub(super) const Q0_COLLECT_DEFAULT_MAX_INPUT: usize = 8 * 1024;
-pub(super) const Q0_COLLECT_MEDIUM_NO_LAST_MAX_INPUT: usize = 16 * 1024;
-pub(super) const Q0_COLLECT_MEDIUM_MAX_INPUT: usize = 32 * 1024;
-pub(super) const Q0_COLLECT_SAMPLED_MAX_INPUT: usize = 128 * 1024;
-pub(super) const Q0_COLLECT_HUGE_MIN_INPUT: usize = 1024 * 1024 + 1;
-pub(super) const Q0_WRITE_BALANCED_LITERAL_MAX_INPUT: usize = 2 * 1024;
-pub(super) const Q0_WRITE_PACKED_LITERAL_MAX_INPUT: usize = 8 * 1024;
-pub(super) const Q0_WRITE_FAST_COMMAND_MAX_INPUT: usize = 16 * 1024;
-pub(super) const Q0_WRITE_SAMPLED_MAX_INPUT: usize = 128 * 1024;
-pub(super) const Q1_STATIC_ENTROPY_MAX_INPUT: usize = 1024;
+pub(super) const Q0_ONE_PASS_MAX_INPUT: usize = 64 * 1024;
+pub(super) const Q1_TWO_PASS_MAX_INPUT: usize = 64 * 1024;
+/// Skip start of the q1 matcher up to [`Q1_TWO_PASS_MAX_INPUT`]: after 32
+/// misses it looks at every other position, as in Google's encoder.
+pub(super) const Q1_TWO_PASS_SKIP_START: usize = 32;
 pub(super) const Q1_LONG_INPUT_MIN: usize = 128 * 1024 + 1;
 pub(super) const Q2_STATIC_NO_DICTIONARY_MAX_INPUT: usize = 4 * 1024;
 pub(super) const Q2_MEDIUM_H3_MIN_INPUT: usize = 8 * 1024;
@@ -28,9 +19,6 @@ pub(super) const Q3_FAST_SWEEP_MAX_INPUT: usize = 16 * 1024;
 pub(super) const Q3_MEDIUM_SWEEP1_MIN_INPUT: usize = 144 * 1024;
 pub(super) const Q3_MEDIUM_SWEEP1_MAX_INPUT: usize = 160 * 1024;
 pub(super) const Q4_TINY_CONTEXT_MAX_INPUT: usize = 768;
-
-pub(super) const Q0_DENSE_DUP6_MIN: usize = 512;
-pub(super) const Q0_LOW_DUP6_MAX: usize = 199;
 
 pub(super) const LOW_COMPRESS_SAMPLE_MIN_INPUT: usize = 64 * 1024;
 pub(super) const LOW_COMPRESS_SAMPLE_BYTES: usize = 64 * 1024;
@@ -53,6 +41,15 @@ pub(super) const LOW_COMPRESS_LITERAL_MIN_INPUT: [usize; 6] =
 /// about this size, each with its own code. On Silesia `x-ray` this gives
 /// ratio 1.249 instead of 1.208 for one 8 MiB block, 2% slower.
 pub(super) const LOW_COMPRESS_LITERAL_BLOCK_SIZE: usize = 256 * 1024;
+/// From this size up, low-compressibility blocks at q2 and up get literal
+/// codes by the context of the previous byte, in meta-blocks of about
+/// `LOW_COMPRESS_CONTEXT_BLOCK_SIZE`, with at most this many codes per
+/// quality. Merges of codes look at neighbors until at most
+/// `LOW_COMPRESS_CONTEXT_ALL_PAIRS` codes remain, then at all pairs.
+pub(super) const LOW_COMPRESS_CONTEXT_MIN_INPUT: usize = 64 * 1024;
+pub(super) const LOW_COMPRESS_CONTEXT_BLOCK_SIZE: usize = 1 << 20;
+pub(super) const LOW_COMPRESS_CONTEXT_CODES: [usize; 6] = [1, 1, 2, 4, 16, 64];
+pub(super) const LOW_COMPRESS_CONTEXT_ALL_PAIRS: [usize; 6] = [0, 0, 0, 0, 24, 32];
 pub(super) const LOW_COMPRESS_DUP6_STORE_MAX: usize = 45;
 pub(super) const LOW_COMPRESS_ZERO_RATIO_NUM: usize = 1;
 pub(super) const LOW_COMPRESS_ZERO_RATIO_DEN: usize = 50;
@@ -72,15 +69,8 @@ pub(super) const Q4_LOW_COMPRESS_SPARSE_STRIDE: usize = 6;
 pub(super) const Q5_LOW_COMPRESS_SPARSE_STRIDE: usize = 1;
 
 pub(super) const Q1_DEFAULT_U16_SKIP_START: usize = 61;
-pub(super) const Q1_MEDIUM_U16_SKIP_START: usize = 72;
-pub(super) const Q1_FAST_U16_SKIP_START: usize = 96;
-pub(super) const Q1_FASTER_U16_SKIP_START: usize = 128;
 pub(super) const Q1_DEFAULT_U32_SKIP_START: usize = 32;
 pub(super) const Q1_MEDIUM_U32_SKIP_START: usize = 64;
-pub(super) const Q1_DENSE_U32_SKIP_START: usize = 80;
-pub(super) const Q1_FAST_U32_SKIP_START: usize = 96;
-pub(super) const Q1_FASTER_U32_SKIP_START: usize = 160;
-
 pub(super) const Q1_LARGE_MARKUP_SAMPLE_BYTES: usize = 1024;
 pub(super) const Q1_LARGE_MARKUP_MIN_LT: usize = 8;
 pub(super) const Q1_LARGE_MARKUP_MIN_GT: usize = 8;

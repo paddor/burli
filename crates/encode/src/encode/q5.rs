@@ -6,10 +6,10 @@ use burli_core::dictionary::{
 };
 
 use super::{
-    INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, distance_code,
-    literal_only, match_len, read_u32_le, read_u64_le, score_distance, score_last_distance,
+    INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, has_distance_code,
+    match_len, read_u32_le, read_u64_le, score_distance, score_last_distance,
     simple_dictionary_match_len, static_dictionary_hash::kStaticDictionaryHash,
-    token_supports_last_distance, tune,
+    token_supports_last_distance, tokens::Sink, tune,
 };
 
 const HASH_MUL: u64 = 0x1e35_a7bd_1e35_a7bd;
@@ -74,49 +74,56 @@ pub(super) fn collect(
     input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     if input.len() <= tune::Q5_TINY_INPUT_MAX {
         collect_with_params::<8, 4, 4, 4, false, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
-        )
+            sink,
+        );
     } else if input.len() <= tune::Q5_SMALL_INPUT_MAX {
         collect_with_params::<13, 3, 4, 4, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
-        )
+            sink,
+        );
     } else if input.len() <= tune::Q5_MEDIUM_INPUT_MAX {
         collect_with_params::<15, 3, 4, 4, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
-        )
+            sink,
+        );
     } else if input.len() <= tune::Q5_SMALL_MEDIUM_INPUT_MAX {
         collect_with_params::<13, 3, 4, 4, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
-        )
+            sink,
+        );
     } else if input.len() >= tune::Q5_LARGE_INPUT_MIN {
         collect_with_params::<15, 4, 5, 8, true, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
-        )
+            sink,
+        );
     } else {
         collect_with_params::<14, 3, 4, 4, false, 1>(
             input,
             input_base,
             max_backward_distance,
             workspace,
-        )
+            sink,
+        );
     }
 }
 
@@ -132,16 +139,17 @@ fn collect_with_params<
     input_base: usize,
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     if input.len() < HASH_READ_LEN {
-        return literal_only(input.len());
+        sink.push_tail(0, input.len());
+        return;
     }
 
     let bucket_size = 1 << BUCKET_BITS;
     let block_size = 1 << BLOCK_BITS;
     workspace.reset_tables(bucket_size, block_size);
     let (counts, buckets) = (&mut workspace.counts, &mut workspace.buckets);
-    let mut tokens = Vec::new();
     let mut pos = 0_usize;
     let mut insert_start = 0_usize;
     let mut dist_cache = workspace.dist_cache;
@@ -229,7 +237,7 @@ fn collect_with_params<
         if distance_code == 0 && token_supports_last_distance(token) {
             token.use_last_distance = true;
         }
-        tokens.push(token);
+        sink.push(token);
         if found.distance <= max_backward_at_pos && distance_code > 0 {
             dist_cache[3] = dist_cache[2];
             dist_cache[2] = dist_cache[1];
@@ -247,20 +255,9 @@ fn collect_with_params<
         insert_start = pos;
     }
 
-    if insert_start < input.len() {
-        tokens.push(Token {
-            insert_start,
-            insert_len: input.len() - insert_start,
-            copy_len: 0,
-            copy_len_code: 0,
-            distance: 0,
-            distance_code: None,
-            use_last_distance: false,
-        });
-    }
+    sink.push_tail(insert_start, input.len());
 
     workspace.dist_cache = dist_cache;
-    tokens
 }
 
 #[inline(always)]
@@ -435,7 +432,7 @@ fn find_static_dictionary_identity(
         else {
             continue;
         };
-        if distance_code(distance).is_err() {
+        if !has_distance_code(distance) {
             continue;
         }
         let score = score_distance(match_len, distance);
@@ -551,10 +548,10 @@ mod tests {
         let second = b"abcdefghijklmnopqrstuvwxyz0123456789".repeat(2_049);
         let mut workspace = Workspace::default();
 
-        collect(&first, 0, 1 << 22, &mut workspace);
+        collect(&first, 0, 1 << 22, &mut workspace, &mut Vec::new());
         let capacities = (workspace.counts.capacity(), workspace.buckets.capacity());
 
-        collect(&second, 0, 1 << 22, &mut workspace);
+        collect(&second, 0, 1 << 22, &mut workspace, &mut Vec::new());
 
         assert_eq!(
             capacities,
