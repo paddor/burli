@@ -115,7 +115,7 @@ fn decompress_into_leaves_the_output_empty_on_error() {
     let stream = google_brotli(&data);
     let mut output = Vec::new();
     assert!(burli::decompress_into(&stream[..stream.len() - 1], &mut output).is_err());
-    assert!(output.is_empty());
+    assert_eq!(output, b"");
 }
 
 #[test]

@@ -190,7 +190,7 @@ pub(crate) fn decompress_into_empty_with_limit(
     output: &mut Vec<u8>,
     raw_dictionary: RawDictionary<'_>,
 ) -> Result<usize, DecompressError> {
-    debug_assert!(output.is_empty());
+    debug_assert_eq!(*output, b"");
 
     let mut reader = BitReader::new(input);
     let window_bits = read_window_bits(&mut reader)?;

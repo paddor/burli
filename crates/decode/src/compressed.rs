@@ -852,7 +852,9 @@ fn read_header(reader: &mut BitReader<'_>) -> Result<CompressedHeader, Decompres
     let literal_trees = read_var_len_u8(reader)? + 1;
     let literal_context_map = read_context_map(reader, literals.types() * 64, literal_trees)?;
     let literal_trivial_trees = literal_context_map
-        .chunks_exact(64)
+        .as_chunks::<64>()
+        .0
+        .iter()
         .map(|map| map.iter().all(|&tree| tree == map[0]).then_some(map[0]))
         .collect();
 
