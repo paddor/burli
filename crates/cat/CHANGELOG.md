@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-28
+
 - Enforce `#![forbid(unsafe_code)]`. The `paranoid` feature has no effect
   today.
+- Update `burli-core` to `0.3.2`, `burli-encode` to `0.3.4`, and
+  `burli-decode` to `0.3.5`, which forbid unsafe code, decode faster, and
+  rework q0 to q5 encoding.
 
 ## [0.2.5] - 2026-09-27
 

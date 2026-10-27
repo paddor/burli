@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-28
+
 - Enforce `#![forbid(unsafe_code)]`. The match scanner reads words through
   checked slices instead of unaligned pointer reads. The `paranoid` feature
   has no effect today.
@@ -52,7 +54,7 @@
 - Remove the q0 collectors and writers, the batch writer that prepared
   every token before writing, and the q1 batch collectors and content
   heuristics for inputs above 64 KiB.
-- Against 0.3.5 on the benchmark files above 64 KiB, q0 output is 8.6% to
+- Against 0.3.3 on the benchmark files above 64 KiB, q0 output is 8.6% to
   27.5% smaller at 0.51x to 1.08x the speed, except `citm-catalog.json`,
   5.8% larger. q1 output is 1.0% to 10.6% smaller at 0.89x to 1.25x the
   speed. On the compressible files, q2 to q5 encode up to 1.67x faster

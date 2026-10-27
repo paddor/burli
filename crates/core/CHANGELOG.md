@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-28
+
 - Enforce `#![forbid(unsafe_code)]`. The `paranoid` feature has no effect
   today.
 - `BitReader` keeps the unread input as a slice, so a refill tests one
