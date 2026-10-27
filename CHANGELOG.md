@@ -5,30 +5,29 @@
 - All crates now enforce `#![forbid(unsafe_code)]`. The `paranoid` feature
   remains available and has no effect today.
 - Decoding runs 34% to 68% faster than 0.3.5 on the benchmark corpora in
-  aggregate, and every input decodes faster. Encoding runs up to 8% slower,
-  and up to 22% slower on incompressible inputs below 64 KiB at q0 to q2.
-  Output is unchanged.
-- q0 encodes inputs of up to 64 KiB in one pass, like Google's fast
-  fragment encoder, with fixed command and distance codes chosen by input
-  size. q0 output changes for these inputs.
-- q0 writes longer inputs in one pass as well. On the ten compressible
-  Silesia files its ratio is 2.7% to 8.2% above Google Brotli q0. q1
-  compresses inputs of up to 64 KiB in two passes. Output changes for
-  these inputs.
-- At q2 to q5, low-compressibility input gets literal codes by the byte
-  before, so ratio rises with quality on Silesia `sao` and `x-ray`.
-- q2 to q5 encode compressible Silesia files 1.07x to 1.69x faster, and
-  inputs of 512 B up to 1.7x faster at q3 to q5. At q2 they no longer keep
-  a list of all tokens of a meta-block, about 50 MB for 8 MiB of text.
-- On the compressible benchmark files above 64 KiB, q1 output is 1.0% to
-  9.1% smaller, and smaller than Google Brotli q1 on each, at 0.95x to
-  1.24x the speed. Output changes for these inputs.
-- q0 compresses low-compressibility input above 64 KiB a little where it
-  stored it before: Silesia `sao` and `x-ray` by 1.067 and 1.247, at about
-  1 GB/s.
-- q1 codes low-compressibility input above 64 KiB by the byte before as
-  well, with up to two codes, and q2 with up to three. Silesia `sao` and
-  `x-ray` reach 1.093 and 1.397 at q1, where q1 reached 1.069 and 1.249.
+  aggregate, and every input decodes faster.
+- q0 encodes in one pass, like Google's fast fragment encoder. On the
+  benchmark files above 64 KiB its output is 8.6% to 27.5% smaller than
+  with 0.3.5, at 0.51x to 1.08x the speed; only `citm-catalog.json` grows,
+  by 5.8%. On the ten compressible Silesia files its ratio is 2.7% to 8.2%
+  above Google Brotli q0. Low-compressibility input above 64 KiB gets a
+  literal code where q0 stored it: Silesia `sao` and `x-ray` reach 1.067
+  and 1.247 at about 1 GB/s.
+- q1 encodes in two passes, with Huffman codes from the counts of its
+  commands. On the benchmark files above 64 KiB its output is 1.0% to
+  10.6% smaller than with 0.3.5, at 0.89x to 1.25x the speed, and smaller
+  than Google Brotli q1 on each compressible one.
+- On the compressible benchmark files above 64 KiB, q2 to q5 encode 1.20x
+  to 1.67x faster than 0.3.5 at q2, 1.16x to 1.44x at q3, 1.04x to 1.52x at
+  q4, and 1.03x to 1.39x at q5, with output within 0.1%. The exceptions
+  are `citm-catalog.json` at q2 to q4, at 0.89x to 0.97x, and Silesia
+  `osdb` at q5, at 0.96x. At q2 a meta-block no longer keeps a list of all
+  its tokens, about 50 MB for 8 MiB of text.
+- At q1 to q5, low-compressibility input above 64 KiB gets literal codes by
+  the byte before, so ratio rises with quality. Silesia `sao` and `x-ray`
+  go from 1.069 and 1.249 at every quality to 1.093 and 1.397 at q1 and
+  1.282 and 1.475 at q5. q1 encodes them 1.06x to 1.10x as fast as 0.3.5,
+  and q2 to q5 at 0.50x to 0.73x the speed.
 
 ## [0.3.5] - 2026-09-27
 

@@ -7,7 +7,7 @@ all normal quality levels. The encoder currently supports qualities 0 through
 ## Why Bürli
 
 **Fast q0..q5 encoder.** Covers the transfer-oriented part of Brotli's
-speed/ratio curve, with aggressive skip behavior for low-compressibility input.
+speed/ratio curve, with fast literal-only coding for low-compressibility input.
 
 **Memory safety.** No `unsafe`. Every Bürli crate is
 `#![forbid(unsafe_code)]`.
@@ -103,9 +103,10 @@ builds, tests, releases, fuzzing, benchmarks, and chart regeneration.
 
 ## Levels
 
-Bürli's encoder covers the fast end of Brotli. q0 favors throughput and may
-store low-compressibility blocks. q1 through q5 spend progressively more work on
-matching and entropy coding for better ratios.
+Bürli's encoder covers the fast end of Brotli. q0 favors throughput: it matches
+in one pass and codes low-compressibility blocks with literals only, or stores
+them. q1 through q5 spend progressively more work on matching and entropy coding
+for better ratios.
 
 The current encoder stops at q5. Brotli q6 through q11 spend much more CPU for
 ratios that usually matter more for archival storage than transfer pipelines.

@@ -186,23 +186,23 @@ distances as it goes. Each alphabet then gets a Huffman code from its
 counts, and the commands go out in one pass.
 
 Longer inputs take a matcher like q0's, with whole `u32` positions and
-copies up to 256 KiB back. It pushes each command into the q2 to q5 token
-writer below, which ends meta-blocks by symbol count. Text takes matches of
-6 bytes and more, with a table of 2^16 positions. Input with more than 1 in
-12 of 4096 sampled bytes zero takes 5-byte matches and 2^15 positions, as
-binary code and data repeat shorter strings. Larger tables or more
-positions per copy would compress text past q2.
+copies up to 256 KiB back. It pushes each command into the token writer
+below, which ends meta-blocks by symbol count. Text takes matches of 6 bytes
+and more, with a table of 2^16 positions. Input with more than 1 in 12 of
+4096 sampled bytes zero takes 5-byte matches and 2^15 positions, as binary
+code and data repeat shorter strings. Larger tables or more positions per
+copy would compress text past q2.
 
-### q2 to q5 Token Writer
+### Token Writer
 
-The q2 to q5 collectors push each token into a writer as they find it, so
-no list of all tokens is kept. The writer packs a token into a 24-byte
-command with its symbols and extra bits and counts its literals, command,
-and distance. Once a meta-block holds a symbol limit of literals and
-commands, each alphabet gets a Huffman code from its counts, and the
-commands go out in one pass through a bit sink sized from those counts.
-q2 meta-blocks of up to 1024 commands use fixed command and distance
-codes instead.
+The q2 to q5 collectors and the q1 matcher for long inputs push each token
+into a writer as they find it, so no list of all tokens is kept. The writer
+packs a token into a 24-byte command with its symbols and extra bits and
+counts its literals, command, and distance. Once a meta-block holds a
+symbol limit of literals and commands, each alphabet gets a Huffman code
+from its counts, and the commands go out in one pass through a bit sink
+sized from those counts. q2 meta-blocks of up to 1024 commands use fixed
+command and distance codes instead.
 
 ### Low-Compressibility Literals
 
