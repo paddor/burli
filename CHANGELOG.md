@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-28
+
 - All crates now enforce `#![forbid(unsafe_code)]`. The `paranoid` feature
   remains available and has no effect today.
 - Decoding runs 34% to 68% faster than 0.3.5 on the benchmark corpora in
@@ -28,6 +30,7 @@
   go from 1.069 and 1.249 at every quality to 1.093 and 1.397 at q1 and
   1.282 and 1.475 at q5. q1 encodes them 1.06x to 1.10x as fast as 0.3.5,
   and q2 to q5 at 0.50x to 0.73x the speed.
+- Bump the JSR/WASM package to `0.3.6`.
 
 ## [0.3.5] - 2026-09-27
 

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-28
+
 - Enforce `#![forbid(unsafe_code)]`. Backward copies, literal writes, and
   Huffman table lookups use only safe code. The `paranoid` feature has no
   effect today.
