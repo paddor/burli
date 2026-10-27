@@ -231,7 +231,6 @@ fn sample_with<const TABLE_SIZE: usize>(input: &[u8], step: usize) -> Sample {
 
     debug_assert!(TABLE_SIZE.is_power_of_two());
     debug_assert!(input.len() / step < usize::from(u16::MAX));
-    let sample_len = input.len();
     // Slots hold the sample index plus one. Zero marks an empty slot.
     let mut table = [0_u16; TABLE_SIZE];
     let mut matches = 0_usize;
@@ -242,15 +241,18 @@ fn sample_with<const TABLE_SIZE: usize>(input: &[u8], step: usize) -> Sample {
     let mut samples = 0_usize;
     let mut pos = 0_usize;
 
-    while pos + 8 <= sample_len {
-        let word = read_u64_le(input, pos);
+    // The word read is the loop test, so it needs no bounds check of its own,
+    // and it shows LLVM `pos + 8 <= sample_len` for the read below.
+    while let Some(bytes) = input.get(pos..).and_then(<[u8]>::first_chunk::<8>) {
+        let word = u64::from_le_bytes(*bytes);
         let class = BYTE_CLASS[usize::from(word as u8)];
         zeros += usize::from(class & ZERO_BYTE);
         printable += usize::from(class >> 1);
         samples += 1;
         let key = sample_hash6(word, table_bits) & table_mask;
         let slot = usize::from(table[key]);
-        let previous = read_u64_le(input, slot.saturating_sub(1) * step);
+        // An earlier sample, so the clamp to `pos` changes nothing.
+        let previous = read_u64_le(input, (slot.saturating_sub(1) * step).min(pos));
         let matched = (slot != 0) & ((previous ^ word) << 16 == 0);
         matches += usize::from(matched);
         miss_streak = if matched { 0 } else { miss_streak + 1 };

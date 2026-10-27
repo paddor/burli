@@ -14,8 +14,9 @@ pub const MAX_BITS_PER_OP: u8 = 56;
 #[derive(Clone, Debug)]
 pub struct BitReader<'a> {
     input: &'a [u8],
-    /// Next input byte to load into `buffer`.
-    byte_pos: usize,
+    /// The input bytes not yet loaded into `buffer`, a suffix of `input`. A
+    /// refill tests only its length.
+    rest: &'a [u8],
     buffer: u64,
     bit_count: u32,
 }
@@ -24,7 +25,7 @@ impl<'a> BitReader<'a> {
     pub const fn new(input: &'a [u8]) -> Self {
         Self {
             input,
-            byte_pos: 0,
+            rest: input,
             buffer: 0,
             bit_count: 0,
         }
@@ -35,22 +36,23 @@ impl<'a> BitReader<'a> {
             return Err(BurliError::Format("Brotli bit position exceeds input"));
         }
         let mut reader = Self::new(input);
-        reader.byte_pos = bit_pos / 8;
+        let byte_pos = bit_pos / 8;
+        reader.rest = &input[byte_pos..];
         let bit_offset = (bit_pos % 8) as u32;
         if bit_offset != 0 {
-            reader.buffer = u64::from(input[reader.byte_pos] >> bit_offset);
+            reader.buffer = u64::from(input[byte_pos] >> bit_offset);
             reader.bit_count = 8 - bit_offset;
-            reader.byte_pos += 1;
+            reader.rest = &input[byte_pos + 1..];
         }
         Ok(reader)
     }
 
     pub const fn consumed_bits(&self) -> usize {
-        self.byte_pos * 8 - self.bit_count as usize
+        (self.input.len() - self.rest.len()) * 8 - self.bit_count as usize
     }
 
     pub const fn remaining_bits(&self) -> usize {
-        (self.input.len() - self.byte_pos) * 8 + self.bit_count as usize
+        self.rest.len() * 8 + self.bit_count as usize
     }
 
     #[inline(always)]
@@ -79,6 +81,24 @@ impl<'a> BitReader<'a> {
         Ok(value)
     }
 
+    /// Reads `width <= 24` bits, zero included, with one buffer test when
+    /// enough bits are buffered. Extra-bit fields go through here: they
+    /// follow a refill, and a zero-width test would branch on the data.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_short_bits(&mut self, width: u8) -> Result<u64> {
+        debug_assert!(width <= 24);
+        if self.bit_count < u32::from(width) {
+            self.refill();
+            if self.bit_count < u32::from(width) {
+                return Err(BurliError::Format("unexpected end of Brotli input"));
+            }
+        }
+        let value = self.buffer & low_mask(width);
+        self.consume(width);
+        Ok(value)
+    }
+
     #[inline(always)]
     pub fn peek_bits(&self, width: u8) -> Result<u64> {
         Self::validate_bit_width(width, "bit read width exceeds 56 bits")?;
@@ -97,12 +117,7 @@ impl<'a> BitReader<'a> {
         if self.bit_count >= u32::from(width) {
             return self.buffer & low_mask(width);
         }
-        peek_bits_unbuffered(
-            &self.input[self.byte_pos..],
-            self.buffer,
-            self.bit_count,
-            width,
-        )
+        peek_bits_unbuffered(self.rest, self.buffer, self.bit_count, width)
     }
 
     #[inline(always)]
@@ -144,23 +159,22 @@ impl<'a> BitReader<'a> {
     #[doc(hidden)]
     #[inline(always)]
     pub fn refill(&mut self) {
-        match self
-            .input
-            .get(self.byte_pos..)
-            .and_then(<[u8]>::first_chunk::<8>)
-        {
+        match self.rest.first_chunk::<8>() {
             Some(bytes) => {
+                // At most 63 bits are ever buffered. The mask says so, which
+                // bounds the bytes taken by 7 for the length test above.
+                let bit_count = self.bit_count & 63;
                 // Bits of the word past the whole bytes taken are the input
                 // bits that follow, which keeps the buffer invariant.
-                self.buffer |= u64::from_le_bytes(*bytes) << self.bit_count;
-                let taken = (63 - self.bit_count) / 8;
-                self.byte_pos += taken as usize;
-                self.bit_count += taken * 8;
+                self.buffer |= u64::from_le_bytes(*bytes) << bit_count;
+                self.rest = &self.rest[((63 - bit_count) / 8) as usize..];
+                // Adds the bits of the bytes taken, which leaves 56 to 63.
+                self.bit_count = bit_count | 0x38;
             }
             None => {
                 let (taken, buffer, bit_count) =
-                    refill_tail(&self.input[self.byte_pos..], self.buffer, self.bit_count);
-                self.byte_pos += taken;
+                    refill_tail(self.rest, self.buffer, self.bit_count);
+                self.rest = &self.rest[taken..];
                 self.buffer = buffer;
                 self.bit_count = bit_count;
             }
@@ -245,15 +259,14 @@ impl<'a> BitReader<'a> {
             .input
             .get(start..end)
             .ok_or(BurliError::Format("unexpected end of Brotli input"))?;
-        self.byte_pos = end;
+        self.rest = &self.input[end..];
         self.buffer = 0;
         self.bit_count = 0;
         Ok(bytes)
     }
 
     pub fn remaining_bits_are_zero(&self) -> bool {
-        self.buffer & low_mask(self.bit_count as u8) == 0
-            && self.input[self.byte_pos..].iter().all(|&b| b == 0)
+        self.buffer & low_mask(self.bit_count as u8) == 0 && self.rest.iter().all(|&b| b == 0)
     }
 }
 
@@ -431,8 +444,8 @@ impl BitWriter {
     }
 
     /// Runs `write` with a [`BitSink`] for exactly `total_bits` more bits.
-    /// The output grows once up front, and the sink keeps the bit state in
-    /// locals, which a loop of writes through `&mut self` cannot.
+    /// The output grows once up front, and the sink keeps the bit position
+    /// in a local, which a loop of writes through `&mut self` cannot.
     ///
     /// # Panics
     ///
@@ -444,25 +457,102 @@ impl BitWriter {
         total_bits: usize,
         write: impl FnOnce(&mut BitSink<'_>) -> R,
     ) -> R {
-        let start = self.output.len();
-        let end_bits = usize::from(self.bit_count) + total_bits;
-        // Every write stores 8 bytes, so keep 8 bytes of slack at the end.
-        self.output.resize(start + end_bits / 8 + 8, 0);
-        let mut sink = BitSink {
-            out: &mut self.output[start..],
-            pos: 0,
-            buffer: self.bit_buffer,
-            count: self.bit_count,
-        };
+        let (start, mut sink) = self.open_sink(total_bits);
         let result = write(&mut sink);
-        let (pos, buffer, count) = (sink.pos, sink.buffer, sink.count);
-        debug_assert_eq!(pos, end_bits / 8);
-        debug_assert_eq!(usize::from(count), end_bits % 8);
-        self.output.truncate(start + pos);
-        self.bit_buffer = buffer;
-        self.bit_count = count;
-        self.bit_len = self.bit_len.wrapping_add(total_bits);
+        let bit_pos = sink.bit_pos;
+        debug_assert_eq!(bit_pos, usize::from(self.bit_count) + total_bits);
+        self.close_sink(start, bit_pos);
         result
+    }
+
+    /// Runs `write` with a [`BitSink`] that has room for `max_bits` more
+    /// bits, and keeps what it wrote. For writers that know only a bound,
+    /// which check [`BitSink::has_room`] before they write. `write` owns the
+    /// sink and hands it back, so its state can stay in registers.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn write_bits_up_to<R>(
+        &mut self,
+        max_bits: usize,
+        write: impl for<'s> FnOnce(BitSink<'s>) -> (BitSink<'s>, R),
+    ) -> R {
+        let (start, sink) = self.open_sink(max_bits);
+        let (sink, result) = write(sink);
+        let bit_pos = sink.bit_pos;
+        self.close_sink(start, bit_pos);
+        result
+    }
+
+    /// Runs `write` on zeroed room for `max_bits` more bits, for writers that
+    /// keep their own bit buffer. The first byte of the room holds the pending
+    /// bits, and `write` takes the bit position after them. It returns the bit
+    /// position after what it wrote, at most `max_bits` further, and must leave
+    /// the bits past that position zero.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn write_bits_raw<R>(
+        &mut self,
+        max_bits: usize,
+        write: impl FnOnce(&mut [u8], usize) -> (usize, R),
+    ) -> R {
+        let start_bits = usize::from(self.bit_count);
+        let (start, sink) = self.open_sink(max_bits);
+        let (bit_pos, result) = write(sink.out, start_bits);
+        assert!((start_bits..=start_bits + max_bits).contains(&bit_pos));
+        self.close_sink(start, bit_pos);
+        result
+    }
+
+    /// Zero-fills room for `max_bits` more bits and moves the pending bits
+    /// into it, for a [`BitSink`] that starts on them.
+    #[inline(always)]
+    fn open_sink(&mut self, max_bits: usize) -> (usize, BitSink<'_>) {
+        let start = self.output.len();
+        let start_bits = usize::from(self.bit_count);
+        // Every write stores 8 bytes, so keep 8 bytes of slack at the end.
+        self.output
+            .resize(start + (start_bits + max_bits).div_ceil(8) + 8, 0);
+        // Fewer than 8 bits wait between writes.
+        debug_assert!(start_bits < 8);
+        self.output[start] = self.bit_buffer as u8;
+        let sink = BitSink {
+            out: &mut self.output[start..],
+            bit_pos: start_bits,
+        };
+        (start, sink)
+    }
+
+    /// Keeps the bytes a sink opened at `start` filled up to `bit_pos`, and
+    /// takes its last partial byte back as pending bits.
+    #[inline(always)]
+    fn close_sink(&mut self, start: usize, bit_pos: usize) {
+        let end = start + bit_pos / 8;
+        let start_bits = usize::from(self.bit_count);
+        self.bit_buffer = u64::from(self.output[end]);
+        self.bit_count = (bit_pos % 8) as u8;
+        self.output.truncate(end);
+        self.bit_len = self.bit_len.wrapping_add(bit_pos - start_bits);
+    }
+
+    /// The current position, for [`Self::rewind`].
+    #[doc(hidden)]
+    pub fn mark(&self) -> BitMark {
+        BitMark {
+            len: self.output.len(),
+            bit_buffer: self.bit_buffer,
+            bit_count: self.bit_count,
+            bit_len: self.bit_len,
+        }
+    }
+
+    /// Drops everything written since `mark`.
+    #[doc(hidden)]
+    pub fn rewind(&mut self, mark: BitMark) {
+        debug_assert!(mark.len <= self.output.len());
+        self.output.truncate(mark.len);
+        self.bit_buffer = mark.bit_buffer;
+        self.bit_count = mark.bit_count;
+        self.bit_len = mark.bit_len;
     }
 
     #[inline(always)]
@@ -515,7 +605,12 @@ impl BitWriter {
             self.output.push(self.bit_buffer as u8);
         }
         let before = output.len();
-        output.extend_from_slice(&self.output);
+        if output.capacity() == 0 {
+            // Hand over the buffer rather than copy it into a new one.
+            core::mem::swap(output, &mut self.output);
+        } else {
+            output.extend_from_slice(&self.output);
+        }
         self.clear();
         output.len() - before
     }
@@ -525,15 +620,26 @@ impl BitWriter {
     }
 }
 
-/// LSB-first bit output into space that [`BitWriter::write_bits_with`]
-/// reserved.
+/// A [`BitWriter`] position, from [`BitWriter::mark`].
+#[cfg(feature = "alloc")]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub struct BitMark {
+    len: usize,
+    bit_buffer: u64,
+    bit_count: u8,
+    bit_len: usize,
+}
+
+/// LSB-first bit output into zeroed space that
+/// [`BitWriter::write_bits_with`] reserved. Like Google's `BrotliWriteBits`,
+/// a write ORs its bits into the partial byte in memory and stores 8 bytes,
+/// so the only state is the bit position.
 #[cfg(feature = "alloc")]
 #[doc(hidden)]
 pub struct BitSink<'a> {
     out: &'a mut [u8],
-    pos: usize,
-    buffer: u64,
-    count: u8,
+    bit_pos: usize,
 }
 
 #[cfg(feature = "alloc")]
@@ -544,14 +650,19 @@ impl BitSink<'_> {
     pub fn write(&mut self, width: u8, value: u64) {
         debug_assert!(width <= MAX_BITS_PER_OP);
         debug_assert!(width == 0 || value < (1_u64 << width));
-        self.buffer |= value << self.count;
-        self.count += width;
-        let byte_count = self.count / 8;
-        self.out[self.pos..self.pos + 8].copy_from_slice(&self.buffer.to_le_bytes());
-        self.pos += usize::from(byte_count);
-        // `count` stays below 64, so the shift is at most 56.
-        self.buffer >>= byte_count * 8;
-        self.count -= byte_count * 8;
+        let pos = self.bit_pos / 8;
+        let bytes: &mut [u8; 8] = (&mut self.out[pos..pos + 8]).try_into().unwrap();
+        // The bytes past the partial one are still zero.
+        let bits = u64::from(bytes[0]) | (value << (self.bit_pos % 8));
+        *bytes = bits.to_le_bytes();
+        self.bit_pos += usize::from(width);
+    }
+
+    /// Whether `bits` more bits fit in the reserved space.
+    #[inline(always)]
+    pub fn has_room(&self, bits: usize) -> bool {
+        // The last 8 bytes are slack for the 8-byte stores.
+        self.bit_pos + bits <= (self.out.len() - 8) * 8
     }
 }
 
@@ -597,6 +708,49 @@ mod tests {
         assert_eq!(reader.read_bits(3).unwrap(), 0b111);
         reader.read_zero_padding_to_byte().unwrap();
         assert_eq!(reader.read_aligned_bytes(2).unwrap(), b"ok");
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn raw_writes_keep_bits_in_order() {
+        let writes: Vec<(u8, u64)> = (0..500_u64)
+            .map(|index| {
+                let width = (index * 7 % 57) as u8;
+                let value = index.wrapping_mul(0x9e37_79b9_7f4a_7c15) & low_mask(width);
+                (width, value)
+            })
+            .collect();
+        let total = writes
+            .iter()
+            .map(|&(width, _)| usize::from(width))
+            .sum::<usize>();
+        for pending in 0..8 {
+            let mut expected = BitWriter::new();
+            let mut raw = BitWriter::new();
+            for writer in [&mut expected, &mut raw] {
+                writer
+                    .write_bits(pending, 0x55 & low_mask(pending))
+                    .unwrap();
+            }
+            for &(width, value) in &writes {
+                expected.write_bits(width, value).unwrap();
+            }
+            let room = raw.write_bits_raw(total + 100, |out, mut bit_pos| {
+                for &(width, value) in &writes {
+                    let bytes = &mut out[bit_pos / 8..bit_pos / 8 + 8];
+                    let bits = u64::from_le_bytes(bytes.try_into().unwrap());
+                    bytes.copy_from_slice(&(bits | (value << (bit_pos % 8))).to_le_bytes());
+                    bit_pos += usize::from(width);
+                }
+                (bit_pos, out.len())
+            });
+            // Room rounds up to whole bytes, with 8 bytes of slack.
+            assert_eq!(room, (usize::from(pending) + total + 100).div_ceil(8) + 8);
+            raw.write_bits(5, 0b10110).unwrap();
+            expected.write_bits(5, 0b10110).unwrap();
+            assert_eq!(raw.written_bits(), expected.written_bits());
+            assert_eq!(raw.into_bytes(), expected.into_bytes(), "{pending}");
+        }
     }
 
     #[cfg(feature = "alloc")]

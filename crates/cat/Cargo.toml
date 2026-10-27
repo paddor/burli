@@ -18,6 +18,8 @@ workspace = true
 default = ["std"]
 std = ["alloc", "burli-core/std", "burli-encode/std", "burli-decode/std"]
 alloc = ["burli-core/alloc", "burli-encode/alloc", "burli-decode/alloc"]
+# No effect today: every build is safe Rust. Kept so existing feature lists
+# build, and to keep any future `unsafe` out of builds that enable it.
 paranoid = ["burli-core/paranoid", "burli-encode/paranoid", "burli-decode/paranoid"]
 
 [dependencies]

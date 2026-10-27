@@ -51,27 +51,6 @@ jobs:
       - run: cargo check -p burli-decode --no-default-features
       - run: cargo check -p burli --no-default-features
 
-  paranoid:
-    name: paranoid (pure safe Rust)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: install C Brotli libs
-        run: |
-          sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
-            -exec sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' {} +
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
-          timeout --foreground 180s sudo apt-get \
-            -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 \
-            -o Acquire::https::Timeout=30 \
-            update
-          sudo apt-get install -y libbrotli-dev
-      - run: cargo test --workspace --all-targets --features paranoid
-      - run: cargo clippy --workspace --all-targets --features paranoid -- -D warnings
-
   lint:
     name: fmt + clippy + docs
     runs-on: ubuntu-latest
@@ -98,7 +77,7 @@ jobs:
 
   ci-success:
     name: CI success
-    needs: [test, paranoid, lint]
+    needs: [test, lint]
     runs-on: ubuntu-latest
     if: always()
     steps:

@@ -738,88 +738,159 @@ fn uppercase_one(bytes: &mut [u8]) -> Option<usize> {
     Some(3)
 }
 
-fn prefix_suffix_bytes(offset: u8) -> &'static [u8] {
-    let bytes = &kPrefixSuffix[usize::from(offset)..];
-    let len = bytes.iter().position(|&byte| byte == 0).unwrap_or(0);
-    &bytes[..len]
+/// Longest prefix or suffix, in bytes.
+const AFFIX_BYTES: usize = 8;
+
+/// Longest dictionary word, in bytes.
+const WORD_BYTES: usize = 24;
+
+/// Bytes a transformed word writes with fixed-size windows: a prefix
+/// window, the word window after a prefix of at most [`AFFIX_BYTES`], and a
+/// suffix window after the word.
+const WINDOW_BYTES: usize = 2 * AFFIX_BYTES + WORD_BYTES;
+
+/// A transform with its prefix and suffix inline, so applying it needs no
+/// scan for their ends.
+#[derive(Clone, Copy)]
+struct PackedTransform {
+    prefix: [u8; AFFIX_BYTES],
+    suffix: [u8; AFFIX_BYTES],
+    prefix_len: u8,
+    suffix_len: u8,
+    transform: u8,
 }
 
-fn push_prefix_suffix(output: &mut alloc::vec::Vec<u8>, offset: u8) {
-    output.extend_from_slice(prefix_suffix_bytes(offset));
-}
-
-fn prefix_suffix_len(offset: u8) -> usize {
-    prefix_suffix_bytes(offset).len()
-}
-
-pub(crate) fn transformed_dictionary_word_len(word_len: usize, transform: usize) -> Option<usize> {
-    let transform = kTransforms.get(transform)?;
-    if transform.prefix_id == kPFix_EMPTY
-        && transform.transform == kIdentity
-        && transform.suffix_id == kPFix_EMPTY
-    {
-        return Some(word_len);
+/// The affix at `offset` in [`kPrefixSuffix`], padded with zeros. A longer
+/// affix fails to compile.
+const fn affix(offset: u8) -> ([u8; AFFIX_BYTES], u8) {
+    let mut bytes = [0; AFFIX_BYTES];
+    let mut len = 0;
+    while kPrefixSuffix[offset as usize + len] != 0 {
+        bytes[len] = kPrefixSuffix[offset as usize + len];
+        len += 1;
     }
+    (bytes, len as u8)
+}
 
+static kPackedTransforms: [PackedTransform; kNumTransforms as usize] = {
+    let mut packed = [PackedTransform {
+        prefix: [0; AFFIX_BYTES],
+        suffix: [0; AFFIX_BYTES],
+        prefix_len: 0,
+        suffix_len: 0,
+        transform: 0,
+    }; kNumTransforms as usize];
+    let mut index = 0;
+    while index < packed.len() {
+        let (prefix, prefix_len) = affix(kTransforms[index].prefix_id);
+        let (suffix, suffix_len) = affix(kTransforms[index].suffix_id);
+        packed[index] = PackedTransform {
+            prefix,
+            suffix,
+            prefix_len,
+            suffix_len,
+            transform: kTransforms[index].transform,
+        };
+        index += 1;
+    }
+    packed
+};
+
+/// The part of a `word_len`-byte word that `transform` keeps, after its
+/// omit-first or omit-last step.
+#[inline(always)]
+fn kept_range(transform: u8, word_len: usize) -> core::ops::Range<usize> {
     let mut start = 0_usize;
     let mut end = word_len;
-    if transform.transform >= kOmitFirst1 {
-        start = usize::from(transform.transform - (kOmitFirst1 - 1)).min(end);
+    if transform >= kOmitFirst1 {
+        start = usize::from(transform - (kOmitFirst1 - 1)).min(end);
     }
-    if transform.transform <= kOmitLast9 {
-        end = end.saturating_sub(usize::from(transform.transform));
+    if transform <= kOmitLast9 {
+        end = end.saturating_sub(usize::from(transform));
     }
-    if start > end {
-        start = end;
-    }
-
-    prefix_suffix_len(transform.prefix_id)
-        .checked_add(end - start)?
-        .checked_add(prefix_suffix_len(transform.suffix_id))
+    start.min(end)..end
 }
 
-pub(crate) fn transform_dictionary_word(
-    output: &mut alloc::vec::Vec<u8>,
-    word: &[u8],
-    transform: usize,
-) -> Option<()> {
-    let transform = kTransforms.get(transform)?;
-    if transform.prefix_id == kPFix_EMPTY
-        && transform.transform == kIdentity
-        && transform.suffix_id == kPFix_EMPTY
-    {
-        output.extend_from_slice(word);
-        return Some(());
+/// A dictionary word under its transform, ready to write.
+pub(crate) struct TransformedWord<'a> {
+    transform: &'static PackedTransform,
+    /// The dictionary from the word on.
+    tail: &'a [u8],
+    /// The part of the word that the transform keeps.
+    kept: core::ops::Range<usize>,
+}
+
+impl<'a> TransformedWord<'a> {
+    /// The `word_len`-byte word at the start of `tail` under `transform`,
+    /// or `None` for an unknown transform.
+    #[inline(always)]
+    pub(crate) fn new(tail: &'a [u8], word_len: usize, transform: usize) -> Option<Self> {
+        let transform = kPackedTransforms.get(transform)?;
+        Some(Self {
+            transform,
+            tail,
+            kept: kept_range(transform.transform, word_len),
+        })
     }
 
-    push_prefix_suffix(output, transform.prefix_id);
-
-    let mut start = 0_usize;
-    let mut end = word.len();
-    if transform.transform >= kOmitFirst1 {
-        start = usize::from(transform.transform - (kOmitFirst1 - 1)).min(end);
-    }
-    if transform.transform <= kOmitLast9 {
-        end = end.saturating_sub(usize::from(transform.transform));
-    }
-    if start > end {
-        start = end;
+    #[inline(always)]
+    pub(crate) fn len(&self) -> usize {
+        usize::from(self.transform.prefix_len)
+            + self.kept.len()
+            + usize::from(self.transform.suffix_len)
     }
 
-    let uppercase_start = output.len();
-    output.extend_from_slice(&word[start..end]);
-    let uppercase_len = output.len() - uppercase_start;
-    if transform.transform == kUppercaseFirst && uppercase_len != 0 {
-        uppercase_one(&mut output[uppercase_start..])?;
-    } else if transform.transform == kUppercaseAll {
-        let mut offset = 0_usize;
-        while offset < uppercase_len {
-            offset += uppercase_one(&mut output[uppercase_start + offset..])?;
+    /// Writes the word to `output[pos..]`, which holds at least
+    /// [`Self::len`] bytes.
+    ///
+    /// With room for them, the prefix, word, and suffix move as fixed-size
+    /// windows. Each window runs past its part into bytes that the next part
+    /// or later output replaces.
+    #[inline(always)]
+    pub(crate) fn write(&self, output: &mut [u8], pos: usize) -> Option<()> {
+        let transform = self.transform;
+        let kept = self.kept.clone();
+        let prefix_len = usize::from(transform.prefix_len).min(AFFIX_BYTES);
+        let kept_len = kept.len().min(WORD_BYTES);
+        let window = output
+            .get_mut(pos..)
+            .and_then(<[u8]>::first_chunk_mut::<WINDOW_BYTES>);
+        let source = self
+            .tail
+            .get(kept.start..)
+            .and_then(<[u8]>::first_chunk::<WORD_BYTES>);
+        let kept_out = match (window, source) {
+            (Some(window), Some(source)) => {
+                window[..AFFIX_BYTES].copy_from_slice(&transform.prefix);
+                window[prefix_len..prefix_len + WORD_BYTES].copy_from_slice(source);
+                let suffix_start = prefix_len + kept_len;
+                window[suffix_start..suffix_start + AFFIX_BYTES].copy_from_slice(&transform.suffix);
+                &mut window[prefix_len..suffix_start]
+            }
+            _ => {
+                let prefix = &transform.prefix[..prefix_len];
+                let suffix =
+                    &transform.suffix[..usize::from(transform.suffix_len).min(AFFIX_BYTES)];
+                let rest = output.get_mut(pos..)?;
+                let (prefix_out, rest) = rest.split_at_mut_checked(prefix.len())?;
+                prefix_out.copy_from_slice(prefix);
+                let (kept_out, rest) = rest.split_at_mut_checked(kept.len())?;
+                kept_out.copy_from_slice(self.tail.get(kept)?);
+                rest.get_mut(..suffix.len())?.copy_from_slice(suffix);
+                kept_out
+            }
+        };
+
+        if transform.transform == kUppercaseFirst && !kept_out.is_empty() {
+            uppercase_one(kept_out)?;
+        } else if transform.transform == kUppercaseAll {
+            let mut offset = 0_usize;
+            while offset < kept_out.len() {
+                offset += uppercase_one(&mut kept_out[offset..])?;
+            }
         }
+        Some(())
     }
-
-    push_prefix_suffix(output, transform.suffix_id);
-    Some(())
 }
 
 #[cfg(test)]

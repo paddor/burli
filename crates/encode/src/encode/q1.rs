@@ -7,17 +7,17 @@ use burli_core::{
 
 use super::{
     COMMAND_ALPHABET_SIZE, DenseSymbolCode, DistanceRing, LITERAL_ALPHABET_SIZE,
-    MAX_META_BLOCK_SIZE, PrefixCodeScratch, append_pending_bits, match_len, read_u64_le, tune,
+    MAX_META_BLOCK_SIZE, PrefixCodeScratch, match_len, read_u64_le, tune,
     write_block_and_context_header,
     write_fast_dense_prefix_code_array_from_frequencies_with_scratch, write_meta_block_len,
-    write_q1_internal_balanced_command_static_distance_prefix_codes,
-    write_q1_internal_command_prefix_codes, write_q1_internal_fast_command_prefix_codes,
+    write_q1_internal_command_prefix_codes,
 };
 
 const MAX_TABLE_SIZE: usize = 1 << 17;
 const MIN_TABLE_SIZE: usize = 256;
 const MAX_DISTANCE: usize = (1 << 18) - 16;
-const INPUT_MARGIN_BYTES: usize = 16;
+/// Matchers stop this many bytes before the end of their input.
+pub(super) const INPUT_MARGIN_BYTES: usize = 16;
 const HASH_MUL: u64 = 0x1e35_a7bd;
 const HASH_MUL_32: u32 = 0x1e35_a7bd;
 const NO_POSITION: u32 = u32::MAX;
@@ -55,8 +55,7 @@ struct LiteralSpan {
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Workspace {
-    table: Vec<u32>,
-    small_table: Vec<u16>,
+    pub(super) table: Vec<u32>,
     batch: Batch,
     prefix: PrefixCodeScratch,
 }
@@ -284,131 +283,6 @@ impl Batch {
         Ok(())
     }
 
-    pub(super) fn write_q0(
-        &self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        block_len: usize,
-        prefix: &mut PrefixCodeScratch,
-        fast_literal_prefix: bool,
-    ) -> Result<(), CompressError> {
-        if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
-            return Err(BurliError::Format("invalid compressed Brotli block size"));
-        }
-
-        write_meta_block_len(writer, block_len)?;
-        write_block_and_context_header(writer)?;
-        let literal_code_map = self.write_literal_prefix(writer, prefix, fast_literal_prefix)?;
-        let mut command_frequencies = self.command_frequencies;
-        add_q0_command_guards(&mut command_frequencies);
-        let command_code_map =
-            write_q1_internal_command_prefix_codes(writer, &command_frequencies, prefix)?;
-
-        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
-        Ok(())
-    }
-
-    pub(super) fn write_q0_balanced_literal_command_prefixes(
-        &self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        block_len: usize,
-        prefix: &mut PrefixCodeScratch,
-    ) -> Result<(), CompressError> {
-        if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
-            return Err(BurliError::Format("invalid compressed Brotli block size"));
-        }
-
-        write_meta_block_len(writer, block_len)?;
-        write_block_and_context_header(writer)?;
-        let literal_code_map = self.write_balanced_literal_prefix(writer, prefix)?;
-        let mut command_frequencies = self.command_frequencies;
-        add_q0_command_guards(&mut command_frequencies);
-        let command_code_map = write_q1_internal_balanced_command_static_distance_prefix_codes(
-            writer,
-            &command_frequencies,
-            prefix,
-        )?;
-
-        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
-        Ok(())
-    }
-
-    pub(super) fn write_q0_balanced_command_prefixes(
-        &self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        block_len: usize,
-        prefix: &mut PrefixCodeScratch,
-        fast_literal_prefix: bool,
-    ) -> Result<(), CompressError> {
-        if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
-            return Err(BurliError::Format("invalid compressed Brotli block size"));
-        }
-
-        write_meta_block_len(writer, block_len)?;
-        write_block_and_context_header(writer)?;
-        let literal_code_map = self.write_literal_prefix(writer, prefix, fast_literal_prefix)?;
-        let mut command_frequencies = self.command_frequencies;
-        add_q0_command_guards(&mut command_frequencies);
-        let command_code_map = write_q1_internal_balanced_command_static_distance_prefix_codes(
-            writer,
-            &command_frequencies,
-            prefix,
-        )?;
-
-        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
-        Ok(())
-    }
-
-    pub(super) fn write_q0_fast_command_prefixes(
-        &self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        block_len: usize,
-        prefix: &mut PrefixCodeScratch,
-        fast_literal_prefix: bool,
-    ) -> Result<(), CompressError> {
-        if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
-            return Err(BurliError::Format("invalid compressed Brotli block size"));
-        }
-
-        write_meta_block_len(writer, block_len)?;
-        write_block_and_context_header(writer)?;
-        let literal_code_map = self.write_literal_prefix(writer, prefix, fast_literal_prefix)?;
-        let mut command_frequencies = self.command_frequencies;
-        add_q0_command_guards(&mut command_frequencies);
-        let command_code_map =
-            write_q1_internal_fast_command_prefix_codes(writer, &command_frequencies, prefix)?;
-
-        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
-        Ok(())
-    }
-
-    pub(super) fn write_q0_packed_literal_body(
-        &self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        block_len: usize,
-        prefix: &mut PrefixCodeScratch,
-        fast_literal_prefix: bool,
-    ) -> Result<(), CompressError> {
-        if block_len == 0 || block_len > MAX_META_BLOCK_SIZE {
-            return Err(BurliError::Format("invalid compressed Brotli block size"));
-        }
-
-        write_meta_block_len(writer, block_len)?;
-        write_block_and_context_header(writer)?;
-        let literal_code_map = self.write_literal_prefix(writer, prefix, fast_literal_prefix)?;
-        let mut command_frequencies = self.command_frequencies;
-        add_q0_command_guards(&mut command_frequencies);
-        let command_code_map =
-            write_q1_internal_command_prefix_codes(writer, &command_frequencies, prefix)?;
-
-        write_batch_body(writer, input, self, &literal_code_map, &command_code_map);
-        Ok(())
-    }
-
     fn write_literal_prefix(
         &self,
         writer: &mut BitWriter,
@@ -430,27 +304,6 @@ impl Batch {
             15,
         )
     }
-
-    fn write_balanced_literal_prefix(
-        &self,
-        writer: &mut BitWriter,
-        prefix: &mut PrefixCodeScratch,
-    ) -> Result<[DenseSymbolCode; LITERAL_ALPHABET_SIZE], CompressError> {
-        prefix.reserve_for(LITERAL_ALPHABET_SIZE, COMMAND_ALPHABET_SIZE);
-        super::write_balanced_fast_dense_prefix_code_array_from_frequencies_with_scratch(
-            writer,
-            &self.literal_frequencies,
-            prefix,
-        )
-    }
-}
-
-#[inline(always)]
-fn add_q0_command_guards(command_frequencies: &mut [usize; INTERNAL_COMMAND_ALPHABET_SIZE]) {
-    command_frequencies[1] += 1;
-    command_frequencies[2] += 1;
-    command_frequencies[64] += 1;
-    command_frequencies[84] += 1;
 }
 
 /// Writes every command of `batch` and the literals it inserts.
@@ -570,130 +423,132 @@ fn write_literal_span(
 }
 
 #[inline(always)]
-pub(super) fn append_literal_span_bits_paired(
-    writer: &mut BitWriter,
-    pending_bits: &mut u64,
-    pending_width: &mut u8,
-    literals: &[u8],
-    literal_code_map: &[DenseSymbolCode; LITERAL_ALPHABET_SIZE],
-) {
-    let (pairs, remainder) = literals.as_chunks::<2>();
-    for pair in pairs {
-        let first = literal_code_map[usize::from(pair[0])];
-        let second = literal_code_map[usize::from(pair[1])];
-        debug_assert!(first.len != u8::MAX);
-        debug_assert!(second.len != u8::MAX);
-        append_literal_pair_bits(
-            writer,
-            pending_bits,
-            pending_width,
-            first,
-            second,
-            first.len + second.len,
-        );
-    }
-
-    if remainder.len() == 1 {
-        let literal = remainder[0];
-        let literal_code = literal_code_map[usize::from(literal)];
-        debug_assert!(literal_code.len != u8::MAX);
-        append_pending_bits(
-            writer,
-            pending_bits,
-            pending_width,
-            literal_code.len,
-            u64::from(literal_code.bits),
-        );
-    }
-}
-
-#[inline(always)]
-fn append_literal_pair_bits(
-    writer: &mut BitWriter,
-    pending_bits: &mut u64,
-    pending_width: &mut u8,
-    first: DenseSymbolCode,
-    second: DenseSymbolCode,
-    width: u8,
-) {
-    let bits = u64::from(first.bits) | (u64::from(second.bits) << first.len);
-    append_pending_bits(writer, pending_bits, pending_width, width, bits);
-}
-
-#[inline(always)]
 fn log2_floor(value: usize) -> usize {
     debug_assert!(value != 0);
     usize::BITS as usize - 1 - value.leading_zeros() as usize
+}
+
+/// Where a q1 collector puts the commands it finds.
+pub(super) trait Sink {
+    /// Takes the literals after the last copy.
+    fn push_literals(&mut self, input: &[u8], insert_start: usize, insert_len: usize);
+
+    /// Takes `insert_len` literals from `insert_start`, then a copy of
+    /// `copy_len` bytes from `distance` back. `last_distance` is the
+    /// distance of the copy before, if any.
+    fn push_copy(
+        &mut self,
+        input: &[u8],
+        insert_start: usize,
+        insert_len: usize,
+        copy_len: usize,
+        distance: usize,
+        last_distance: usize,
+    );
+}
+
+impl Sink for Batch {
+    #[inline(always)]
+    fn push_literals(&mut self, input: &[u8], insert_start: usize, insert_len: usize) {
+        Self::push_literals(self, input, insert_start, insert_len);
+    }
+
+    #[inline(always)]
+    fn push_copy(
+        &mut self,
+        input: &[u8],
+        insert_start: usize,
+        insert_len: usize,
+        copy_len: usize,
+        distance: usize,
+        last_distance: usize,
+    ) {
+        Self::push_copy(
+            self,
+            input,
+            insert_start,
+            insert_len,
+            copy_len,
+            distance,
+            last_distance,
+        );
+    }
+}
+
+/// Collects the commands of `input`, of at most 64 KiB, into `sink`, with
+/// a hash table by its size. Copies reach back at most
+/// `max_backward_distance`, or `input.len()` less [`INPUT_MARGIN_BYTES`].
+pub(super) fn collect_short<S: Sink>(
+    input: &[u8],
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+    sink: &mut S,
+) {
+    debug_assert!(input.len() <= 1 << 16);
+    if input.len() < INPUT_MARGIN_BYTES {
+        push_literals_to_batch(sink, input, 0, input.len());
+        return;
+    }
+    const SKIP_START: usize = tune::Q1_TWO_PASS_SKIP_START;
+    match table_size(input.len()) {
+        256 => collect_with_stack_u16_table::<8, 256, SKIP_START, true, S>(
+            sink,
+            input,
+            max_backward_distance,
+        ),
+        512 => collect_with_stack_u16_table::<9, 512, SKIP_START, true, S>(
+            sink,
+            input,
+            max_backward_distance,
+        ),
+        1024 => collect_with_stack_u16_table::<10, 1024, SKIP_START, true, S>(
+            sink,
+            input,
+            max_backward_distance,
+        ),
+        2048 => collect_with_stack_u16_table::<11, 2048, SKIP_START, true, S>(
+            sink,
+            input,
+            max_backward_distance,
+        ),
+        4096 => collect_with_stack_u16_table::<12, 4096, SKIP_START, true, S>(
+            sink,
+            input,
+            max_backward_distance,
+        ),
+        8192 => collect_with_stack_u16_table::<13, 8192, SKIP_START, true, S>(
+            sink,
+            input,
+            max_backward_distance,
+        ),
+        16384 => collect_with_stack_u16_table::<14, 16384, SKIP_START, true, S>(
+            sink,
+            input,
+            max_backward_distance,
+        ),
+        32768 => collect_with_stack_u16_table::<15, 32768, SKIP_START, true, S>(
+            sink,
+            input,
+            max_backward_distance,
+        ),
+        _ => {
+            let table = &mut workspace.table;
+            table.clear();
+            table.resize(1 << 16, 0);
+            collect_with_u32_table_m6::<16, { tune::Q1_DEFAULT_U32_SKIP_START }, true, true, S>(
+                sink,
+                input,
+                max_backward_distance,
+                table,
+            );
+        }
+    }
 }
 
 impl Default for Batch {
     fn default() -> Self {
         Self::with_capacity(0)
     }
-}
-
-pub(super) fn collect<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> Result<&'a Batch, CompressError> {
-    workspace.collect(input, max_backward_distance)
-}
-
-pub(super) fn collect_with_64k_medium_skip<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_with_64k_medium_skip(input, max_backward_distance)
-}
-
-pub(super) fn collect_with_64k_fast_skip<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_with_64k_fast_skip(input, max_backward_distance)
-}
-
-pub(super) fn collect_q0_2k_fast_no_last<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_q0_2k_fast_no_last(input, max_backward_distance)
-}
-
-pub(super) fn collect_q0_4k_no_last<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_q0_4k_no_last(input, max_backward_distance)
-}
-
-pub(super) fn collect_q0_8k_default<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_q0_8k_default(input, max_backward_distance)
-}
-
-pub(super) fn collect_q0_16k_medium_no_last<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_q0_16k_medium_no_last(input, max_backward_distance)
-}
-
-pub(super) fn collect_q0_32k_medium<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_q0_32k_medium(input, max_backward_distance)
 }
 
 pub(super) fn collect_with_64k_sparse_stride<'a>(
@@ -704,38 +559,6 @@ pub(super) fn collect_with_64k_sparse_stride<'a>(
     workspace.collect_with_64k_sparse_stride(input, max_backward_distance)
 }
 
-pub(super) fn collect_with_32k_dense_skip<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_with_32k_dense_skip(input, max_backward_distance)
-}
-
-pub(super) fn collect_with_32k_u16_skip<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_with_32k_u16_skip(input, max_backward_distance)
-}
-
-pub(super) fn collect_with_64k_u16_skip<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_with_64k_u16_skip(input, max_backward_distance)
-}
-
-pub(super) fn collect_with_32k_faster_skip<'a>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &'a mut Workspace,
-) -> &'a Batch {
-    workspace.collect_with_32k_faster_skip(input, max_backward_distance)
-}
-
 pub(super) fn write(
     writer: &mut BitWriter,
     input: &[u8],
@@ -744,55 +567,6 @@ pub(super) fn write(
     fast_literal_prefix: bool,
 ) -> Result<(), CompressError> {
     workspace.write(writer, input, block_len, fast_literal_prefix)
-}
-
-pub(super) fn write_q0(
-    writer: &mut BitWriter,
-    input: &[u8],
-    block_len: usize,
-    workspace: &mut Workspace,
-    fast_literal_prefix: bool,
-) -> Result<(), CompressError> {
-    workspace.write_q0(writer, input, block_len, fast_literal_prefix)
-}
-
-pub(super) fn write_q0_balanced_literal_command_prefixes(
-    writer: &mut BitWriter,
-    input: &[u8],
-    block_len: usize,
-    workspace: &mut Workspace,
-) -> Result<(), CompressError> {
-    workspace.write_q0_balanced_literal_command_prefixes(writer, input, block_len)
-}
-
-pub(super) fn write_q0_balanced_command_prefixes(
-    writer: &mut BitWriter,
-    input: &[u8],
-    block_len: usize,
-    workspace: &mut Workspace,
-    fast_literal_prefix: bool,
-) -> Result<(), CompressError> {
-    workspace.write_q0_balanced_command_prefixes(writer, input, block_len, fast_literal_prefix)
-}
-
-pub(super) fn write_q0_fast_command_prefixes(
-    writer: &mut BitWriter,
-    input: &[u8],
-    block_len: usize,
-    workspace: &mut Workspace,
-    fast_literal_prefix: bool,
-) -> Result<(), CompressError> {
-    workspace.write_q0_fast_command_prefixes(writer, input, block_len, fast_literal_prefix)
-}
-
-pub(super) fn write_q0_packed_literal_body(
-    writer: &mut BitWriter,
-    input: &[u8],
-    block_len: usize,
-    workspace: &mut Workspace,
-    fast_literal_prefix: bool,
-) -> Result<(), CompressError> {
-    workspace.write_q0_packed_literal_body(writer, input, block_len, fast_literal_prefix)
 }
 
 impl Workspace {
@@ -835,381 +609,6 @@ impl Workspace {
         )
     }
 
-    fn write_q0(
-        &mut self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        block_len: usize,
-        fast_literal_prefix: bool,
-    ) -> Result<(), CompressError> {
-        self.batch.write_q0(
-            writer,
-            input,
-            block_len,
-            &mut self.prefix,
-            fast_literal_prefix,
-        )
-    }
-
-    fn write_q0_balanced_literal_command_prefixes(
-        &mut self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        block_len: usize,
-    ) -> Result<(), CompressError> {
-        self.batch.write_q0_balanced_literal_command_prefixes(
-            writer,
-            input,
-            block_len,
-            &mut self.prefix,
-        )
-    }
-
-    fn write_q0_balanced_command_prefixes(
-        &mut self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        block_len: usize,
-        fast_literal_prefix: bool,
-    ) -> Result<(), CompressError> {
-        self.batch.write_q0_balanced_command_prefixes(
-            writer,
-            input,
-            block_len,
-            &mut self.prefix,
-            fast_literal_prefix,
-        )
-    }
-
-    fn write_q0_fast_command_prefixes(
-        &mut self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        block_len: usize,
-        fast_literal_prefix: bool,
-    ) -> Result<(), CompressError> {
-        self.batch.write_q0_fast_command_prefixes(
-            writer,
-            input,
-            block_len,
-            &mut self.prefix,
-            fast_literal_prefix,
-        )
-    }
-
-    fn write_q0_packed_literal_body(
-        &mut self,
-        writer: &mut BitWriter,
-        input: &[u8],
-        block_len: usize,
-        fast_literal_prefix: bool,
-    ) -> Result<(), CompressError> {
-        self.batch.write_q0_packed_literal_body(
-            writer,
-            input,
-            block_len,
-            &mut self.prefix,
-            fast_literal_prefix,
-        )
-    }
-
-    fn collect(
-        &mut self,
-        input: &[u8],
-        max_backward_distance: usize,
-    ) -> Result<&Batch, CompressError> {
-        self.reset(input.len());
-
-        if input.len() < INPUT_MARGIN_BYTES {
-            self.push_literals(input, 0, input.len());
-            return Ok(&self.batch);
-        }
-
-        let table_size = table_size(input.len());
-        if self.collect_stack_u16_for_size::<{ tune::Q1_DEFAULT_U16_SKIP_START }>(
-            input,
-            max_backward_distance,
-            table_size,
-        ) {
-            return Ok(&self.batch);
-        }
-
-        let table_bits = table_size.trailing_zeros() as usize;
-        if table_size <= 32768 {
-            if self.small_table.len() != table_size {
-                self.small_table.resize(table_size, NO_POSITION_16);
-            } else {
-                self.small_table.fill(NO_POSITION_16);
-            }
-            collect_with_u16_table(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-                &mut self.small_table,
-                table_bits,
-            )?;
-            return Ok(&self.batch);
-        }
-
-        if self.table.len() != table_size {
-            self.table.resize(table_size, 0);
-        } else {
-            self.table.fill(0);
-        }
-
-        let min_match = if table_bits <= 15 { 4 } else { 6 };
-        match table_bits {
-            16 => {
-                collect_with_u32_table_m6::<16, { tune::Q1_DEFAULT_U32_SKIP_START }, true, true>(
-                    &mut self.batch,
-                    input,
-                    max_backward_distance,
-                    &mut self.table,
-                );
-                return Ok(&self.batch);
-            }
-            17 => {
-                collect_with_u32_table_m6::<17, { tune::Q1_DEFAULT_U32_SKIP_START }, true, true>(
-                    &mut self.batch,
-                    input,
-                    max_backward_distance,
-                    &mut self.table,
-                );
-                return Ok(&self.batch);
-            }
-            _ => {}
-        }
-        let max_distance = max_backward_distance.min(MAX_DISTANCE);
-        let len_limit = input
-            .len()
-            .saturating_sub(min_match)
-            .min(input.len().saturating_sub(INPUT_MARGIN_BYTES));
-        if len_limit <= 1 {
-            self.push_literals(input, 0, input.len());
-            return Ok(&self.batch);
-        }
-
-        let mut pos = 1;
-        let mut insert_start = 0;
-        let mut next_hash = hash(input, pos, table_bits, min_match);
-        let mut last_distance = NO_LAST_DISTANCE;
-
-        while let Some(mut candidate) = self.scan_to_match(
-            input,
-            &mut pos,
-            &mut next_hash,
-            len_limit,
-            max_distance,
-            table_bits,
-            min_match,
-            last_distance,
-        ) {
-            loop {
-                let distance = pos - candidate;
-                let max_copy_len =
-                    (MAX_META_BLOCK_SIZE - (pos - insert_start)).min(input.len() - pos);
-                if max_copy_len < min_match {
-                    break;
-                }
-                let copy_len = min_match
-                    + match_len(
-                        input,
-                        candidate + min_match,
-                        pos + min_match,
-                        max_copy_len - min_match,
-                    );
-
-                self.batch.push_copy(
-                    input,
-                    insert_start,
-                    pos - insert_start,
-                    copy_len,
-                    distance,
-                    last_distance,
-                );
-                pos += copy_len;
-                insert_start = pos;
-                last_distance = distance;
-                self.store_tail_hashes(input, pos, table_bits, min_match);
-
-                if pos > len_limit {
-                    break;
-                }
-
-                let key = hash(input, pos, table_bits, min_match);
-                candidate = self.table[key] as usize;
-                self.table[key] = pos as u32;
-                if candidate == NO_POSITION as usize
-                    || candidate >= pos
-                    || pos - candidate > max_distance
-                    || !is_match(input, candidate, pos, min_match)
-                {
-                    break;
-                }
-            }
-
-            pos += 1;
-            if pos > len_limit {
-                break;
-            }
-            next_hash = hash(input, pos, table_bits, min_match);
-        }
-
-        if insert_start < input.len() {
-            self.push_literals(input, insert_start, input.len() - insert_start);
-        }
-
-        Ok(&self.batch)
-    }
-
-    fn collect_q0_2k_fast_no_last(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
-        self.reset(input.len());
-        collect_with_stack_u16_table::<11, 2048, { tune::Q1_DEFAULT_U16_SKIP_START }, false>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-        );
-        &self.batch
-    }
-
-    fn collect_q0_4k_no_last(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
-        self.reset(input.len());
-        collect_with_stack_u16_table::<12, 4096, { tune::Q1_DEFAULT_U16_SKIP_START }, false>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-        );
-        &self.batch
-    }
-
-    fn collect_q0_8k_default(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
-        self.reset(input.len());
-        collect_with_stack_u16_table::<13, 8192, { tune::Q1_DEFAULT_U16_SKIP_START }, true>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-        );
-        &self.batch
-    }
-
-    fn collect_q0_16k_medium_no_last(
-        &mut self,
-        input: &[u8],
-        max_backward_distance: usize,
-    ) -> &Batch {
-        self.reset(input.len());
-        collect_with_stack_u16_table::<14, 16384, { tune::Q1_MEDIUM_U16_SKIP_START }, false>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-        );
-        &self.batch
-    }
-
-    fn collect_q0_32k_medium(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
-        self.reset(input.len());
-        collect_with_stack_u16_table::<15, 32768, { tune::Q1_MEDIUM_U16_SKIP_START }, true>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-        );
-        &self.batch
-    }
-
-    fn collect_stack_u16_for_size<const SKIP_START: usize>(
-        &mut self,
-        input: &[u8],
-        max_backward_distance: usize,
-        table_size: usize,
-    ) -> bool {
-        match table_size {
-            256 => collect_with_stack_u16_table::<8, 256, SKIP_START, true>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            512 => collect_with_stack_u16_table::<9, 512, SKIP_START, true>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            1024 => collect_with_stack_u16_table::<10, 1024, SKIP_START, true>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            2048 => collect_with_stack_u16_table::<11, 2048, SKIP_START, true>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            4096 => collect_with_stack_u16_table::<12, 4096, SKIP_START, true>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            8192 => collect_with_stack_u16_table::<13, 8192, SKIP_START, true>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            16384 => collect_with_stack_u16_table::<14, 16384, SKIP_START, true>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            32768 => collect_with_stack_u16_table::<15, 32768, SKIP_START, true>(
-                &mut self.batch,
-                input,
-                max_backward_distance,
-            ),
-            _ => return false,
-        }
-        true
-    }
-
-    #[allow(clippy::large_stack_arrays)]
-    fn collect_with_64k_medium_skip(
-        &mut self,
-        input: &[u8],
-        max_backward_distance: usize,
-    ) -> &Batch {
-        self.reset(input.len());
-
-        if input.len() < INPUT_MARGIN_BYTES {
-            self.push_literals(input, 0, input.len());
-            return &self.batch;
-        }
-
-        let mut table = [0_u32; 1 << 16];
-        collect_with_u32_table_m6::<16, { tune::Q1_MEDIUM_U32_SKIP_START }, true, true>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-            &mut table,
-        );
-        &self.batch
-    }
-
-    #[allow(clippy::large_stack_arrays)]
-    fn collect_with_64k_fast_skip(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
-        self.reset(input.len());
-
-        if input.len() < INPUT_MARGIN_BYTES {
-            self.push_literals(input, 0, input.len());
-            return &self.batch;
-        }
-
-        let mut table = [0_u32; 1 << 16];
-        collect_with_u32_table_m6::<16, { tune::Q1_FAST_U32_SKIP_START }, false, true>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-            &mut table,
-        );
-        &self.batch
-    }
-
     #[allow(clippy::large_stack_arrays)]
     fn collect_with_64k_sparse_stride(
         &mut self,
@@ -1233,86 +632,6 @@ impl Workspace {
         &self.batch
     }
 
-    #[allow(clippy::large_stack_arrays)]
-    fn collect_with_32k_dense_skip(
-        &mut self,
-        input: &[u8],
-        max_backward_distance: usize,
-    ) -> &Batch {
-        self.reset(input.len());
-
-        if input.len() < INPUT_MARGIN_BYTES {
-            self.push_literals(input, 0, input.len());
-            return &self.batch;
-        }
-
-        let mut table = [0_u32; 1 << 15];
-        collect_with_u32_table_m6::<15, { tune::Q1_DENSE_U32_SKIP_START }, true, false>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-            &mut table,
-        );
-        &self.batch
-    }
-
-    #[allow(clippy::large_stack_arrays)]
-    fn collect_with_32k_u16_skip(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
-        self.reset(input.len());
-
-        if input.len() < INPUT_MARGIN_BYTES {
-            self.push_literals(input, 0, input.len());
-            return &self.batch;
-        }
-
-        collect_with_stack_u16_table::<15, 32768, { tune::Q1_FASTER_U16_SKIP_START }, true>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-        );
-        &self.batch
-    }
-
-    #[allow(clippy::large_stack_arrays)]
-    fn collect_with_64k_u16_skip(&mut self, input: &[u8], max_backward_distance: usize) -> &Batch {
-        self.reset(input.len());
-
-        if input.len() < INPUT_MARGIN_BYTES {
-            self.push_literals(input, 0, input.len());
-            return &self.batch;
-        }
-
-        collect_with_stack_u16_table::<16, 65536, { tune::Q1_FAST_U16_SKIP_START }, true>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-        );
-        &self.batch
-    }
-
-    #[allow(clippy::large_stack_arrays)]
-    fn collect_with_32k_faster_skip(
-        &mut self,
-        input: &[u8],
-        max_backward_distance: usize,
-    ) -> &Batch {
-        self.reset(input.len());
-
-        if input.len() < INPUT_MARGIN_BYTES {
-            self.push_literals(input, 0, input.len());
-            return &self.batch;
-        }
-
-        let mut table = [0_u32; 1 << 15];
-        collect_with_u32_table_m6::<15, { tune::Q1_FASTER_U32_SKIP_START }, false, true>(
-            &mut self.batch,
-            input,
-            max_backward_distance,
-            &mut table,
-        );
-        &self.batch
-    }
-
     fn reset(&mut self, input_len: usize) {
         self.batch.reset(input_len);
     }
@@ -1323,127 +642,6 @@ impl Workspace {
         }
         self.batch.push_literals(input, insert_start, insert_len);
     }
-
-    #[allow(clippy::too_many_arguments)]
-    fn scan_to_match(
-        &mut self,
-        input: &[u8],
-        pos: &mut usize,
-        next_hash: &mut usize,
-        len_limit: usize,
-        max_distance: usize,
-        table_bits: usize,
-        min_match: usize,
-        last_distance: usize,
-    ) -> Option<usize> {
-        let mut skip = 32_usize;
-        let mut next_pos = *pos;
-
-        loop {
-            let key = *next_hash;
-            let step = skip >> 5;
-            skip += 1;
-            *pos = next_pos;
-            if step > len_limit - *pos {
-                return None;
-            }
-            next_pos = *pos + step;
-            *next_hash = hash(input, next_pos, table_bits, min_match);
-
-            if last_distance != NO_LAST_DISTANCE && *pos >= last_distance {
-                let candidate = *pos - last_distance;
-                if is_match(input, candidate, *pos, min_match) {
-                    self.table[key] = *pos as u32;
-                    return Some(candidate);
-                }
-            }
-
-            let candidate = self.table[key] as usize;
-            self.table[key] = *pos as u32;
-            if candidate != NO_POSITION as usize
-                && candidate < *pos
-                && *pos - candidate <= max_distance
-                && is_match(input, candidate, *pos, min_match)
-            {
-                return Some(candidate);
-            }
-        }
-    }
-
-    fn store_tail_hashes(
-        &mut self,
-        input: &[u8],
-        copy_end: usize,
-        table_bits: usize,
-        min_match: usize,
-    ) {
-        if min_match == 4 && copy_end >= 3 && copy_end + 5 <= input.len() {
-            let word = read_u64_le(input, copy_end - 3);
-            for offset in 0..3 {
-                let key = hash_word_at_offset(word, offset, table_bits, min_match);
-                self.table[key] = (copy_end - 3 + offset) as u32;
-            }
-            return;
-        }
-        if min_match == 6 && copy_end >= 5 && copy_end + 6 <= input.len() {
-            let word = read_u64_le(input, copy_end - 5);
-            for offset in 0..3 {
-                let key = hash_word_at_offset(word, offset, table_bits, min_match);
-                self.table[key] = (copy_end - 5 + offset) as u32;
-            }
-            let word = read_u64_le(input, copy_end - 2);
-            for offset in 0..2 {
-                let key = hash_word_at_offset(word, offset, table_bits, min_match);
-                self.table[key] = (copy_end - 2 + offset) as u32;
-            }
-            return;
-        }
-
-        let start = copy_end.saturating_sub(min_match - 1);
-        for pos in start..copy_end {
-            if pos + 8 > input.len() {
-                break;
-            }
-            let key = hash(input, pos, table_bits, min_match);
-            self.table[key] = pos as u32;
-        }
-    }
-}
-
-fn collect_with_u16_table(
-    batch: &mut Batch,
-    input: &[u8],
-    max_backward_distance: usize,
-    table: &mut [u16],
-    table_bits: usize,
-) -> Result<(), CompressError> {
-    match table_bits {
-        14 => {
-            let table: &mut [u16; 16384] = table
-                .try_into()
-                .map_err(|_| BurliError::Format("invalid Brotli q1 table size"))?;
-            collect_with_u16_table_m4::<14, 16384, { tune::Q1_DEFAULT_U16_SKIP_START }, true>(
-                batch,
-                input,
-                max_backward_distance,
-                table,
-            );
-            Ok(())
-        }
-        15 => {
-            let table: &mut [u16; 32768] = table
-                .try_into()
-                .map_err(|_| BurliError::Format("invalid Brotli q1 table size"))?;
-            collect_with_u16_table_m4::<15, 32768, { tune::Q1_DEFAULT_U16_SKIP_START }, true>(
-                batch,
-                input,
-                max_backward_distance,
-                table,
-            );
-            Ok(())
-        }
-        _ => Err(BurliError::Format("invalid Brotli q1 table size")),
-    }
 }
 
 #[allow(clippy::large_stack_arrays)]
@@ -1453,13 +651,14 @@ fn collect_with_stack_u16_table<
     const TABLE_LEN: usize,
     const SKIP_START: usize,
     const USE_LAST_DISTANCE: bool,
+    S: Sink,
 >(
-    batch: &mut Batch,
+    batch: &mut S,
     input: &[u8],
     max_backward_distance: usize,
 ) {
     let mut table = [NO_POSITION_16; TABLE_LEN];
-    collect_with_u16_table_m4::<TABLE_BITS, TABLE_LEN, SKIP_START, USE_LAST_DISTANCE>(
+    collect_with_u16_table_m4::<TABLE_BITS, TABLE_LEN, SKIP_START, USE_LAST_DISTANCE, _>(
         batch,
         input,
         max_backward_distance,
@@ -1472,8 +671,9 @@ fn collect_with_u32_table_m6<
     const SKIP_START: usize,
     const USE_LAST_DISTANCE: bool,
     const STORE_TAIL_HASHES: bool,
+    S: Sink,
 >(
-    batch: &mut Batch,
+    batch: &mut S,
     input: &[u8],
     max_backward_distance: usize,
     table: &mut [u32],
@@ -1627,25 +827,27 @@ fn collect_with_u16_table_m4<
     const TABLE_LEN: usize,
     const SKIP_START: usize,
     const USE_LAST_DISTANCE: bool,
+    S: Sink,
 >(
-    batch: &mut Batch,
+    batch: &mut S,
     input: &[u8],
     _max_backward_distance: usize,
     table: &mut [u16; TABLE_LEN],
 ) {
     debug_assert_eq!(TABLE_LEN, 1_usize << TABLE_BITS);
-    let len_limit = input
-        .len()
-        .saturating_sub(4)
-        .min(input.len().saturating_sub(INPUT_MARGIN_BYTES));
-    if len_limit <= 1 {
-        push_literals_to_batch(batch, input, 0, input.len());
-        return;
-    }
+    // `checked_sub` keeps `len_limit + INPUT_MARGIN_BYTES == input.len()`
+    // visible to the compiler, so reads up to `len_limit` need no checks.
+    let len_limit = match input.len().checked_sub(INPUT_MARGIN_BYTES) {
+        Some(limit) if limit > 1 => limit,
+        _ => {
+            push_literals_to_batch(batch, input, 0, input.len());
+            return;
+        }
+    };
 
     let mut pos = 1;
     let mut insert_start = 0;
-    let mut next_word = read_u32_le(input, pos);
+    let mut next_word = read_u32_le_upto(input, pos, len_limit);
     let mut next_hash = hash4_const::<TABLE_BITS>(next_word);
     let mut last_distance = NO_LAST_DISTANCE;
 
@@ -1686,13 +888,13 @@ fn collect_with_u16_table_m4<
 
             let current_key =
                 store_tail_hashes_in_u16_table_m4::<TABLE_BITS, TABLE_LEN>(table, input, pos);
-            let current_word = read_u32_le(input, pos);
+            let current_word = read_u32_le_upto(input, pos, len_limit);
             let key = current_key.unwrap_or_else(|| hash4_const::<TABLE_BITS>(current_word));
             let entry = table[key];
             table[key] = position_to_u16_entry(pos);
             let next_candidate = usize::from(entry);
             debug_assert!(next_candidate < pos);
-            if read_u32_le(input, next_candidate) != current_word {
+            if read_u32_le_upto(input, next_candidate, len_limit) != current_word {
                 break;
             }
             candidate = next_candidate;
@@ -1702,7 +904,7 @@ fn collect_with_u16_table_m4<
         if pos > len_limit {
             break;
         }
-        next_word = read_u32_le(input, pos);
+        next_word = read_u32_le_upto(input, pos, len_limit);
         next_hash = hash4_const::<TABLE_BITS>(next_word);
     }
 
@@ -1811,7 +1013,12 @@ fn store_tail_hashes_in_u32_table_m6<const TABLE_BITS: usize>(
 }
 
 #[inline(always)]
-fn push_literals_to_batch(batch: &mut Batch, input: &[u8], insert_start: usize, insert_len: usize) {
+fn push_literals_to_batch<S: Sink>(
+    batch: &mut S,
+    input: &[u8],
+    insert_start: usize,
+    insert_len: usize,
+) {
     if insert_len == 0 {
         return;
     }
@@ -1848,14 +1055,14 @@ fn scan_to_match_in_u16_table_m4<
             }
             next_pos = *pos + step;
             let current_word = *next_word;
-            *next_word = read_u32_le(input, next_pos);
+            *next_word = read_u32_le_upto(input, next_pos, len_limit);
             *next_hash = hash4_const::<TABLE_BITS>(*next_word);
 
             let entry = table[key];
             table[key] = position_to_u16_entry(*pos);
             let candidate = usize::from(entry);
             debug_assert!(candidate < *pos);
-            if read_u32_le(input, candidate) == current_word {
+            if read_u32_le_upto(input, candidate, len_limit) == current_word {
                 return Some(candidate);
             }
         }
@@ -1871,12 +1078,12 @@ fn scan_to_match_in_u16_table_m4<
         }
         next_pos = *pos + step;
         let current_word = *next_word;
-        *next_word = read_u32_le(input, next_pos);
+        *next_word = read_u32_le_upto(input, next_pos, len_limit);
         *next_hash = hash4_const::<TABLE_BITS>(*next_word);
 
         if *pos >= last_distance {
             let candidate = *pos - last_distance;
-            if read_u32_le(input, candidate) == current_word {
+            if read_u32_le_upto(input, candidate, len_limit) == current_word {
                 table[key] = position_to_u16_entry(*pos);
                 return Some(candidate);
             }
@@ -1886,7 +1093,7 @@ fn scan_to_match_in_u16_table_m4<
         table[key] = position_to_u16_entry(*pos);
         let candidate = usize::from(entry);
         debug_assert!(candidate < *pos);
-        if read_u32_le(input, candidate) == current_word {
+        if read_u32_le_upto(input, candidate, len_limit) == current_word {
             return Some(candidate);
         }
     }
@@ -1933,29 +1140,6 @@ fn table_size(input_len: usize) -> usize {
 }
 
 #[inline(always)]
-fn hash(input: &[u8], pos: usize, table_bits: usize, min_match: usize) -> usize {
-    if min_match == 4 {
-        return hash4(read_u32_le(input, pos), table_bits);
-    }
-    let word = read_u64_le(input, pos) << ((8 - min_match) * 8);
-    ((word.wrapping_mul(HASH_MUL)) >> (64 - table_bits)) as usize
-}
-
-#[inline(always)]
-fn hash_word_at_offset(word: u64, offset: usize, table_bits: usize, min_match: usize) -> usize {
-    if min_match == 4 {
-        return hash4((word >> (8 * offset)) as u32, table_bits);
-    }
-    let shifted = (word >> (8 * offset)) << ((8 - min_match) * 8);
-    ((shifted.wrapping_mul(HASH_MUL)) >> (64 - table_bits)) as usize
-}
-
-#[inline(always)]
-fn hash4(word: u32, table_bits: usize) -> usize {
-    (word.wrapping_mul(HASH_MUL_32) >> (32 - table_bits)) as usize
-}
-
-#[inline(always)]
 fn hash4_const<const TABLE_BITS: usize>(word: u32) -> usize {
     (word.wrapping_mul(HASH_MUL_32) >> (32 - TABLE_BITS)) as usize
 }
@@ -1986,6 +1170,15 @@ fn read_u32_le(input: &[u8], pos: usize) -> u32 {
     read_u32_le_trusted(input, pos)
 }
 
+/// `read_u32_le(input, pos)` for a `pos` at or below `limit`, where the
+/// compiler sees `limit + 4 <= input.len()`. Reading at `pos.min(limit)`
+/// turns both bounds checks into one conditional move.
+#[inline(always)]
+fn read_u32_le_upto(input: &[u8], pos: usize, limit: usize) -> u32 {
+    debug_assert!(pos <= limit);
+    read_u32_le(input, pos.min(limit))
+}
+
 #[inline(always)]
 fn read_u32_le_trusted(input: &[u8], pos: usize) -> u32 {
     super::load::read_u32_le_trusted(input, pos)
@@ -1996,17 +1189,6 @@ fn is_match6(input: &[u8], candidate: usize, pos: usize) -> bool {
     const LOW_48_BITS: u64 = 0x0000_ffff_ffff_ffff;
     let diff = read_u64_le(input, candidate) ^ read_u64_le(input, pos);
     diff & LOW_48_BITS == 0
-}
-
-#[inline(always)]
-fn is_match(input: &[u8], candidate: usize, pos: usize, min_match: usize) -> bool {
-    if min_match == 4 {
-        read_u32_le(input, candidate) == read_u32_le(input, pos)
-    } else {
-        const LOW_48_BITS: u64 = 0x0000_ffff_ffff_ffff;
-        let diff = read_u64_le(input, candidate) ^ read_u64_le(input, pos);
-        diff & LOW_48_BITS == 0
-    }
 }
 
 #[cfg(test)]

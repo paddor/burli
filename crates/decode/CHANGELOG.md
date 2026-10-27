@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+- Enforce `#![forbid(unsafe_code)]`. Backward copies, literal writes, and
+  Huffman table lookups use only safe code. The `paranoid` feature has no
+  effect today.
+- Decode each compressed meta-block into zeroed room as a slice, so writes
+  need no capacity checks. Short copies move whole 16- or 32-byte windows.
+  Block counts and the current command and distance codes stay in locals
+  between block switches. Literal contexts come from the 512-byte lookup
+  table instead of a 64 KiB pair table.
+- Keep the prefix codes of each alphabet in one buffer with 8-bit roots.
+  Build tables from per-length symbol lists collected while reading code
+  lengths, and size second-level tables before filling them. A meta-block
+  with one literal code of mostly long codes also builds a 10-bit root.
+  Literal context maps with one tree for every context use the single-code
+  path.
+- Keep the current literal block's context map, mode, and shared tree in
+  locals, like the command and distance codes. One test sends a copy within
+  the output and the window to the hot path; a cold path resolves dictionary
+  references and rejects invalid distances.
+- Write static dictionary words as fixed-size windows from a transform table
+  with prefixes and suffixes inline, in one call from the command loop.
+- Decoding runs 34% to 68% faster than 0.3.4 in aggregate.
+
 ## [0.3.4] - 2026-09-27
 
 - Start one-shot output empty instead of reserving the output limit, when the

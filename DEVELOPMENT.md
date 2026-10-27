@@ -7,7 +7,6 @@ for build, test, release, fuzz, benchmark, and chart-generation commands.
 
 ```bash
 cargo build --workspace
-cargo build --workspace --features paranoid
 cargo build -p burli --no-default-features --features alloc
 ```
 
@@ -15,7 +14,6 @@ cargo build -p burli --no-default-features --features alloc
 
 ```bash
 cargo nextest run --workspace
-cargo test --workspace --features paranoid
 cargo test -p burli --no-default-features --features alloc
 cargo clippy --workspace --all-targets -- -D warnings
 ```
@@ -110,6 +108,9 @@ cargo fuzz run burli-decode
 cargo fuzz run burli-decode-reuse
 cargo fuzz run burli-roundtrip
 ```
+
+The code has no `unsafe`, so targets can build with `--sanitizer none`.
+`scripts/overnight_fuzz.sh` does that by default.
 
 ## Benchmarks And Charts
 
@@ -211,16 +212,12 @@ Generated chart set:
 
 `small_decode.svg` draws every decoder on the same Google Brotli C stream at
 quality 5 (thick) and on its own quality 5 output (thin, from the small encode
-rows). The thick lines need the Google-stream decode rows. The paranoid lines
-need a paranoid small run:
+rows). The thick lines need the Google-stream decode rows:
 
 ```bash
 cargo run --manifest-path bench/Cargo.toml --example burli_bench --release -- \
   --impl google-brotli-burli,google-brotli-rust-brotli,google-brotli-mbrotli \
   --qualities 5 --chart-small-only
-cargo run --manifest-path bench/Cargo.toml --example burli_bench --release \
-  --features paranoid -- --impl burli,google-brotli-burli --qualities 5 \
-  --chart-small-only
 ```
 
 Review SVG diffs before committing. Only commit chart files that were
@@ -257,4 +254,3 @@ Benchmark corpus:
 Measurement rules:
 
 - profile before optimizing
-- compare `paranoid` builds separately when the default build gains unsafe code

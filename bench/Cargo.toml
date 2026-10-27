@@ -4,14 +4,11 @@ version = "0.0.0"
 publish = false
 edition = "2024"
 
-[features]
-paranoid = ["burli/paranoid"]
-
 [dependencies]
 burli = { path = ".." }
 burli-encode = { path = "../crates/encode" }
 rust-brotli = { package = "brotli", version = "8.0.4" }
-mbrotli = "=0.4.1"
+mbrotli = "=0.5.17"
 libc = "0.2"
 plotters = { version = "0.3", default-features = false, features = ["svg_backend"] }
 serde = { version = "1", features = ["derive"] }

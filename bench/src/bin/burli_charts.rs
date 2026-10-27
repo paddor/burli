@@ -273,46 +273,15 @@ impl Config {
             codecs: vec![
                 codec("google-brotli", google_brotli_label(), 0x2563eb, 0x1d4ed8),
                 codec("burli", "burli", 0xf87171, 0xc45050),
-                codec("burli paranoid", "burli paranoid", 0xf472b6, 0xc05a92),
                 codec("rust-brotli", "rust-brotli 8.0.4", 0x4ade80, 0x3aaf60),
-                codec("mbrotli", "mbrotli 0.4.1", 0xfbbf24, 0xd97706),
+                codec("mbrotli", "mbrotli 0.5.17", 0xfbbf24, 0xd97706),
             ],
-            scatter_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-                "mbrotli",
-            ],
-            summary_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-                "mbrotli",
-            ],
-            pipeline_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-                "mbrotli",
-            ],
-            matrix_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-                "mbrotli",
-            ],
+            scatter_codecs: vec!["google-brotli", "burli", "rust-brotli", "mbrotli"],
+            summary_codecs: vec!["google-brotli", "burli", "rust-brotli", "mbrotli"],
+            pipeline_codecs: vec!["google-brotli", "burli", "rust-brotli", "mbrotli"],
+            matrix_codecs: vec!["google-brotli", "burli", "rust-brotli", "mbrotli"],
             small_codecs: vec!["google-brotli", "burli", "rust-brotli", "mbrotli"],
-            small_decode_codecs: vec![
-                "google-brotli",
-                "burli",
-                "burli paranoid",
-                "rust-brotli",
-                "mbrotli",
-            ],
+            small_decode_codecs: vec!["google-brotli", "burli", "rust-brotli", "mbrotli"],
         }
     }
 
@@ -592,7 +561,7 @@ fn load_small_decode_data(cfg: &Config, codecs: &[&str]) -> BTreeMap<String, Vec
 fn small_decode_source(codec: &str) -> (&str, &str) {
     match codec {
         "google-brotli" => ("google-brotli", "google-brotli"),
-        "burli" | "burli paranoid" => ("google-brotli-burli", "google-brotli"),
+        "burli" => ("google-brotli-burli", "google-brotli"),
         "rust-brotli" => ("google-brotli-rust-brotli", "google-brotli"),
         "mbrotli" => ("google-brotli-mbrotli", "google-brotli"),
         _ => (codec, codec),
@@ -2621,10 +2590,6 @@ mod tests {
         );
         assert_eq!(
             small_decode_source("burli"),
-            ("google-brotli-burli", "google-brotli")
-        );
-        assert_eq!(
-            small_decode_source("burli paranoid"),
             ("google-brotli-burli", "google-brotli")
         );
         assert_eq!(

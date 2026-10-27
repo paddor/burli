@@ -1,8 +1,8 @@
-use alloc::{vec, vec::Vec};
+use alloc::vec;
 
 use super::{
-    INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, literal_only, match_len,
-    read_u64_le, score_distance, score_last_distance, token_supports_last_distance, tune,
+    INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, match_len, read_u64_le,
+    score_distance, score_last_distance, token_supports_last_distance, tokens::Sink, tune,
 };
 
 const HASH_LEN: usize = 5;
@@ -52,15 +52,16 @@ pub(super) fn collect(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     if input.len() <= tune::Q3_TINY_INPUT_MAX {
-        collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace)
+        collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace, sink);
     } else if input.len() <= tune::Q3_STACK_TABLE_INPUT_MAX {
-        collect_with_stack_table_15::<1, 2>(input, max_backward_distance, workspace)
+        collect_with_stack_table_15::<1, 2>(input, max_backward_distance, workspace, sink);
     } else if input.len() <= tune::Q3_SMALL_MEDIUM_INPUT_MAX {
-        collect_with_params::<15, 1, 2>(input, max_backward_distance, workspace)
+        collect_with_params::<15, 1, 2>(input, max_backward_distance, workspace, sink);
     } else {
-        collect_with_params::<16, 4, 2>(input, max_backward_distance, workspace)
+        collect_with_params::<16, 4, 2>(input, max_backward_distance, workspace, sink);
     }
 }
 
@@ -68,11 +69,12 @@ pub(super) fn collect_fast_sweep(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     if input.len() <= tune::Q3_TINY_INPUT_MAX {
-        collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace)
+        collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace, sink);
     } else {
-        collect_with_stack_table_15::<1, 1>(input, max_backward_distance, workspace)
+        collect_with_stack_table_15::<1, 1>(input, max_backward_distance, workspace, sink);
     }
 }
 
@@ -80,11 +82,12 @@ pub(super) fn collect_fast_sweep_no_lazy(
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     if input.len() <= tune::Q3_TINY_INPUT_MAX {
-        collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace)
+        collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace, sink);
     } else {
-        collect_with_stack_table_15::<0, 1>(input, max_backward_distance, workspace)
+        collect_with_stack_table_15::<0, 1>(input, max_backward_distance, workspace, sink);
     }
 }
 
@@ -96,14 +99,16 @@ fn collect_with_params<
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     let mut table = vec![0_u32; 1 << TABLE_BITS];
     collect_with_table::<TABLE_BITS, MAX_LAZY_MATCHES, BUCKET_SWEEP>(
         input,
         max_backward_distance,
         workspace,
         &mut table,
-    )
+        sink,
+    );
 }
 
 #[inline(always)]
@@ -111,14 +116,16 @@ fn collect_with_stack_table_10<const MAX_LAZY_MATCHES: usize, const BUCKET_SWEEP
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     let mut table = [0_u32; 1 << 10];
     collect_with_table::<10, MAX_LAZY_MATCHES, BUCKET_SWEEP>(
         input,
         max_backward_distance,
         workspace,
         &mut table,
-    )
+        sink,
+    );
 }
 
 #[allow(clippy::large_stack_arrays)]
@@ -127,14 +134,16 @@ fn collect_with_stack_table_15<const MAX_LAZY_MATCHES: usize, const BUCKET_SWEEP
     input: &[u8],
     max_backward_distance: usize,
     workspace: &mut Workspace,
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     let mut table = [0_u32; 1 << 15];
     collect_with_table::<15, MAX_LAZY_MATCHES, BUCKET_SWEEP>(
         input,
         max_backward_distance,
         workspace,
         &mut table,
-    )
+        sink,
+    );
 }
 
 #[inline(always)]
@@ -147,13 +156,14 @@ fn collect_with_table<
     max_backward_distance: usize,
     workspace: &mut Workspace,
     table: &mut [u32],
-) -> Vec<Token> {
+    sink: &mut impl Sink,
+) {
     debug_assert_eq!(table.len(), 1_usize << TABLE_BITS);
     if input.len() < HASH_TYPE_LEN {
-        return literal_only(input.len());
+        sink.push_tail(0, input.len());
+        return;
     }
 
-    let mut tokens = Vec::with_capacity(input.len() / 8 + 8);
     let mut pos = 0_usize;
     let mut insert_start = 0_usize;
     let mut dist_cache = workspace.dist_cache;
@@ -229,7 +239,7 @@ fn collect_with_table<
         if distance_code == 0 && token_supports_last_distance(token) {
             token.use_last_distance = true;
         }
-        tokens.push(token);
+        sink.push(token);
         if found.distance <= max_backward_at_pos && distance_code > 0 {
             dist_cache[3] = dist_cache[2];
             dist_cache[2] = dist_cache[1];
@@ -246,20 +256,9 @@ fn collect_with_table<
         insert_start = pos;
     }
 
-    if insert_start < input.len() {
-        tokens.push(Token {
-            insert_start,
-            insert_len: input.len() - insert_start,
-            copy_len: 0,
-            copy_len_code: 0,
-            distance: 0,
-            distance_code: None,
-            use_last_distance: false,
-        });
-    }
+    sink.push_tail(insert_start, input.len());
 
     workspace.dist_cache = dist_cache;
-    tokens
 }
 
 #[inline(always)]

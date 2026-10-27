@@ -213,7 +213,7 @@ mod tests {
                 expected.extend_from_slice(&input);
                 encoder.flush().unwrap();
 
-                assert!(!encoder.inner.is_empty());
+                assert_ne!(encoder.inner, b"");
                 let mut decoder =
                     burli_decode::streaming::StreamDecoder::new(encoder.inner.as_slice());
                 let mut decoded = vec![0; expected.len()];

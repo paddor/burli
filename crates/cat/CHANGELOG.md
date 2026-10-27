@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Enforce `#![forbid(unsafe_code)]`. The `paranoid` feature has no effect
+  today.
+
 ## [0.2.5] - 2026-09-27
 
 - Update `burli-decode` to `0.3.4`, which sizes decoded concat payloads from

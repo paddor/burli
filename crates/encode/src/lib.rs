@@ -1,8 +1,7 @@
 //! Brotli encoder implementation for Bürli.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![deny(unsafe_op_in_unsafe_fn)]
-#![cfg_attr(feature = "paranoid", forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -58,6 +57,10 @@ pub fn compress_into(
     quality: u8,
 ) -> Result<usize, CompressError> {
     let options = Options::default().with_quality(quality)?;
+    if let Some(bytes) = encode::compress_one_pass(input, &options)? {
+        output.extend_from_slice(&bytes);
+        return Ok(bytes.len());
+    }
     let mut workspace = encode::Workspace::default();
     let mut writer = burli_core::bits::BitWriter::new();
     encode::compress_into_with_options_workspace(

@@ -1,24 +1,12 @@
 # Safety
 
-## Rule
+## No unsafe
 
-No unsafe in public API. Unsafe, if added, must live in small primitives modules
-with a documented contract, `debug_assert!` guards, fuzz coverage, and Miri or
-Kani coverage where practical.
+All five crates are `#![forbid(unsafe_code)]`: `burli`, `burli-core`,
+`burli-encode`, `burli-decode`, and `burli-cat`.
 
-## `paranoid`
-
-`cargo test --features paranoid` must compile all workspace crates with
-`#![forbid(unsafe_code)]`.
-
-Default build may use unsafe for:
-
-- unaligned little-endian loads;
-- fixed-size copy helpers;
-- `Vec` initialization after checked writes;
-- checked Huffman fast-table indexing.
-
-`paranoid` must swap those for safe equivalents.
+The `paranoid` feature has no effect today. If a later release adds `unsafe`
+for speed, builds with `paranoid` leave it out.
 
 ## Boundaries
 
