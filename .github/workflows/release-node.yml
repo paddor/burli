@@ -213,10 +213,20 @@ jobs:
       - name: Publish
         shell: bash
         run: |
-          root="packages/paddor-burli-${{ needs.package.outputs.version }}.tgz"
+          version="${{ needs.package.outputs.version }}"
+          root="packages/paddor-burli-$version.tgz"
+          # A rerun skips the packages an earlier attempt published.
+          publish() {
+            name="$(tar -xzOf "$1" package/package.json | jq -r .name)"
+            if [[ -n "$(npm view "$name@$version" version 2>/dev/null)" ]]; then
+              echo "$name@$version is already published"
+            else
+              npm publish "./$1" --access public --provenance
+            fi
+          }
           for package in packages/*.tgz; do
             if [[ "$package" != "$root" ]]; then
-              npm publish "./$package" --access public --provenance
+              publish "$package"
             fi
           done
-          npm publish "./$root" --access public --provenance
+          publish "$root"
