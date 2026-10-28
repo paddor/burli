@@ -5,7 +5,7 @@ Brotli compression and decompression for Node.js, built on
 API matches the Brotli functions of `node:zlib`:
 
 ```js
-const burli = require("burli");
+const burli = require("@paddor/burli");
 
 const compressed = burli.brotliCompressSync(data);
 burli.brotliDecompressSync(compressed).equals(data); // true

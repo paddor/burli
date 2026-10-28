@@ -178,12 +178,12 @@ jobs:
           mkdir smoke
           cd smoke
           npm init -y > /dev/null
-          npm install --omit=optional "../packages/paddor-burli-${{ matrix.platform }}-$version.tgz" "../packages/burli-$version.tgz"
+          npm install --omit=optional "../packages/paddor-burli-${{ matrix.platform }}-$version.tgz" "../packages/paddor-burli-$version.tgz"
       - name: Round trip with node:zlib
         working-directory: smoke
         run: |
           node -e '
-            const burli = require("burli");
+            const burli = require("@paddor/burli");
             const zlib = require("node:zlib");
             const data = Buffer.from("burli smoke test ".repeat(1000));
             if (!zlib.brotliDecompressSync(burli.brotliCompressSync(data)).equals(data)) throw new Error("compress");
@@ -197,7 +197,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: npm
-      url: https://www.npmjs.com/package/burli
+      url: https://www.npmjs.com/package/@paddor/burli
     permissions:
       id-token: write
     # Bootstraps the first publish; trusted publishing needs existing packages.
@@ -216,7 +216,7 @@ jobs:
       - name: Publish
         shell: bash
         run: |
-          root="packages/burli-${{ needs.package.outputs.version }}.tgz"
+          root="packages/paddor-burli-${{ needs.package.outputs.version }}.tgz"
           for package in packages/*.tgz; do
             if [[ "$package" != "$root" ]]; then
               npm publish "./$package" --access public --provenance
