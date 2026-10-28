@@ -161,7 +161,8 @@ cargo clippy --all-targets -- -D warnings
 
 The tests compare against `node:zlib`. `release-node.yml` builds the native
 modules on a `burli-node-v*` tag, packs each as `@paddor/burli-<platform>`,
-and publishes those and `@paddor/burli` to npm with provenance.
+and publishes those and `@paddor/burli` to npm through trusted publishing,
+with provenance.
 
 ## .NET Binding
 
