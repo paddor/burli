@@ -39,12 +39,12 @@ impl<R> IntoInnerError<R> {
 
 impl<R: Read> StreamDecoder<R> {
     /// Create a stream decoder with no practical output limit.
-    pub fn new(inner: R) -> Self {
+    pub const fn new(inner: R) -> Self {
         Self::with_decoder(inner, PushDecoder::new())
     }
 
     /// Create a stream decoder with a hard output limit.
-    pub fn with_limit(inner: R, max_output_size: usize) -> Self {
+    pub const fn with_limit(inner: R, max_output_size: usize) -> Self {
         Self::with_options(
             inner,
             &crate::Options::new().with_max_output_size(max_output_size),
@@ -52,18 +52,18 @@ impl<R: Read> StreamDecoder<R> {
     }
 
     /// Create a stream decoder with explicit [`crate::Options`].
-    pub fn with_options(inner: R, options: &crate::Options) -> Self {
+    pub const fn with_options(inner: R, options: &crate::Options) -> Self {
         Self::with_decoder(inner, PushDecoder::with_options(options))
     }
 
     /// Create a stream decoder with a raw LZ77 prefix dictionary.
-    pub fn with_raw_dictionary(inner: R, dictionary: crate::RawDictionary) -> Self {
+    pub const fn with_raw_dictionary(inner: R, dictionary: crate::RawDictionary) -> Self {
         Self::with_decoder(inner, PushDecoder::with_raw_dictionary(dictionary))
     }
 
     /// Create a stream decoder with a raw LZ77 prefix dictionary and hard
     /// output limit.
-    pub fn with_raw_dictionary_and_limit(
+    pub const fn with_raw_dictionary_and_limit(
         inner: R,
         dictionary: crate::RawDictionary,
         max_output_size: usize,
@@ -77,7 +77,7 @@ impl<R: Read> StreamDecoder<R> {
 
     /// Create a stream decoder with a raw LZ77 prefix dictionary and explicit
     /// [`crate::Options`].
-    pub fn with_raw_dictionary_and_options(
+    pub const fn with_raw_dictionary_and_options(
         inner: R,
         dictionary: crate::RawDictionary,
         options: &crate::Options,
@@ -189,6 +189,10 @@ mod tests {
 
     // One literal 'A' in a final compressed block, with two padding bits.
     const FINAL_COMPRESSED: &[u8] = &[0x02, 0, 0, 0, 0x44, 0x50, 0x20, 0x10, 0];
+
+    // The constructors were `const` in 0.3.5.
+    const _: StreamDecoder<&[u8]> = StreamDecoder::new(FINAL_COMPRESSED);
+    const _: StreamDecoder<&[u8]> = StreamDecoder::with_limit(FINAL_COMPRESSED, 1);
 
     struct Chunked<R> {
         inner: R,

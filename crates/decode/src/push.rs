@@ -93,23 +93,26 @@ impl Default for PushDecoder {
 
 impl PushDecoder {
     /// Create a decoder with no practical output limit.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self::with_options(&Options::new())
     }
 
     /// Create a decoder with explicit [`Options`].
-    pub fn with_options(options: &Options) -> Self {
+    pub const fn with_options(options: &Options) -> Self {
         Self::with_raw_dictionary_and_options(RawDictionary::empty(), options)
     }
 
     /// Create a decoder with a raw LZ77 prefix dictionary.
-    pub fn with_raw_dictionary(dictionary: RawDictionary) -> Self {
+    pub const fn with_raw_dictionary(dictionary: RawDictionary) -> Self {
         Self::with_raw_dictionary_and_options(dictionary, &Options::new())
     }
 
     /// Create a decoder with a raw LZ77 prefix dictionary and explicit
     /// [`Options`].
-    pub fn with_raw_dictionary_and_options(dictionary: RawDictionary, options: &Options) -> Self {
+    pub const fn with_raw_dictionary_and_options(
+        dictionary: RawDictionary,
+        options: &Options,
+    ) -> Self {
         Self {
             max_output_size: options.max_output_size(),
             raw_dictionary: dictionary,
