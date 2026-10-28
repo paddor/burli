@@ -1,0 +1,34 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "burli"
+version = "0.1.0"
+description = "Memory-safe Brotli compression in Rust, with the API of Google's brotli module"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{ name = "Patrik Wenger", email = "paddor@gmail.com" }]
+keywords = ["brotli", "compression", "decompression", "rust"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: System :: Archiving :: Compression",
+]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/paddor/burli"
+
+[dependency-groups]
+test = ["pytest>=7", "brotli>=1.2.1", "urllib3>=2.6"]
+
+[tool.maturin]
+module-name = "burli._burli"
+python-source = "python"
+strip = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
