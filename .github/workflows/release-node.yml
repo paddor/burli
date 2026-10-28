@@ -200,9 +200,6 @@ jobs:
       url: https://www.npmjs.com/package/@paddor/burli
     permissions:
       id-token: write
-    # Bootstraps the first publish; trusted publishing needs existing packages.
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/setup-node@v4
         with:
