@@ -13,16 +13,9 @@ on:
 
 jobs:
   test:
-    name: rake (${{ matrix.os }}, Ruby ${{ matrix.ruby }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        ruby: ["3.3", "4.0"]
-        include:
-          - os: ubuntu-latest
-            ruby: truffleruby
+    # release-ruby.yml tests the gems on more platforms and Rubies.
+    name: rake (Ruby 4.0)
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: bindings/ruby
@@ -34,7 +27,7 @@ jobs:
         run: rm -f ../../.cargo/config.toml
       - uses: oxidize-rb/actions/setup-ruby-and-rust@v1
         with:
-          ruby-version: ${{ matrix.ruby }}
+          ruby-version: "4.0"
           bundler-cache: true
           working-directory: bindings/ruby
       - run: cargo fmt --check
@@ -42,7 +35,6 @@ jobs:
       - run: bundle exec rake
       # The source gem builds against burli from crates.io.
       - name: Check source gem
-        if: matrix.os == 'ubuntu-latest'
         run: |
           bundle exec rake build
           gem install pkg/burli-*.gem --install-dir "$RUNNER_TEMP/gems" --no-document
