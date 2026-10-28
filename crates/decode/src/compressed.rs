@@ -8,6 +8,8 @@ use crate::{
     huffman::{CodeGroup, PrefixCode, ROOT_SIZE, Table, Tables, WIDE_ROOT_SIZE},
 };
 
+pub(crate) mod incremental;
+
 const LITERAL_ALPHABET_SIZE: usize = 256;
 const COMMAND_ALPHABET_SIZE: usize = 704;
 const BLOCK_LENGTH_ALPHABET_SIZE: usize = 26;

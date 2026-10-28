@@ -89,6 +89,18 @@ impl<W: Write> StreamEncoder<W> {
         self.inner
     }
 
+    /// Return a reference to the wrapped writer.
+    pub const fn get_ref(&self) -> &W {
+        &self.inner
+    }
+
+    /// Return a mutable reference to the wrapped writer, for example to take
+    /// the bytes written so far out of a `Vec<u8>`. Writing to it directly
+    /// corrupts the stream.
+    pub const fn get_mut(&mut self) -> &mut W {
+        &mut self.inner
+    }
+
     fn write_meta_block(
         &mut self,
         input: &[u8],

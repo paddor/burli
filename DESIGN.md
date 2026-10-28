@@ -11,10 +11,11 @@ return `Unsupported` at encode time.
 
 ## API Layers
 
-The public crate exposes three layers:
+The public crate exposes four layers:
 
 - one-shot helpers: `compress`, `decompress`, and slice/append variants;
 - reusable contexts: `Compressor` and `Decompressor`;
+- `PushDecoder`, which takes its input and output in pieces;
 - `std::io` wrappers: `StreamEncoder` and `StreamDecoder`.
 
 Reusable contexts keep internal work buffers between calls. The compressor keeps
@@ -231,10 +232,28 @@ chunk as a meta-block. It keeps the encoder workspace and bit writer across
 writes. `finish` flushes buffered input, writes the final empty meta-block, and
 returns the wrapped writer.
 
-`StreamDecoder` reads encoded bytes in 8 KiB chunks. It keeps encoded bytes that
-may still contain unread bits and keeps only the decoded window history needed
-for future backward copies. Reads return decoded bytes as soon as a meta-block
-produces output.
+`PushDecoder` decodes in steps from the input it has taken: the stream
+header, each meta-block header, stored and metadata bytes, and each
+compressed meta-block. A step that runs out of input fails with the
+end-of-input error and leaves the decoder at its last checkpoint, and the
+decoder takes up to 64 KiB more of the caller's input. A compressed
+meta-block reads its header whole, then its prefix codes one at a time, then
+runs a command loop that can stop and go on. While more than 128 input bits
+remain, the loop runs like the one-shot loop. Below that, it takes a
+checkpoint before each command header, distance, block switch, and literal
+that may run out, so a step decodes again only the part that ran out. Input
+split in any way decodes in linear time.
+
+The loop decodes into the history buffer, and the decoder writes out what
+it decoded up to the last checkpoint, also within a meta-block. The loop
+stops at the first command boundary past the caller's output room. Between
+meta-blocks, the decoder drops written history past the window once that is
+at least half the buffer. When it stops for output room or at the stream
+end, it hands back input past the last checkpoint, so bytes after the stream
+stay with the caller. After a failure other than the input end, it writes
+the output up to the failure before it returns the error.
+
+`StreamDecoder` runs a `PushDecoder` on 8 KiB reads from the wrapped reader.
 
 ## Safety
 

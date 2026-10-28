@@ -107,10 +107,28 @@ Requires cargo-fuzz:
 cargo fuzz run burli-decode
 cargo fuzz run burli-decode-reuse
 cargo fuzz run burli-roundtrip
+cargo fuzz run burli-push
 ```
 
 The code has no `unsafe`, so targets can build with `--sanitizer none`.
 `scripts/overnight_fuzz.sh` does that by default.
+
+## Python Binding
+
+`bindings/python` builds the `burli` Python package with PyO3 and maturin.
+It is its own Cargo workspace, outside the root one.
+
+```bash
+cd bindings/python
+uv venv && uv pip install maturin pytest brotli urllib3
+.venv/bin/maturin develop --release
+.venv/bin/pytest
+cargo clippy --all-targets -- -D warnings
+```
+
+The tests compare against Google's `brotli` package and run urllib3 with
+burli in its place. `release-python.yml` builds wheels and an sdist on a
+`burli-python-v*` tag and publishes them to PyPI through trusted publishing.
 
 ## Benchmarks And Charts
 

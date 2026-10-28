@@ -8,6 +8,8 @@ extern crate alloc;
 
 #[cfg(feature = "alloc")]
 pub mod context;
+#[cfg(feature = "alloc")]
+pub mod push;
 #[cfg(feature = "std")]
 pub mod streaming;
 

@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+- Add `PushDecoder`, which decodes a stream from input and output in
+  pieces. It takes input only when it needs more, writes output as it
+  decodes it, also within a meta-block, and never takes input past the
+  stream end. `DecodeProgress` reports the input taken and output written,
+  and `DecodeStatus` what the decoder needs next.
+- `StreamDecoder` runs on `PushDecoder` and decodes in linear time, 5.8x to
+  102x faster than 0.3.6 on the Silesia files. It decoded each meta-block
+  again from its start for each 8 KiB of input, and copied the retained
+  window for each meta-block: Silesia `mozilla` from rust-brotli q5 took
+  23.3 s, against 0.25 s now and 0.20 s one-shot. It takes 1.02x to 1.45x
+  the time of one-shot decoding, and returns output as soon as it decodes
+  it, also within a meta-block.
+- Add `StreamEncoder::get_ref` and `StreamEncoder::get_mut`.
+
 ## [0.3.6] - 2026-10-28
 
 - All crates now enforce `#![forbid(unsafe_code)]`. The `paranoid` feature

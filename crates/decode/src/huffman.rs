@@ -81,21 +81,52 @@ impl CodeGroup {
         alphabet_size: usize,
         wide: bool,
     ) -> Result<Self, DecompressError> {
+        let mut group = Self::new(count, alphabet_size, wide)?;
+        let mut lists = SymbolLists::new();
+        for tree in 0..count {
+            group.read_code_with(reader, tree, alphabet_size, &mut lists)?;
+        }
+        Ok(group)
+    }
+
+    /// A group of `count` codes over `alphabet_size` symbols, which
+    /// [`Self::read_code`] reads one at a time.
+    pub(crate) fn new(
+        count: usize,
+        alphabet_size: usize,
+        wide: bool,
+    ) -> Result<Self, DecompressError> {
         if alphabet_size == 0 || alphabet_size > MAX_ALPHABET_SIZE {
             return Err(BurliError::Format("invalid Brotli Huffman alphabet size"));
         }
-        let mut group = Self::with_count(count, wide && count == 1);
-        let mut lists = SymbolLists::new();
-        for tree in 0..count {
-            let hskip = reader.read_bits(2)? as u8;
-            if hskip == 1 {
-                read_simple_prefix_code(reader, alphabet_size, &mut lists)?;
-            } else {
-                read_complex_prefix_code(reader, alphabet_size, hskip, &mut lists)?;
-            }
-            group.set_code(tree, &lists)?;
+        Ok(Self::with_count(count, wide && count == 1))
+    }
+
+    /// Reads code `tree` of the group. The group changes only once the
+    /// whole code is read, so a read that runs out of input can run again.
+    pub(crate) fn read_code(
+        &mut self,
+        reader: &mut BitReader<'_>,
+        tree: usize,
+        alphabet_size: usize,
+    ) -> Result<(), DecompressError> {
+        self.read_code_with(reader, tree, alphabet_size, &mut SymbolLists::new())
+    }
+
+    fn read_code_with(
+        &mut self,
+        reader: &mut BitReader<'_>,
+        tree: usize,
+        alphabet_size: usize,
+        lists: &mut SymbolLists,
+    ) -> Result<(), DecompressError> {
+        let hskip = reader.read_bits(2)? as u8;
+        if hskip == 1 {
+            read_simple_prefix_code(reader, alphabet_size, lists)?;
+        } else {
+            read_complex_prefix_code(reader, alphabet_size, hskip, lists)?;
         }
-        Ok(group)
+        self.set_code(tree, lists)
     }
 
     fn with_count(count: usize, wants_wide: bool) -> Self {

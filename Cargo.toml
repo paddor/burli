@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/core", "crates/encode", "crates/decode", "crates/cat"]
-exclude = ["bench", "fuzz", "jsr"]
+exclude = ["bench", "bindings", "fuzz", "jsr"]
 
 [package]
 name = "burli"
@@ -58,6 +58,10 @@ path = "tests/google_conformance.rs"
 [[test]]
 name = "burli-output-sizing"
 path = "tests/output_sizing.rs"
+
+[[test]]
+name = "burli-push"
+path = "tests/push.rs"
 
 [[test]]
 name = "burli-roundtrip"

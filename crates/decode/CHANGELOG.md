@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+- Add `push::PushDecoder`, which decodes a stream from input and output in
+  pieces. It takes input only when it needs more, writes output as it
+  decodes it, also within a meta-block, and never takes input past the
+  stream end. A compressed meta-block reads its header, then each prefix
+  code, then runs a command loop that stops and goes on at checkpoints, so
+  input split in any way decodes in linear time.
+- `StreamDecoder` runs on `PushDecoder`. It decoded each meta-block again
+  from its start for each 8 KiB of input and copied the retained window for
+  each meta-block, which took 5.8x to 102x as long on the Silesia files.
+
 ## [0.3.5] - 2026-10-28
 
 - Enforce `#![forbid(unsafe_code)]`. Backward copies, literal writes, and

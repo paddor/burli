@@ -26,7 +26,7 @@ fi
 
 targets=("$@")
 if [ "${#targets[@]}" -eq 0 ]; then
-  targets=(burli-decode burli-roundtrip burli-fragmented)
+  targets=(burli-decode burli-roundtrip burli-fragmented burli-push)
 fi
 
 mkdir -p "$LOG_DIR/artifacts" "$LOG_DIR/worker-logs"

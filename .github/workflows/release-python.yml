@@ -1,0 +1,175 @@
+name: release-python
+
+on:
+  push:
+    tags:
+      - "burli-python-v*"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/release-python.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux wheels (${{ matrix.target }}, ${{ matrix.manylinux }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64]
+        manylinux: [auto, musllinux_1_2]
+        include:
+          - target: x86_64
+            runner: ubuntu-latest
+          - target: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      # The repo config tunes for the build CPU; wheels must run on any.
+      - name: Disable local Cargo configuration
+        shell: bash
+        run: rm -f .cargo/config.toml
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          working-directory: bindings/python
+          manylinux: ${{ matrix.manylinux }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}-${{ matrix.manylinux }}
+          path: bindings/python/dist
+
+  windows:
+    name: Windows wheels (${{ matrix.platform.target }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: windows-latest
+            target: x64
+            python_arch: x64
+          - runner: windows-11-arm
+            target: aarch64
+            python_arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      # The repo config tunes for the build CPU; wheels must run on any.
+      - name: Disable local Cargo configuration
+        shell: bash
+        run: rm -f .cargo/config.toml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          architecture: ${{ matrix.platform.python_arch }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          working-directory: bindings/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.platform.target }}
+          path: bindings/python/dist
+
+  macos:
+    name: macOS wheels (${{ matrix.platform.target }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: macos-15-intel
+            target: x86_64
+          - runner: macos-latest
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      # The repo config tunes for the build CPU; wheels must run on any.
+      - name: Disable local Cargo configuration
+        shell: bash
+        run: rm -f .cargo/config.toml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          working-directory: bindings/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.platform.target }}
+          path: bindings/python/dist
+
+  sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The repo config tunes for the build CPU; wheels must run on any.
+      - name: Disable local Cargo configuration
+        shell: bash
+        run: rm -f .cargo/config.toml
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+          working-directory: bindings/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: bindings/python/dist
+
+  smoke-test:
+    name: Smoke test (${{ matrix.os }}, Python ${{ matrix.python }})
+    needs: [linux, macos, windows]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Ubuntu 26.04 has no Python 3.9.
+          - os: ubuntu-24.04
+            python: "3.9"
+            wheels: wheels-linux-x86_64-auto
+          - os: ubuntu-latest
+            python: "3.14"
+            wheels: wheels-linux-x86_64-auto
+          - os: macos-latest
+            python: "3.13"
+            wheels: wheels-macos-aarch64
+          - os: windows-latest
+            python: "3.13"
+            wheels: wheels-windows-x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.wheels }}
+          path: dist
+      - run: pip install --no-index --find-links dist burli
+      - run: pip install pytest brotli urllib3
+      - run: pytest bindings/python/tests
+
+  publish:
+    name: Publish to PyPI
+    if: github.event_name == 'push'
+    needs: [linux, windows, macos, sdist, smoke-test]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/burli
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
