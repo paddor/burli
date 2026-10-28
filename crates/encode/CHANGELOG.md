@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Keep hash tables above 16 KiB in the workspace, which contexts and
+  streams reuse, instead of on the stack. With LTO, compression took up to
+  608 KiB of stack, which overflowed the 512 KiB stacks of Ruby fibers and
+  of .NET 8 threads on macOS. It now takes at most 120 KiB with LTO and
+  88 KiB without. Output is unchanged.
+
 ## [0.3.5] - 2026-10-28
 
 - Add `StreamEncoder::get_ref` and `StreamEncoder::get_mut`.

@@ -1,4 +1,4 @@
-use alloc::vec;
+use alloc::vec::Vec;
 
 use burli_core::dictionary::{
     kBrotliDictionary, kBrotliDictionaryOffsetsByLength, kBrotliDictionarySizeBitsByLength,
@@ -7,7 +7,7 @@ use burli_core::dictionary::{
 
 use super::{
     INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, has_distance_code,
-    match_len, read_u32_le, read_u64_le, score_distance, score_last_distance,
+    match_len, read_u32_le, read_u64_le, reset_table, score_distance, score_last_distance,
     static_dictionary_hash::kStaticDictionaryHash, token_supports_last_distance, tokens::Sink,
     tune,
 };
@@ -47,12 +47,14 @@ struct SearchParams {
 #[derive(Clone, Debug)]
 pub(super) struct Workspace {
     dist_cache: [usize; 4],
+    table: Vec<u32>,
 }
 
 impl Default for Workspace {
     fn default() -> Self {
         Self {
             dist_cache: [INITIAL_LAST_DISTANCE, 11, 15, 16],
+            table: Vec::new(),
         }
     }
 }
@@ -194,19 +196,37 @@ fn collect_with_dictionary_lazy<
                 LONG_MATCH_STORE_STEP,
             >(input, input_base, max_backward_distance, workspace, sink);
         }
-        16 if !USE_DICTIONARY => {
-            return collect_with_stack_table_16::<
-                USE_DICTIONARY,
-                MAX_LAZY_MATCHES,
-                PROBE_LAST_DISTANCE,
-                PROBE_LAZY_LAST_DISTANCE,
-                LONG_MATCH_STORE_STEP,
-            >(input, input_base, max_backward_distance, workspace, sink);
-        }
         _ => {}
     }
 
-    let mut table = vec![NO_POSITION; TABLE_SIZE];
+    collect_with_heap_table::<
+        USE_DICTIONARY,
+        MAX_LAZY_MATCHES,
+        PROBE_LAST_DISTANCE,
+        PROBE_LAZY_LAST_DISTANCE,
+        LONG_MATCH_STORE_STEP,
+    >(input, input_base, max_backward_distance, workspace, sink);
+}
+
+/// [`collect_with_table`] on the table of `workspace`. The hot loop gets its
+/// own function: inlined next to the stack table variants, it runs out of
+/// registers for the table address.
+#[inline(never)]
+fn collect_with_heap_table<
+    const USE_DICTIONARY: bool,
+    const MAX_LAZY_MATCHES: usize,
+    const PROBE_LAST_DISTANCE: bool,
+    const PROBE_LAZY_LAST_DISTANCE: bool,
+    const LONG_MATCH_STORE_STEP: usize,
+>(
+    input: &[u8],
+    input_base: usize,
+    max_backward_distance: usize,
+    workspace: &mut Workspace,
+    sink: &mut impl Sink,
+) {
+    let mut table = core::mem::take(&mut workspace.table);
+    reset_table(&mut table, TABLE_SIZE, NO_POSITION);
     collect_with_table::<
         USE_DICTIONARY,
         TABLE_BITS,
@@ -222,38 +242,7 @@ fn collect_with_dictionary_lazy<
         &mut table,
         sink,
     );
-}
-
-#[allow(clippy::large_stack_arrays)]
-fn collect_with_stack_table_16<
-    const USE_DICTIONARY: bool,
-    const MAX_LAZY_MATCHES: usize,
-    const PROBE_LAST_DISTANCE: bool,
-    const PROBE_LAZY_LAST_DISTANCE: bool,
-    const LONG_MATCH_STORE_STEP: usize,
->(
-    input: &[u8],
-    input_base: usize,
-    max_backward_distance: usize,
-    workspace: &mut Workspace,
-    sink: &mut impl Sink,
-) {
-    let mut table = [NO_POSITION; TABLE_SIZE];
-    collect_with_table::<
-        USE_DICTIONARY,
-        16,
-        MAX_LAZY_MATCHES,
-        PROBE_LAST_DISTANCE,
-        PROBE_LAZY_LAST_DISTANCE,
-        LONG_MATCH_STORE_STEP,
-    >(
-        input,
-        input_base,
-        max_backward_distance,
-        workspace,
-        &mut table,
-        sink,
-    );
+    workspace.table = table;
 }
 
 fn collect_with_stack_table_10<

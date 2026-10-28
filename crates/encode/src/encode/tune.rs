@@ -94,7 +94,6 @@ pub(super) const Q2_SMALL_TABLE_MAX_INPUT: usize = 8 * 1024;
 
 pub(super) const Q3_TINY_INPUT_MAX: usize = 1024;
 pub(super) const Q3_SMALL_MEDIUM_INPUT_MAX: usize = 320 * 1024;
-pub(super) const Q3_STACK_TABLE_INPUT_MAX: usize = Q3_SMALL_MEDIUM_INPUT_MAX;
 
 pub(super) const Q4_TINY_INPUT_MAX: usize = 1024;
 pub(super) const Q4_SMALL_MEDIUM_INPUT_MAX: usize = 320 * 1024;
