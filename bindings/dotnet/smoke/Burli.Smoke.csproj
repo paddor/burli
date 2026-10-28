@@ -5,7 +5,7 @@
     <RollForward>Major</RollForward>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <BurliVersion Condition="'$(BurliVersion)' == ''">0.1.0</BurliVersion>
+    <BurliVersion Condition="'$(BurliVersion)' == ''">0.1.1</BurliVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Burli" Version="$(BurliVersion)" />

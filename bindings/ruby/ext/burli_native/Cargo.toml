@@ -1,6 +1,6 @@
 [package]
 name = "burli_native"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.89"
 description = "Ruby binding for burli"
@@ -13,7 +13,7 @@ name = "burli_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-burli = { version = "0.3.7", default-features = false, features = ["std"] }
+burli = { version = "0.3.8", default-features = false, features = ["std"] }
 rb-sys = "0.9.130"
 
 [lints.clippy]

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-28
+
 - Compression no longer overflows the stack of .NET 8 threads on macOS,
   which have 512 KiB. Quality 2 took up to 608 KiB; compression now takes
   at most 120 KiB.

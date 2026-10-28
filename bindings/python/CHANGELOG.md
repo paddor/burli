@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-28
+
 - Compression takes at most 120 KiB of stack, down from 608 KiB.
 
 ## [0.1.0] - 2026-10-28
