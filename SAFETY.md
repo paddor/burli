@@ -16,6 +16,9 @@ appears only at the boundary to a runtime:
 
 - The Ruby binding calls the Ruby C API through rb-sys. It releases the GVL
   around large work, with the input String locked or copied.
+- The .NET binding's native library takes pointer and length pairs from
+  `Native.cs`, catches panics at every entry, and hands out handles that .NET
+  `SafeHandle`s own.
 
 Input that other threads could change during the work is locked or copied
 first.

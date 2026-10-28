@@ -163,6 +163,22 @@ The tests compare against `node:zlib`. `release-node.yml` builds the native
 modules on a `burli-node-v*` tag, packs each as `@paddor/burli-<platform>`,
 and publishes those and `burli` to npm with provenance.
 
+## .NET Binding
+
+`bindings/dotnet` builds the `Burli` NuGet package. `native/` is a private
+`extern "C"` library that only `src/Native.cs` calls; it is no public C API.
+
+```bash
+cd bindings/dotnet
+cargo build --manifest-path native/Cargo.toml --release
+dotnet run --project tests/Burli.Tests.csproj -p:BurliNativeDir=TARGET_DIR/release
+```
+
+`BurliNativeDir` defaults to `native/target/release`. The tests compare
+against `System.IO.Compression`. `release-dotnet.yml` builds the native
+libraries on a `burli-dotnet-v*` tag, packs them into one package, and
+publishes it to NuGet through trusted publishing.
+
 ## Benchmarks And Charts
 
 Benchmarks are deliberate measurement work, not routine verification. The bench

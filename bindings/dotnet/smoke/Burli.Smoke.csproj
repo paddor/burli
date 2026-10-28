@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <BurliVersion Condition="'$(BurliVersion)' == ''">0.1.0</BurliVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Burli" Version="$(BurliVersion)" />
+  </ItemGroup>
+</Project>

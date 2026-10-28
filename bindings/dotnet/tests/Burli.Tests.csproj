@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- Where cargo put the native library: pass -p:BurliNativeDir=... -->
+    <BurliNativeDir Condition="'$(BurliNativeDir)' == ''">$(MSBuildProjectDirectory)/../native/target/release</BurliNativeDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Burli.csproj" />
+    <Compile Include="Program.cs" />
+    <None Include="$(BurliNativeDir)/libburli_dotnet.so" Condition="Exists('$(BurliNativeDir)/libburli_dotnet.so')" CopyToOutputDirectory="PreserveNewest" Link="libburli_dotnet.so" />
+    <None Include="$(BurliNativeDir)/libburli_dotnet.dylib" Condition="Exists('$(BurliNativeDir)/libburli_dotnet.dylib')" CopyToOutputDirectory="PreserveNewest" Link="libburli_dotnet.dylib" />
+    <None Include="$(BurliNativeDir)/burli_dotnet.dll" Condition="Exists('$(BurliNativeDir)/burli_dotnet.dll')" CopyToOutputDirectory="PreserveNewest" Link="burli_dotnet.dll" />
+  </ItemGroup>
+</Project>

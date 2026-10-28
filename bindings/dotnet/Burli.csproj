@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
+    <PackageId>Burli</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Patrik Wenger</Authors>
+    <Description>Memory-safe Brotli compression in Rust, with the API of the Brotli types of System.IO.Compression.</Description>
+    <PackageTags>brotli;compression;decompression;rust</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/paddor/burli/tree/main/bindings/dotnet</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/paddor/burli</RepositoryUrl>
+    <!-- Native libraries staged as RID/library, packed under runtimes/. -->
+    <NativeAssetRoot Condition="'$(NativeAssetRoot)' == ''">$(MSBuildProjectDirectory)/runtimes</NativeAssetRoot>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsAotCompatible>true</IsAotCompatible>
+    <RootNamespace>Burli</RootNamespace>
+    <AssemblyName>Burli</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/**/*.cs" />
+    <None Include="README.md" Pack="true" PackagePath="README.md" />
+    <None Include="$(NativeAssetRoot)/**/*" Pack="true">
+      <PackagePath>runtimes/%(RecursiveDir)native/%(Filename)%(Extension)</PackagePath>
+    </None>
+  </ItemGroup>
+</Project>
