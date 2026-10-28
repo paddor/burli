@@ -1,0 +1,6 @@
+/artifacts/
+/node_modules/
+/target/
+/native.d.ts
+*.node
+*.tgz

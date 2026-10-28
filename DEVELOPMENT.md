@@ -147,6 +147,22 @@ The tests compare against the `brotli` gem. `release-ruby.yml` builds the
 source gem and precompiled gems on a `burli-ruby-v*` tag and publishes them to
 RubyGems through trusted publishing.
 
+## Node Binding
+
+`bindings/node` builds the `burli` npm package with napi-rs.
+
+```bash
+cd bindings/node
+npm install
+npm run build
+npm test
+cargo clippy --all-targets -- -D warnings
+```
+
+The tests compare against `node:zlib`. `release-node.yml` builds the native
+modules on a `burli-node-v*` tag, packs each as `@paddor/burli-<platform>`,
+and publishes those and `burli` to npm with provenance.
+
 ## Benchmarks And Charts
 
 Benchmarks are deliberate measurement work, not routine verification. The bench

@@ -1,0 +1,42 @@
+{
+  "name": "@paddor/burli-linux-arm64-gnu",
+  "version": "0.1.0",
+  "cpu": [
+    "arm64"
+  ],
+  "main": "burli.linux-arm64-gnu.node",
+  "files": [
+    "burli.linux-arm64-gnu.node"
+  ],
+  "description": "Memory-safe Brotli compression in Rust, with the API of the Brotli functions of node:zlib",
+  "keywords": [
+    "brotli",
+    "compression",
+    "decompression",
+    "rust",
+    "zlib"
+  ],
+  "author": "Patrik Wenger <paddor@gmail.com>",
+  "homepage": "https://github.com/paddor/burli/tree/main/bindings/node#readme",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paddor/burli.git",
+    "directory": "bindings/node"
+  },
+  "bugs": {
+    "url": "https://github.com/paddor/burli/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ]
+}
