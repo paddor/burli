@@ -13,7 +13,7 @@ end
 
 Minitest::TestTask.create(:test) do |task|
   task.libs << "lib" << "test"
-  task.test_globs = ["test/test_*.rb"]
+  task.test_globs = ["test/**/*_test.rb"]
 end
 
 CLOBBER.include("pkg", "tmp", "lib/burli/**/*.{so,bundle,dll}")

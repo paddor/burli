@@ -114,7 +114,7 @@ jobs:
         run: gem install dist/*.gem --no-document
       - run: gem install minitest brotli --no-document
       # Without `-Ilib`, the tests load the installed gem.
-      - run: ruby -Itest test/test_burli.rb
+      - run: ruby -Itest test/burli_test.rb
         working-directory: bindings/ruby
 
   publish:
