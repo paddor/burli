@@ -4,6 +4,7 @@
 // follow the API of its Brotli functions.
 
 const assert = require("node:assert/strict");
+const { once } = require("node:events");
 const { Readable, Transform } = require("node:stream");
 const { pipeline } = require("node:stream/promises");
 const { test } = require("node:test");
@@ -162,19 +163,26 @@ test("decompression streams emit at most chunkSize bytes at a time", async () =>
   }
 });
 
-test("flush makes the input so far decodable", async () => {
+// Without a working flush, these tests time out waiting for output.
+test("flush makes the input so far decodable", { timeout: 10_000 }, async () => {
   const payload = payloads.text;
   const compressor = burli.createBrotliCompress();
   const decompressor = zlib.createBrotliDecompress();
   const decoded = [];
-  decompressor.on("data", (chunk) => decoded.push(chunk));
+  let decodedLength = 0;
+  decompressor.on("data", (chunk) => {
+    decoded.push(chunk);
+    decodedLength += chunk.length;
+  });
   compressor.pipe(decompressor);
   let written = 0;
   for (const piece of pieces(payload, 3, 20_000)) {
     compressor.write(piece);
     written += piece.length;
     await new Promise((resolve) => compressor.flush(resolve));
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    while (decodedLength < written) {
+      await once(decompressor, "data");
+    }
     assert.deepEqual(Buffer.concat(decoded), payload.subarray(0, written));
   }
   compressor.end();
@@ -183,12 +191,11 @@ test("flush makes the input so far decodable", async () => {
   assert.equal(compressor.bytesWritten, payload.length);
 });
 
-test("flush option flushes after each write", async () => {
+test("flush option flushes after each write", { timeout: 10_000 }, async () => {
   const compressor = burli.createBrotliCompress({ flush: constants.BROTLI_OPERATION_FLUSH });
   const chunks = [];
   compressor.on("data", (chunk) => chunks.push(chunk));
-  compressor.write("hello ");
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => compressor.write("hello ", resolve));
   const decompressor = zlib.createBrotliDecompress();
   const partial = await new Promise((resolve) => {
     decompressor.once("data", resolve);
