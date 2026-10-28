@@ -1,0 +1,145 @@
+name: release-ruby
+
+on:
+  push:
+    tags:
+      - "burli-ruby-v*"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/release-ruby.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    name: Source gem
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bindings/ruby
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0"
+          bundler-cache: true
+          working-directory: bindings/ruby
+      - name: Check tag version
+        if: github.event_name == 'push'
+        run: |
+          version="$(ruby -Ilib -rburli/version -e 'print Burli::VERSION')"
+          test "$GITHUB_REF_NAME" = "burli-ruby-v$version"
+      - run: bundle exec rake build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gem-source
+          path: bindings/ruby/pkg/*.gem
+
+  native:
+    name: Native gem (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - x86_64-linux
+          - x86_64-linux-musl
+          - aarch64-linux
+          - aarch64-linux-musl
+          - x86_64-darwin
+          - arm64-darwin
+          - x64-mingw-ucrt
+    steps:
+      - uses: actions/checkout@v4
+      # The repo config tunes for the build CPU; gems must run on any.
+      - name: Disable local Cargo configuration
+        run: rm -f .cargo/config.toml
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0"
+      - uses: oxidize-rb/actions/cross-gem@v1
+        id: cross-gem
+        with:
+          platform: ${{ matrix.platform }}
+          ruby-versions: "3.3,3.4,4.0"
+          working-directory: bindings/ruby
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gem-${{ matrix.platform }}
+          path: ${{ steps.cross-gem.outputs.gem-path }}
+
+  smoke-test:
+    name: Smoke test (${{ matrix.os }}, Ruby ${{ matrix.ruby }}, ${{ matrix.gem }})
+    needs: [source, native]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            ruby: "3.3"
+            gem: x86_64-linux
+          - os: ubuntu-latest
+            ruby: "4.0"
+            gem: x86_64-linux
+          - os: ubuntu-24.04-arm
+            ruby: "4.0"
+            gem: aarch64-linux
+          - os: macos-latest
+            ruby: "4.0"
+            gem: arm64-darwin
+          - os: macos-15-intel
+            ruby: "3.4"
+            gem: x86_64-darwin
+          - os: windows-latest
+            ruby: "4.0"
+            gem: x64-mingw-ucrt
+          # Builds burli from crates.io with the runner's Rust.
+          - os: ubuntu-latest
+            ruby: "4.0"
+            gem: source
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: gem-${{ matrix.gem }}
+          path: dist
+      - name: Install gem
+        shell: bash
+        run: gem install dist/*.gem --no-document
+      - run: gem install minitest brotli --no-document
+      # Without `-Ilib`, the tests load the installed gem.
+      - run: ruby -Itest test/test_burli.rb
+        working-directory: bindings/ruby
+
+  publish:
+    name: Publish to RubyGems
+    if: github.event_name == 'push'
+    needs: [source, native, smoke-test]
+    runs-on: ubuntu-latest
+    environment:
+      name: rubygems
+      url: https://rubygems.org/gems/burli
+    permissions:
+      id-token: write
+    steps:
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gem-*
+          merge-multiple: true
+          path: dist
+      - uses: rubygems/configure-rubygems-credentials@v1
+      - name: Push gems
+        shell: bash
+        run: |
+          for gem in dist/*.gem; do
+            gem push "$gem"
+          done

@@ -130,6 +130,23 @@ The tests compare against Google's `brotli` package and run urllib3 with
 burli in its place. `release-python.yml` builds wheels and an sdist on a
 `burli-python-v*` tag and publishes them to PyPI through trusted publishing.
 
+## Ruby Binding
+
+`bindings/ruby` builds the `burli` gem with rb-sys, as the zrip and lz4rip
+gems do. It is its own Cargo workspace, which patches `burli` to the repo
+code; the source gem builds against `burli` from crates.io.
+
+```bash
+cd bindings/ruby
+bundle install
+bundle exec rake
+cargo clippy --all-targets -- -D warnings
+```
+
+The tests compare against the `brotli` gem. `release-ruby.yml` builds the
+source gem and precompiled gems on a `burli-ruby-v*` tag and publishes them to
+RubyGems through trusted publishing.
+
 ## Benchmarks And Charts
 
 Benchmarks are deliberate measurement work, not routine verification. The bench
