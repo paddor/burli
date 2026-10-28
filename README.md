@@ -7,8 +7,8 @@ all normal quality levels. The encoder currently supports qualities 0 through
 ## Why Bürli
 
 **Fast q0..q5 encoder.** Covers the transfer-oriented part of Brotli's
-speed/ratio curve. Input that samples as incompressible is stored or searched
-at a sparse stride instead of matched in full.
+speed/ratio curve. Input that samples as incompressible is stored, or searched
+with skip acceleration instead of matched in full.
 
 **Fast on small inputs.** Encodes and decodes small inputs, from 512 B, faster
 than rust-brotli, mbrotli, and Google's C library. See the small-input charts
