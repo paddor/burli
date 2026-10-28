@@ -1,0 +1,53 @@
+name: dotnet
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - ".github/workflows/dotnet.yml"
+      - "Cargo.toml"
+      - "bindings/dotnet/**"
+      - "crates/**"
+      - "src/**"
+
+jobs:
+  test:
+    name: .NET tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: bindings/dotnet
+    steps:
+      - uses: actions/checkout@v4
+      # Test the code the package ships, built without the repo CPU tuning.
+      - name: Disable local Cargo configuration
+        run: rm -f ../../.cargo/config.toml
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/dotnet/native
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - run: cargo fmt --manifest-path native/Cargo.toml --check
+      - run: cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings
+      - run: cargo build --manifest-path native/Cargo.toml --release
+      - run: dotnet format Burli.csproj --verify-no-changes
+      - run: dotnet format tests/Burli.Tests.csproj --verify-no-changes
+      - run: dotnet run --project tests/Burli.Tests.csproj --configuration Release
+      - name: Pack and install the package
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          bash scripts/package.sh "$RUNNER_TEMP/nuget" linux-x64=native/target/release/libburli_dotnet.so
+          dotnet restore smoke/Burli.Smoke.csproj --source "$RUNNER_TEMP/nuget"
+          dotnet run --project smoke/Burli.Smoke.csproj --no-restore

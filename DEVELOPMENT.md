@@ -130,6 +130,55 @@ The tests compare against Google's `brotli` package and run urllib3 with
 burli in its place. `release-python.yml` builds wheels and an sdist on a
 `burli-python-v*` tag and publishes them to PyPI through trusted publishing.
 
+## Ruby Binding
+
+`bindings/ruby` builds the `burli` gem with rb-sys, as the zrip and lz4rip
+gems do. It is its own Cargo workspace, which patches `burli` to the repo
+code; the source gem builds against `burli` from crates.io.
+
+```bash
+cd bindings/ruby
+bundle install
+bundle exec rake
+cargo clippy --all-targets -- -D warnings
+```
+
+The tests compare against the `brotli` gem. `release-ruby.yml` builds the
+source gem and precompiled gems on a `burli-ruby-v*` tag and publishes them to
+RubyGems through trusted publishing.
+
+## Node Binding
+
+`bindings/node` builds the `burli` npm package with napi-rs.
+
+```bash
+cd bindings/node
+npm install
+npm run build
+npm test
+cargo clippy --all-targets -- -D warnings
+```
+
+The tests compare against `node:zlib`. `release-node.yml` builds the native
+modules on a `burli-node-v*` tag, packs each as `@paddor/burli-<platform>`,
+and publishes those and `burli` to npm with provenance.
+
+## .NET Binding
+
+`bindings/dotnet` builds the `Burli` NuGet package. `native/` is a private
+`extern "C"` library that only `src/Native.cs` calls; it is no public C API.
+
+```bash
+cd bindings/dotnet
+cargo build --manifest-path native/Cargo.toml --release
+dotnet run --project tests/Burli.Tests.csproj -p:BurliNativeDir=TARGET_DIR/release
+```
+
+`BurliNativeDir` defaults to `native/target/release`. The tests compare
+against `System.IO.Compression`. `release-dotnet.yml` builds the native
+libraries on a `burli-dotnet-v*` tag, packs them into one package, and
+publishes it to NuGet through trusted publishing.
+
 ## Benchmarks And Charts
 
 Benchmarks are deliberate measurement work, not routine verification. The bench

@@ -1,0 +1,61 @@
+{
+  "name": "burli",
+  "version": "0.1.0",
+  "description": "Memory-safe Brotli compression in Rust, with the API of the Brotli functions of node:zlib",
+  "license": "MIT",
+  "author": "Patrik Wenger <paddor@gmail.com>",
+  "type": "commonjs",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "keywords": [
+    "brotli",
+    "compression",
+    "decompression",
+    "rust",
+    "zlib"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paddor/burli.git",
+    "directory": "bindings/node"
+  },
+  "bugs": {
+    "url": "https://github.com/paddor/burli/issues"
+  },
+  "homepage": "https://github.com/paddor/burli/tree/main/bindings/node#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "napi build --release --dts native.d.ts",
+    "build:debug": "napi build --dts native.d.ts",
+    "build:platform": "napi build --platform --release --no-js --dts native.d.ts",
+    "artifacts": "napi artifacts --output-dir artifacts",
+    "release:prepare": "node scripts/prepare-release.js",
+    "test": "node --test test/*.test.js"
+  },
+  "napi": {
+    "binaryName": "burli",
+    "packageName": "@paddor/burli",
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-unknown-linux-musl",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "aarch64-pc-windows-msvc"
+    ]
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.10.9"
+  }
+}

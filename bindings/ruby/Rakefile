@@ -1,0 +1,22 @@
+# frozen_string_literal: true
+
+require "bundler/gem_tasks"
+require "minitest/test_task"
+require "rake/clean"
+require "rb_sys/extensiontask"
+
+GEMSPEC = Gem::Specification.load("burli.gemspec") || abort("Could not load burli.gemspec")
+
+RbSys::ExtensionTask.new("burli_native", GEMSPEC) do |ext|
+  ext.lib_dir = "lib/burli"
+end
+
+Minitest::TestTask.create(:test) do |task|
+  task.libs << "lib" << "test"
+  task.test_globs = ["test/test_*.rb"]
+end
+
+CLOBBER.include("pkg", "tmp", "lib/burli/**/*.{so,bundle,dll}")
+
+task test: :compile
+task default: :test

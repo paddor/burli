@@ -1,0 +1,48 @@
+name: node
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - ".github/workflows/node.yml"
+      - "Cargo.toml"
+      - "bindings/node/**"
+      - "crates/**"
+      - "src/**"
+
+jobs:
+  test:
+    name: npm test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ["22", "24"]
+    defaults:
+      run:
+        working-directory: bindings/node
+    steps:
+      - uses: actions/checkout@v4
+      # Test the code the packages ship, built without the repo CPU tuning.
+      - name: Disable local Cargo configuration
+        shell: bash
+        run: rm -f ../../.cargo/config.toml
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/node
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: bindings/node/package-lock.json
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: node scripts/prepare-release.js 0.0.0 --dry-run

@@ -1,0 +1,8 @@
+[workspace]
+members = ["ext/burli_native"]
+resolver = "3"
+
+# The gem builds against burli from crates.io; the repo builds against the
+# repo code.
+[patch.crates-io]
+burli = { path = "../.." }

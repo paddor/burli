@@ -1,0 +1,7 @@
+/.bundle/
+/pkg/
+/tmp/
+/target/
+/lib/burli/**/*.bundle
+/lib/burli/**/*.dll
+/lib/burli/**/*.so

@@ -1,0 +1,205 @@
+name: release-dotnet
+
+on:
+  push:
+    tags:
+      - "burli-dotnet-v*"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/release-dotnet.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native ${{ matrix.rid }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc 2.17, as manylinux2014.
+          - rid: linux-x64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            zig-target: x86_64-unknown-linux-gnu.2.17
+            library: libburli_dotnet.so
+          - rid: linux-arm64
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            zig-target: aarch64-unknown-linux-gnu.2.17
+            library: libburli_dotnet.so
+          - rid: linux-musl-x64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            zig-target: x86_64-unknown-linux-musl
+            library: libburli_dotnet.so
+          - rid: linux-musl-arm64
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            zig-target: aarch64-unknown-linux-musl
+            library: libburli_dotnet.so
+          - rid: osx-x64
+            runner: macos-latest
+            target: x86_64-apple-darwin
+            library: libburli_dotnet.dylib
+          - rid: osx-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            library: libburli_dotnet.dylib
+          - rid: win-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            library: burli_dotnet.dll
+          - rid: win-arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            library: burli_dotnet.dll
+    defaults:
+      run:
+        shell: bash
+        working-directory: bindings/dotnet
+    steps:
+      - uses: actions/checkout@v4
+      # The repo config tunes for the build CPU; the package must run on any.
+      - name: Disable local Cargo configuration
+        run: rm -f ../../.cargo/config.toml
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        if: matrix.zig-target
+      - uses: taiki-e/install-action@v2
+        if: matrix.zig-target
+        with:
+          tool: cargo-zigbuild
+      - name: Build native library
+        run: |
+          if [[ -n "${{ matrix.zig-target }}" ]]; then
+            # A musl cdylib links musl dynamically.
+            export RUSTFLAGS="-C target-feature=-crt-static"
+            cargo zigbuild --manifest-path native/Cargo.toml --release --target "${{ matrix.zig-target }}"
+          else
+            cargo build --manifest-path native/Cargo.toml --release --target "${{ matrix.target }}"
+          fi
+          mkdir -p "runtimes/${{ matrix.rid }}"
+          cp "native/target/${{ matrix.target }}/release/${{ matrix.library }}" "runtimes/${{ matrix.rid }}/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: bindings/dotnet/runtimes
+          if-no-files-found: error
+
+  package:
+    name: Pack NuGet package
+    needs: [native]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        working-directory: bindings/dotnet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Check tag version
+        id: version
+        run: |
+          version="$(dotnet msbuild Burli.csproj -getProperty:Version -nologo)"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            test "$GITHUB_REF_NAME" = "burli-dotnet-v$version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: bindings/dotnet/runtimes
+      - name: Check native libraries
+        run: |
+          for rid in linux-x64 linux-arm64 linux-musl-x64 linux-musl-arm64 osx-x64 osx-arm64 win-x64 win-arm64; do
+            ls "runtimes/$rid"/*burli_dotnet*
+          done
+      - run: dotnet pack Burli.csproj --configuration Release --output nuget
+      - run: unzip -l "nuget/Burli.${{ steps.version.outputs.version }}.nupkg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nuget
+          path: bindings/dotnet/nuget/*.nupkg
+
+  smoke-test:
+    name: Smoke test (${{ matrix.name }})
+    needs: [package]
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-latest
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+          - name: linux-musl-x64
+            runner: ubuntu-latest
+            container: mcr.microsoft.com/dotnet/sdk:8.0-alpine
+          - name: osx-x64
+            runner: macos-15-intel
+          - name: osx-arm64
+            runner: macos-latest
+          - name: win-x64
+            runner: windows-latest
+          - name: win-arm64
+            runner: windows-11-arm
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install bash
+        if: matrix.container
+        shell: sh
+        run: apk add --no-cache bash
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        if: ${{ !matrix.container }}
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/download-artifact@v4
+        with:
+          name: nuget
+          path: nuget
+      - run: dotnet restore bindings/dotnet/smoke/Burli.Smoke.csproj --source "$PWD/nuget" -p:BurliVersion=${{ needs.package.outputs.version }}
+      - run: dotnet run --project bindings/dotnet/smoke/Burli.Smoke.csproj --no-restore -p:BurliVersion=${{ needs.package.outputs.version }}
+
+  publish:
+    name: Publish to NuGet
+    if: github.event_name == 'push'
+    needs: [package, smoke-test]
+    runs-on: ubuntu-latest
+    environment:
+      name: nuget
+      url: https://www.nuget.org/packages/Burli
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/download-artifact@v4
+        with:
+          name: nuget
+          path: nuget
+      - uses: NuGet/login@v1
+        id: login
+        with:
+          user: paddor
+      - run: |
+          dotnet nuget push "nuget/Burli.${{ needs.package.outputs.version }}.nupkg" \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json

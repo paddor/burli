@@ -1,0 +1,11 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+gemspec
+
+# The brotli gem does not build on TruffleRuby.
+gem "brotli", platforms: %i[mri windows]
+gem "minitest"
+gem "rake"
+gem "rake-compiler"

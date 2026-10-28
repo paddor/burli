@@ -1,0 +1,222 @@
+name: release-node
+
+on:
+  push:
+    tags:
+      - "burli-node-v*"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/release-node.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc 2.17, as manylinux2014.
+          - platform: linux-x64-gnu
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            napi-cross: true
+          - platform: linux-x64-musl
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            cross: true
+          - platform: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            napi-cross: true
+          - platform: linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            cross: true
+          - platform: darwin-x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - platform: darwin-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          - platform: win32-x64-msvc
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: win32-arm64-msvc
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+        working-directory: bindings/node
+    steps:
+      - uses: actions/checkout@v4
+      # The repo config tunes for the build CPU; packages must run on any.
+      - name: Disable local Cargo configuration
+        run: rm -f ../../.cargo/config.toml
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
+        if: matrix.cross
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: bindings/node/package-lock.json
+      - run: npm ci
+      - name: Build native module
+        run: |
+          args=(--target "${{ matrix.target }}")
+          if [[ "${{ matrix.cross }}" == "true" ]]; then
+            args+=(--cross-compile)
+          fi
+          if [[ "${{ matrix.napi-cross }}" == "true" ]]; then
+            args+=(--use-napi-cross)
+          fi
+          npm run build:platform -- "${args[@]}"
+      - name: Test native module
+        if: ${{ !matrix.cross }}
+        run: |
+          cp "burli.${{ matrix.platform }}.node" burli.node
+          npm test
+          rm burli.node
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}
+          path: bindings/node/burli.${{ matrix.platform }}.node
+          if-no-files-found: error
+
+  package:
+    name: Pack npm packages
+    needs: [native]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        working-directory: bindings/node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: bindings/node/package-lock.json
+      - run: npm ci
+      - name: Check tag version
+        id: version
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            test "$GITHUB_REF_NAME" = "burli-node-v$version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: bindings/node/artifacts
+      - run: npm run artifacts
+      - name: Check platform packages
+        run: |
+          for dir in npm/*; do
+            test -f "$dir/burli.${dir#npm/}.node"
+          done
+      - run: npm run release:prepare -- "${{ steps.version.outputs.version }}"
+      - name: Pack
+        run: |
+          mkdir -p packages
+          for dir in npm/*; do
+            npm pack "./$dir" --pack-destination packages
+          done
+          npm pack . --pack-destination packages
+          ls -l packages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages
+          path: bindings/node/packages/*.tgz
+
+  smoke-test:
+    name: Smoke test (${{ matrix.platform }})
+    needs: [package]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64-gnu
+            runner: ubuntu-latest
+          - platform: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+          - platform: darwin-x64
+            runner: macos-15-intel
+          - platform: darwin-arm64
+            runner: macos-latest
+          - platform: win32-x64-msvc
+            runner: windows-latest
+          - platform: win32-arm64-msvc
+            runner: windows-11-arm
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: packages
+      - name: Install packages
+        run: |
+          version="${{ needs.package.outputs.version }}"
+          mkdir smoke
+          cd smoke
+          npm init -y > /dev/null
+          npm install --omit=optional "../packages/paddor-burli-${{ matrix.platform }}-$version.tgz" "../packages/burli-$version.tgz"
+      - name: Round trip with node:zlib
+        working-directory: smoke
+        run: |
+          node -e '
+            const burli = require("burli");
+            const zlib = require("node:zlib");
+            const data = Buffer.from("burli smoke test ".repeat(1000));
+            if (!zlib.brotliDecompressSync(burli.brotliCompressSync(data)).equals(data)) throw new Error("compress");
+            if (!burli.brotliDecompressSync(zlib.brotliCompressSync(data)).equals(data)) throw new Error("decompress");
+          '
+
+  publish:
+    name: Publish to npm
+    if: github.event_name == 'push'
+    needs: [package, smoke-test]
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/burli
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: packages
+      # Platform packages first, so the root package's dependencies exist.
+      - name: Publish
+        shell: bash
+        run: |
+          root="packages/burli-${{ needs.package.outputs.version }}.tgz"
+          for package in packages/*.tgz; do
+            if [[ "$package" != "$root" ]]; then
+              npm publish "./$package" --access public --provenance
+            fi
+          done
+          npm publish "./$root" --access public --provenance
