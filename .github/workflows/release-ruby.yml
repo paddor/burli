@@ -136,7 +136,7 @@ jobs:
           pattern: gem-*
           merge-multiple: true
           path: dist
-      - uses: rubygems/configure-rubygems-credentials@v1
+      - uses: rubygems/configure-rubygems-credentials@v2.1.0
       - name: Push gems
         shell: bash
         run: |
