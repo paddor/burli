@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFrameworks>net10.0;net8.0</TargetFrameworks>
     <PackageId>Burli</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Authors>Patrik Wenger</Authors>
     <Description>Memory-safe Brotli compression in Rust, with the API of the Brotli types of System.IO.Compression.</Description>
     <PackageTags>brotli;compression;decompression;rust</PackageTags>

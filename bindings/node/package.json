@@ -1,6 +1,6 @@
 {
   "name": "@paddor/burli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Memory-safe Brotli compression in Rust, with the API of the Brotli functions of node:zlib",
   "license": "MIT",
   "author": "Patrik Wenger <paddor@gmail.com>",
