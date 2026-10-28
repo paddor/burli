@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-10-28
+
 - Compression takes at most 120 KiB of stack, down from 608 KiB with LTO.
   It overflowed the 512 KiB stacks of Ruby fibers and of .NET 8 threads on
   macOS. Output is unchanged.
