@@ -1,8 +1,9 @@
-use alloc::vec;
+use alloc::vec::Vec;
 
 use super::{
     INITIAL_LAST_DISTANCE, MIN_MATCH_BYTES, Token, compute_distance_code, match_len, read_u64_le,
-    score_distance, score_last_distance, token_supports_last_distance, tokens::Sink, tune,
+    reset_table, score_distance, score_last_distance, token_supports_last_distance, tokens::Sink,
+    tune,
 };
 
 const HASH_LEN: usize = 5;
@@ -32,12 +33,14 @@ struct SearchParams {
 #[derive(Clone, Debug)]
 pub(super) struct Workspace {
     dist_cache: [usize; 4],
+    table: Vec<u32>,
 }
 
 impl Default for Workspace {
     fn default() -> Self {
         Self {
             dist_cache: [INITIAL_LAST_DISTANCE, 11, 15, 16],
+            table: Vec::new(),
         }
     }
 }
@@ -56,8 +59,6 @@ pub(super) fn collect(
 ) {
     if input.len() <= tune::Q3_TINY_INPUT_MAX {
         collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace, sink);
-    } else if input.len() <= tune::Q3_STACK_TABLE_INPUT_MAX {
-        collect_with_stack_table_15::<1, 2>(input, max_backward_distance, workspace, sink);
     } else if input.len() <= tune::Q3_SMALL_MEDIUM_INPUT_MAX {
         collect_with_params::<15, 1, 2>(input, max_backward_distance, workspace, sink);
     } else {
@@ -74,7 +75,7 @@ pub(super) fn collect_fast_sweep(
     if input.len() <= tune::Q3_TINY_INPUT_MAX {
         collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace, sink);
     } else {
-        collect_with_stack_table_15::<1, 1>(input, max_backward_distance, workspace, sink);
+        collect_with_params::<15, 1, 1>(input, max_backward_distance, workspace, sink);
     }
 }
 
@@ -87,7 +88,7 @@ pub(super) fn collect_fast_sweep_no_lazy(
     if input.len() <= tune::Q3_TINY_INPUT_MAX {
         collect_with_stack_table_10::<4, 2>(input, max_backward_distance, workspace, sink);
     } else {
-        collect_with_stack_table_15::<0, 1>(input, max_backward_distance, workspace, sink);
+        collect_with_params::<15, 0, 1>(input, max_backward_distance, workspace, sink);
     }
 }
 
@@ -101,17 +102,17 @@ fn collect_with_params<
     workspace: &mut Workspace,
     sink: &mut impl Sink,
 ) {
-    let mut table = vec![0_u32; 1 << TABLE_BITS];
+    let Workspace { dist_cache, table } = workspace;
     collect_with_table::<TABLE_BITS, MAX_LAZY_MATCHES, BUCKET_SWEEP>(
         input,
         max_backward_distance,
-        workspace,
-        &mut table,
+        dist_cache,
+        reset_table(table, 1 << TABLE_BITS, 0),
         sink,
     );
 }
 
-#[inline(always)]
+#[inline(never)]
 fn collect_with_stack_table_10<const MAX_LAZY_MATCHES: usize, const BUCKET_SWEEP: usize>(
     input: &[u8],
     max_backward_distance: usize,
@@ -122,25 +123,7 @@ fn collect_with_stack_table_10<const MAX_LAZY_MATCHES: usize, const BUCKET_SWEEP
     collect_with_table::<10, MAX_LAZY_MATCHES, BUCKET_SWEEP>(
         input,
         max_backward_distance,
-        workspace,
-        &mut table,
-        sink,
-    );
-}
-
-#[allow(clippy::large_stack_arrays)]
-#[inline(always)]
-fn collect_with_stack_table_15<const MAX_LAZY_MATCHES: usize, const BUCKET_SWEEP: usize>(
-    input: &[u8],
-    max_backward_distance: usize,
-    workspace: &mut Workspace,
-    sink: &mut impl Sink,
-) {
-    let mut table = [0_u32; 1 << 15];
-    collect_with_table::<15, MAX_LAZY_MATCHES, BUCKET_SWEEP>(
-        input,
-        max_backward_distance,
-        workspace,
+        &mut workspace.dist_cache,
         &mut table,
         sink,
     );
@@ -154,11 +137,13 @@ fn collect_with_table<
 >(
     input: &[u8],
     max_backward_distance: usize,
-    workspace: &mut Workspace,
+    saved_dist_cache: &mut [usize; 4],
     table: &mut [u32],
     sink: &mut impl Sink,
 ) {
     debug_assert_eq!(table.len(), 1_usize << TABLE_BITS);
+    // A constant length lets keys index the table without bounds checks.
+    let table = &mut table[..1 << TABLE_BITS];
     if input.len() < HASH_TYPE_LEN {
         sink.push_tail(0, input.len());
         return;
@@ -166,7 +151,7 @@ fn collect_with_table<
 
     let mut pos = 0_usize;
     let mut insert_start = 0_usize;
-    let mut dist_cache = workspace.dist_cache;
+    let mut dist_cache = *saved_dist_cache;
     let pos_end = input.len();
     let store_end = input.len().saturating_sub(STORE_LOOKAHEAD - 1);
     let mut apply_sparse_search = SPARSE_SEARCH_WINDOW;
@@ -258,7 +243,7 @@ fn collect_with_table<
 
     sink.push_tail(insert_start, input.len());
 
-    workspace.dist_cache = dist_cache;
+    *saved_dist_cache = dist_cache;
 }
 
 #[inline(always)]

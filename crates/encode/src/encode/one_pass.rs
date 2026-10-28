@@ -10,7 +10,7 @@
 //! command and distance codes from the counts of the block before. Blocks
 //! that look incompressible take only literals, or are stored.
 
-use alloc::{boxed::Box, vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 
 use burli_core::{
     CompressError,
@@ -26,7 +26,7 @@ use super::{
     },
     hash_word_q0, literal_runs,
     prefix_code::{self, LiteralCodes},
-    read_u64_le, write_block_and_context_header, write_meta_block_len,
+    read_u64_le, reset_table, write_block_and_context_header, write_meta_block_len,
     write_simple_prefix_code_single,
 };
 
@@ -70,6 +70,10 @@ const COMMAND_MAX_BITS: usize = MAX_CODE_BITS as usize + 24 + 24;
 /// A distance code with its extra bits.
 const DISTANCE_MAX_BITS: usize = MAX_CODE_BITS as usize + 24;
 
+/// Hash table entries of [`write`] for inputs above 16 KiB, in the table the
+/// caller keeps. Smaller tables stay on the stack.
+const HEAP_TABLE_SIZE: usize = 1 << 15;
+
 /// Writes `input` as one compressed meta-block and advances `ring` past its
 /// copies. Returns `false` with nothing written when its commands would take
 /// more bytes than `input`, so the caller can store it instead.
@@ -77,28 +81,55 @@ pub(super) fn write(
     writer: &mut BitWriter,
     input: &[u8],
     max_distance: usize,
+    table: &mut Vec<u16>,
     ring: &mut DistanceRing,
 ) -> Result<bool, CompressError> {
     // Copies stay inside `input`, so they never reach past the window.
     debug_assert!(input.len() <= MAX_INPUT && input.len() <= max_distance);
     // Hash tables with an odd number of index bits, as in Google's encoder.
     match input.len() {
-        0..=512 => write_with::<{ 1 << 9 }, Flat>(writer, input, ring),
-        513..=2048 => write_with::<{ 1 << 11 }, Flat>(writer, input, ring),
-        2049..=4096 => write_with::<{ 1 << 13 }, Flat>(writer, input, ring),
-        4097..=8192 => write_with::<{ 1 << 13 }, Short>(writer, input, ring),
-        8193..=16384 => write_with::<{ 1 << 15 }, Short>(writer, input, ring),
-        _ => write_with::<{ 1 << 15 }, Long>(writer, input, ring),
+        0..=512 => write_with_stack_table::<{ 1 << 9 }, Flat>(writer, input, ring),
+        513..=2048 => write_with_stack_table::<{ 1 << 11 }, Flat>(writer, input, ring),
+        2049..=4096 => write_with_stack_table::<{ 1 << 13 }, Flat>(writer, input, ring),
+        4097..=8192 => write_with_stack_table::<{ 1 << 13 }, Short>(writer, input, ring),
+        8193..=16384 => write_with_heap_table::<Short>(writer, input, table, ring),
+        _ => write_with_heap_table::<Long>(writer, input, table, ring),
     }
 }
 
-/// [`write`] with a hash table of `TABLE_SIZE` entries and the fixed code
-/// `C`, whose tables then sit at a constant address. Each size gets its
-/// own function, so register allocation in one does not shape the others.
+/// [`write_with`] on a hash table of `TABLE_SIZE` entries on the stack. Each
+/// size gets its own function, so register allocation in one does not shape
+/// the others.
 #[inline(never)]
+fn write_with_stack_table<const TABLE_SIZE: usize, C: Code>(
+    writer: &mut BitWriter,
+    input: &[u8],
+    ring: &mut DistanceRing,
+) -> Result<bool, CompressError> {
+    write_with::<TABLE_SIZE, C>(writer, input, &mut [0; TABLE_SIZE], ring)
+}
+
+/// [`write_with`] on [`HEAP_TABLE_SIZE`] entries of `table`.
+#[inline(never)]
+fn write_with_heap_table<C: Code>(
+    writer: &mut BitWriter,
+    input: &[u8],
+    table: &mut Vec<u16>,
+    ring: &mut DistanceRing,
+) -> Result<bool, CompressError> {
+    let table = reset_table(table, HEAP_TABLE_SIZE, 0)
+        .try_into()
+        .expect("table of HEAP_TABLE_SIZE entries");
+    write_with::<HEAP_TABLE_SIZE, C>(writer, input, table, ring)
+}
+
+/// [`write`] with a hash table of `TABLE_SIZE` entries and the fixed code
+/// `C`, whose tables then sit at a constant address.
+#[inline(always)]
 fn write_with<const TABLE_SIZE: usize, C: Code>(
     writer: &mut BitWriter,
     input: &[u8],
+    table: &mut [u16; TABLE_SIZE],
     ring: &mut DistanceRing,
 ) -> Result<bool, CompressError> {
     let mark = writer.mark();
@@ -106,12 +137,11 @@ fn write_with<const TABLE_SIZE: usize, C: Code>(
     write_block_and_context_header(writer)?;
     let literals = write_literal_code(writer, input)?;
     C::CODE.write_header(writer);
-    let mut table = [0_u16; TABLE_SIZE];
     let fits = write_commands(
         writer,
         input,
         0,
-        &mut table,
+        table,
         &literals,
         &C::CODE.tables,
         ring,

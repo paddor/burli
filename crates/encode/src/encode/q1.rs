@@ -7,7 +7,7 @@ use burli_core::{
 
 use super::{
     COMMAND_ALPHABET_SIZE, DenseSymbolCode, DistanceRing, LITERAL_ALPHABET_SIZE,
-    MAX_META_BLOCK_SIZE, PrefixCodeScratch, match_len, read_u64_le, tune,
+    MAX_META_BLOCK_SIZE, PrefixCodeScratch, match_len, read_u64_le, reset_table, tune,
     write_block_and_context_header,
     write_fast_dense_prefix_code_array_from_frequencies_with_scratch, write_meta_block_len,
     write_q1_internal_command_prefix_codes,
@@ -56,6 +56,7 @@ struct LiteralSpan {
 #[derive(Clone, Debug, Default)]
 pub(super) struct Workspace {
     pub(super) table: Vec<u32>,
+    short_table: Vec<u16>,
     batch: Batch,
     prefix: PrefixCodeScratch,
 }
@@ -521,15 +522,17 @@ pub(super) fn collect_short<S: Sink>(
             input,
             max_backward_distance,
         ),
-        16384 => collect_with_stack_u16_table::<14, 16384, SKIP_START, true, S>(
+        16384 => collect_with_heap_u16_table::<14, 16384, SKIP_START, true, S>(
             sink,
             input,
             max_backward_distance,
+            &mut workspace.short_table,
         ),
-        32768 => collect_with_stack_u16_table::<15, 32768, SKIP_START, true, S>(
+        32768 => collect_with_heap_u16_table::<15, 32768, SKIP_START, true, S>(
             sink,
             input,
             max_backward_distance,
+            &mut workspace.short_table,
         ),
         _ => {
             let table = &mut workspace.table;
@@ -609,7 +612,6 @@ impl Workspace {
         )
     }
 
-    #[allow(clippy::large_stack_arrays)]
     fn collect_with_64k_sparse_stride(
         &mut self,
         input: &[u8],
@@ -622,12 +624,11 @@ impl Workspace {
             return &self.batch;
         }
 
-        let mut table = [NO_POSITION; 1 << 16];
         collect_with_u32_table_m6_sparse_stride::<16, 64>(
             &mut self.batch,
             input,
             max_backward_distance,
-            &mut table,
+            reset_table(&mut self.table, 1 << 16, NO_POSITION),
         );
         &self.batch
     }
@@ -663,6 +664,30 @@ fn collect_with_stack_u16_table<
         input,
         max_backward_distance,
         &mut table,
+    );
+}
+
+#[inline(never)]
+fn collect_with_heap_u16_table<
+    const TABLE_BITS: usize,
+    const TABLE_LEN: usize,
+    const SKIP_START: usize,
+    const USE_LAST_DISTANCE: bool,
+    S: Sink,
+>(
+    batch: &mut S,
+    input: &[u8],
+    max_backward_distance: usize,
+    table: &mut Vec<u16>,
+) {
+    let table = reset_table(table, TABLE_LEN, NO_POSITION_16)
+        .try_into()
+        .expect("table of TABLE_LEN entries");
+    collect_with_u16_table_m4::<TABLE_BITS, TABLE_LEN, SKIP_START, USE_LAST_DISTANCE, _>(
+        batch,
+        input,
+        max_backward_distance,
+        table,
     );
 }
 
@@ -763,6 +788,8 @@ fn collect_with_u32_table_m6_sparse_stride<const TABLE_BITS: usize, const SPARSE
     table: &mut [u32],
 ) {
     debug_assert_eq!(table.len(), 1_usize << TABLE_BITS);
+    // A constant length lets keys index the table without bounds checks.
+    let table = &mut table[..1 << TABLE_BITS];
     debug_assert!(SPARSE_STRIDE.is_power_of_two());
     let max_distance = max_backward_distance.min(MAX_DISTANCE);
     let len_limit = input

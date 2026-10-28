@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Compression takes at most 120 KiB of stack, down from 608 KiB with LTO.
+  It overflowed the 512 KiB stacks of Ruby fibers and of .NET 8 threads on
+  macOS. Output is unchanged.
+
 ## [0.3.7] - 2026-10-28
 
 - Add `PushDecoder`, which decodes a stream from input and output in

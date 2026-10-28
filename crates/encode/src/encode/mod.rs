@@ -43,6 +43,8 @@ const INITIAL_DISTANCE_RING: [usize; 4] = [INITIAL_LAST_DISTANCE, 11, 15, 16];
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Workspace {
+    /// Hash table of the q0 one-pass encoder for pieces above 16 KiB.
+    one_pass_table: Vec<u16>,
     q1: q1::Workspace,
     two_pass: two_pass::Commands,
     q2: q2::Workspace,
@@ -53,6 +55,17 @@ pub(crate) struct Workspace {
     /// The last input byte of the meta-blocks so far, which literal contexts
     /// of the next one start from.
     last_byte: u8,
+}
+
+/// Refills `table` with `len` entries of `fill`, keeping its allocation.
+///
+/// Hash tables above 16 KiB live in a workspace instead of on the stack:
+/// with LTO, the tables of all collectors add up in one frame, which then
+/// overflows the 512 KiB stacks of fibers and of .NET 8 threads on macOS.
+fn reset_table<T: Copy>(table: &mut Vec<T>, len: usize, fill: T) -> &mut [T] {
+    table.clear();
+    table.resize(len, fill);
+    table
 }
 
 /// The decoder's last four distances at the next meta-block boundary.
@@ -475,13 +488,14 @@ fn max_literal_only_size(input_len: usize) -> usize {
 /// Writes q0 `input` with the one-pass encoder, as meta-blocks of
 /// [`one_pass::MAX_INPUT`] bytes or of the window, whichever is shorter.
 /// Pieces that look incompressible, or do not shrink, are stored. Advances
-/// `ring` past the copies.
+/// `ring` past the copies. Long pieces hash into `table`.
 fn write_one_pass_meta_blocks(
     writer: &mut BitWriter,
     input: &[u8],
     mut input_base: usize,
     allow_cross_collector_shortcuts: bool,
     max_backward_distance: usize,
+    table: &mut Vec<u16>,
     ring: &mut DistanceRing,
 ) -> Result<(), CompressError> {
     for piece in input.chunks(max_backward_distance.min(one_pass::MAX_INPUT)) {
@@ -489,7 +503,7 @@ fn write_one_pass_meta_blocks(
         // stored without matching.
         let store = sparse::decision(piece).store_uncompressed
             && sparse::q0_store_block(input_base, allow_cross_collector_shortcuts);
-        if store || !one_pass::write(writer, piece, max_backward_distance, ring)? {
+        if store || !one_pass::write(writer, piece, max_backward_distance, table, ring)? {
             crate::metablock::write_uncompressed_meta_block(writer, piece)?;
         }
         input_base += piece.len();
@@ -524,6 +538,7 @@ pub(crate) fn compress_one_pass(
         0,
         true,
         max_backward_distance,
+        &mut Vec::new(),
         &mut ring,
     )?;
     crate::metablock::write_last_empty_meta_block(&mut writer)?;
@@ -730,6 +745,7 @@ impl EncoderPlan {
                     input_base,
                     allow_cross_collector_shortcuts,
                     global_max_backward_distance,
+                    &mut workspace.one_pass_table,
                     &mut workspace.distance_ring,
                 )?;
                 return Ok(Copies::Tracked);
@@ -744,6 +760,7 @@ impl EncoderPlan {
                     input_base,
                     allow_cross_collector_shortcuts,
                     global_max_backward_distance,
+                    &mut workspace.one_pass_table,
                     &mut workspace.distance_ring,
                 )?;
             }
