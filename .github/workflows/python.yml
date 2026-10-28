@@ -20,11 +20,22 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.9", "3.14"]
+        # Ubuntu 26.04 has no Python 3.9.
+        exclude:
+          - os: ubuntu-latest
+            python: "3.9"
+        include:
+          - os: ubuntu-24.04
+            python: "3.9"
     defaults:
       run:
         working-directory: bindings/python
     steps:
       - uses: actions/checkout@v4
+      # Test the code the wheels ship, built without the repo CPU tuning.
+      - name: Disable local Cargo configuration
+        shell: bash
+        run: rm -f ../../.cargo/config.toml
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
