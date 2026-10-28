@@ -59,3 +59,37 @@ Deno.test("empty input", async () => {
   await init();
   assertEquals(decompress(compress(new Uint8Array())), new Uint8Array());
 });
+
+type Param = {
+  kind?: string;
+  name?: string;
+  tsType?: unknown;
+  left?: { name?: string; tsType?: unknown };
+};
+
+// JSR publishes the types of the public API as declared, so a parameter
+// typed only by its default value takes that value's literal type.
+Deno.test("public parameters have explicit types", async () => {
+  const doc = await new Deno.Command(Deno.execPath(), {
+    args: ["doc", "--json", new URL("./mod.ts", import.meta.url).href],
+    stdout: "piped",
+  }).output();
+  assert(doc.success);
+  const untyped: string[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) return value.forEach(visit);
+    if (value === null || typeof value !== "object") return;
+    const params = (value as { params?: unknown }).params;
+    if (Array.isArray(params)) {
+      for (const param of params as Param[]) {
+        const tsType = param.kind === "assign"
+          ? param.left?.tsType
+          : param.tsType;
+        if (!tsType) untyped.push(param.left?.name ?? param.name ?? "?");
+      }
+    }
+    Object.values(value).forEach(visit);
+  };
+  visit(JSON.parse(new TextDecoder().decode(doc.stdout)));
+  assertEquals(untyped, []);
+});

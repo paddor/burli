@@ -140,7 +140,7 @@ function getCompressorInner(compressor: Compressor): Wasm.Compressor {
 
 /** Reusable compression context for repeated messages at one quality. */
 export class Compressor {
-  constructor(qualityValue = DEFAULT_QUALITY) {
+  constructor(qualityValue: number = DEFAULT_QUALITY) {
     compressorInner.set(
       this,
       new WasmCompressor(quality(qualityValue)),

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-10-28
+
+- Update `burli-encode` to `0.3.6`, which keeps hash tables above 16 KiB off
+  the stack.
+
 ## [0.2.7] - 2026-10-28
 
 - Update `burli-encode` to `0.3.5` and `burli-decode` to `0.3.6`.

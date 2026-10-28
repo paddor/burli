@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-28
+
 - Keep hash tables above 16 KiB in the workspace, which contexts and
   streams reuse, instead of on the stack. With LTO, compression took up to
   608 KiB of stack, which overflowed the 512 KiB stacks of Ruby fibers and
