@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add `StreamEncoder::get_ref` and `StreamEncoder::get_mut`.
+
 ## [0.3.4] - 2026-10-28
 
 - Enforce `#![forbid(unsafe_code)]`. The match scanner reads words through

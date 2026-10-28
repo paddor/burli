@@ -107,6 +107,7 @@ Requires cargo-fuzz:
 cargo fuzz run burli-decode
 cargo fuzz run burli-decode-reuse
 cargo fuzz run burli-roundtrip
+cargo fuzz run burli-push
 ```
 
 The code has no `unsafe`, so targets can build with `--sanitizer none`.

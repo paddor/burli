@@ -1,7 +1,8 @@
 //! Pure Rust Brotli codec.
 //!
 //! The crate exposes small one-shot helpers first, reusable contexts for
-//! repeated work, and `std::io` streaming types behind the `std` feature.
+//! repeated work, [`PushDecoder`] for input and output in pieces, and
+//! `std::io` streaming types behind the `std` feature.
 //! Encoding currently supports qualities 0 through 5. Decoding accepts standard
 //! Brotli streams produced at all normal quality levels.
 
@@ -240,6 +241,8 @@ pub fn decompress_into_slice_with_options(
 #[cfg(feature = "alloc")]
 #[allow(deprecated)]
 pub use burli_decode::context::{DecompressContext, Decompressor};
+#[cfg(feature = "alloc")]
+pub use burli_decode::push::{DecodeProgress, DecodeStatus, PushDecoder};
 #[cfg(feature = "std")]
 pub use burli_decode::streaming::IntoInnerError;
 #[cfg(feature = "std")]

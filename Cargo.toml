@@ -60,6 +60,10 @@ name = "burli-output-sizing"
 path = "tests/output_sizing.rs"
 
 [[test]]
+name = "burli-push"
+path = "tests/push.rs"
+
+[[test]]
 name = "burli-roundtrip"
 path = "tests/roundtrip.rs"
 

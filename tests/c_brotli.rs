@@ -296,6 +296,94 @@ fn c_brotli_streams_decode_through_reused_decompressor() {
     }
 }
 
+/// Decodes `encoded` with `decoder` in pseudo-random pieces of at most
+/// `max_input` input and `max_output` output bytes.
+fn push_decode_in_pieces(
+    mut decoder: burli::PushDecoder,
+    encoded: &[u8],
+    max_input: usize,
+    max_output: usize,
+) -> Result<Vec<u8>, burli::BurliError> {
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut piece = move |max: usize| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state % max as u64) as usize + 1
+    };
+    let mut output = Vec::new();
+    let mut room = vec![0; max_output];
+    let mut pos = 0;
+    loop {
+        let end = pos + piece(max_input).min(encoded.len() - pos);
+        let size = piece(max_output);
+        let progress = decoder.decompress(&encoded[pos..end], &mut room[..size])?;
+        output.extend_from_slice(&room[..progress.written]);
+        pos += progress.consumed;
+        match progress.status {
+            burli::DecodeStatus::Finished => {
+                assert_eq!(pos, encoded.len());
+                return Ok(output);
+            }
+            burli::DecodeStatus::NeedsInput if pos == encoded.len() => {
+                return Err(burli::BurliError::Format("unexpected end of Brotli input"));
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn c_brotli_streams_decode_through_push_decoder_in_any_split() {
+    let mut inputs = generated_conformance_inputs();
+    inputs.push(("mixed", mixed_input()));
+    for (name, input) in inputs {
+        for quality in [0, 5, 11] {
+            for mode in BROTLI_MODES {
+                for lgwin in [10, 22] {
+                    let encoded = c_brotli_compress_with(&input, quality, mode, lgwin);
+                    for (max_input, max_output) in [(1 << 20, 1 << 20), (13, 4096), (4096, 29)] {
+                        let label = format!(
+                            "C q{quality} mode={} lgwin={lgwin} {name}, pieces {max_input} in, \
+                             {max_output} out",
+                            mode_name(mode)
+                        );
+                        let decoded = push_decode_in_pieces(
+                            burli::PushDecoder::new(),
+                            &encoded,
+                            max_input,
+                            max_output,
+                        )
+                        .unwrap_or_else(|error| panic!("{label} failed: {error:?}"));
+                        assert_bytes_eq(&decoded, &input, &label);
+                    }
+                }
+            }
+        }
+    }
+
+    let dictionary =
+        b"raw-dictionary-entry:function renderTemplate(item){return item.label + item.value;}|"
+            .repeat(64);
+    let input = dictionary[128..dictionary.len() - 128].to_vec();
+    let encoded = c_brotli_compress_with_raw_dictionary(&input, &dictionary, 11);
+    for (max_input, max_output) in [(1 << 20, 1 << 20), (5, 64), (64, 5)] {
+        let decoder =
+            burli::PushDecoder::with_raw_dictionary(burli::decode::RawDictionary::new(&dictionary));
+        let decoded = push_decode_in_pieces(decoder, &encoded, max_input, max_output).unwrap();
+        assert_bytes_eq(
+            &decoded,
+            &input,
+            "C q11 raw dictionary through push decoder",
+        );
+        assert!(
+            push_decode_in_pieces(burli::PushDecoder::new(), &encoded, max_input, max_output)
+                .is_err(),
+            "a raw dictionary stream must not decode without its dictionary"
+        );
+    }
+}
+
 #[test]
 fn c_brotli_raw_dictionary_streams_decode_through_reused_decompressor() {
     const LIMIT: usize = 1 << 20;
