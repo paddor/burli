@@ -4,7 +4,7 @@ exclude = ["bench", "bindings", "fuzz", "jsr"]
 
 [package]
 name = "burli"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2024"
 rust-version = "1.89"
 description = "Fast, memory-safe Rust Brotli codec"
@@ -25,7 +25,7 @@ paranoid = ["burli-core/paranoid", "burli-encode/paranoid", "burli-decode/parano
 
 [dependencies]
 burli-core = { version = "0.3.2", path = "crates/core", default-features = false }
-burli-encode = { version = "0.3.5", path = "crates/encode", default-features = false }
+burli-encode = { version = "0.3.6", path = "crates/encode", default-features = false }
 burli-decode = { version = "0.3.6", path = "crates/decode", default-features = false }
 
 [lints]
