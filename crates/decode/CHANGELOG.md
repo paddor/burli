@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-28
+
 - Add `push::PushDecoder`, which decodes a stream from input and output in
   pieces. It takes input only when it needs more, writes output as it
   decodes it, also within a meta-block, and never takes input past the

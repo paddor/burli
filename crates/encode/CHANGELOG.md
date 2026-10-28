@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-28
+
 - Add `StreamEncoder::get_ref` and `StreamEncoder::get_mut`.
 
 ## [0.3.4] - 2026-10-28
