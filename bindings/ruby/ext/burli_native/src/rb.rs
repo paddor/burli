@@ -254,11 +254,15 @@ impl InputBytes {
     /// released. Copies them when the String cannot be locked, as while
     /// another thread works on it.
     pub fn lock(&mut self) {
-        #[cfg(ruby_engine = "mri")]
-        if let Self::Borrowed(string) = self
-            && !string.lock()
-        {
-            *self = Self::Owned(string.as_slice().to_vec());
+        match self {
+            #[cfg(ruby_engine = "mri")]
+            Self::Borrowed(string) => {
+                if !string.lock() {
+                    let bytes = string.as_slice().to_vec();
+                    *self = Self::Owned(bytes);
+                }
+            }
+            Self::Owned(_) => {}
         }
     }
 }
@@ -327,7 +331,7 @@ pub fn value_to_i64(value: VALUE) -> RbResult<i64> {
     let mut out = 0;
     // SAFETY: raises for non-Integers, which `protect` catches.
     protect(|| {
-        out = unsafe { rb_sys::rb_num2long(value) };
+        out = unsafe { rb_sys::rb_num2ll(value) };
         qnil()
     })?;
     Ok(out)

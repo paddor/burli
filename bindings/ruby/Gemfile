@@ -4,7 +4,8 @@ source "https://rubygems.org"
 
 gemspec
 
-gem "brotli"
+# The brotli gem does not build on TruffleRuby.
+gem "brotli", platforms: %i[mri windows]
 gem "minitest"
 gem "rake"
 gem "rake-compiler"

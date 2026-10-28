@@ -91,6 +91,7 @@ class TestBurli < Minitest::Test
   end
 
   def test_decodes_with_a_raw_dictionary
+    skip "needs the brotli gem" if Brotli.equal?(Burli)
     dictionary = Payloads.text(10_000)
     payload = Payloads.text(20_000)
     encoded = Brotli.deflate(payload, dictionary: dictionary)

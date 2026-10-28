@@ -2,7 +2,12 @@
 
 require "minitest/autorun"
 require "burli"
-require "brotli"
+begin
+  require "brotli"
+rescue LoadError
+  # Without the brotli gem, as on TruffleRuby, test burli against itself.
+  Brotli = Burli
+end
 
 Warning[:experimental] = false
 
