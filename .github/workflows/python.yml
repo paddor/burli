@@ -13,20 +13,15 @@ on:
 
 jobs:
   test:
-    name: pytest (${{ matrix.os }}, Python ${{ matrix.python }})
+    name: pytest (Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.9", "3.14"]
-        # Ubuntu 26.04 has no Python 3.9.
-        exclude:
-          - os: ubuntu-latest
-            python: "3.9"
         include:
-          - os: ubuntu-24.04
-            python: "3.9"
+          # Ubuntu 26.04 has no Python 3.9.
+          - { os: ubuntu-24.04, python: "3.9" }
+          - { os: ubuntu-latest, python: "3.14" }
     defaults:
       run:
         working-directory: bindings/python

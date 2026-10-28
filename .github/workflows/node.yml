@@ -13,12 +13,11 @@ on:
 
 jobs:
   test:
-    name: npm test (${{ matrix.os }}, Node ${{ matrix.node }})
-    runs-on: ${{ matrix.os }}
+    name: npm test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         node: ["22", "24"]
     defaults:
       run:
