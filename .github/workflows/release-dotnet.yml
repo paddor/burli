@@ -62,7 +62,7 @@ jobs:
         shell: bash
         working-directory: bindings/dotnet
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The repo config tunes for the build CPU; the package must run on any.
       - name: Disable local Cargo configuration
         run: rm -f ../../.cargo/config.toml
@@ -86,7 +86,7 @@ jobs:
           fi
           mkdir -p "runtimes/${{ matrix.rid }}"
           cp "native/target/${{ matrix.target }}/release/${{ matrix.library }}" "runtimes/${{ matrix.rid }}/"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.rid }}
           path: bindings/dotnet/runtimes
@@ -102,8 +102,8 @@ jobs:
       run:
         working-directory: bindings/dotnet
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.0.x
@@ -116,7 +116,7 @@ jobs:
             test "$GITHUB_REF_NAME" = "burli-dotnet-v$version"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: native-*
           merge-multiple: true
@@ -128,7 +128,7 @@ jobs:
           done
       - run: dotnet pack Burli.csproj --configuration Release --output nuget
       - run: unzip -l "nuget/Burli.${{ steps.version.outputs.version }}.nupkg"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nuget
           path: bindings/dotnet/nuget/*.nupkg
@@ -165,12 +165,12 @@ jobs:
         if: matrix.container
         shell: sh
         run: apk add --no-cache bash
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         if: ${{ !matrix.container }}
         with:
           dotnet-version: 8.0.x
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: nuget
           path: nuget
@@ -188,10 +188,10 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: nuget
           path: nuget
