@@ -20,7 +20,7 @@ jobs:
       run:
         working-directory: bindings/ruby
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "4.0"
@@ -32,7 +32,7 @@ jobs:
           version="$(ruby -Ilib -rburli/version -e 'print Burli::VERSION')"
           test "$GITHUB_REF_NAME" = "burli-ruby-v$version"
       - run: bundle exec rake build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: gem-source
           path: bindings/ruby/pkg/*.gem
@@ -52,7 +52,7 @@ jobs:
           - arm64-darwin
           - x64-mingw-ucrt
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The repo config tunes for the build CPU; gems must run on any.
       - name: Disable local Cargo configuration
         run: rm -f .cargo/config.toml
@@ -65,7 +65,7 @@ jobs:
           platform: ${{ matrix.platform }}
           ruby-versions: "3.3,3.4,4.0"
           working-directory: bindings/ruby
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: gem-${{ matrix.platform }}
           path: ${{ steps.cross-gem.outputs.gem-path }}
@@ -101,11 +101,11 @@ jobs:
             ruby: "4.0"
             gem: source
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: gem-${{ matrix.gem }}
           path: dist
@@ -131,7 +131,7 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "4.0"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: gem-*
           merge-multiple: true

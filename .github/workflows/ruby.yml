@@ -20,7 +20,7 @@ jobs:
       run:
         working-directory: bindings/ruby
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Test the code the gems ship, built without the repo CPU tuning.
       - name: Disable local Cargo configuration
         shell: bash

@@ -26,7 +26,7 @@ jobs:
       run:
         working-directory: bindings/python
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Test the code the wheels ship, built without the repo CPU tuning.
       - name: Disable local Cargo configuration
         shell: bash
@@ -37,7 +37,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bindings/python
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: cargo fmt --check

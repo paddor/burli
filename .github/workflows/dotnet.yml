@@ -24,7 +24,7 @@ jobs:
         shell: bash
         working-directory: bindings/dotnet
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Test the code the package ships, built without the repo CPU tuning.
       - name: Disable local Cargo configuration
         run: rm -f ../../.cargo/config.toml
@@ -34,7 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bindings/dotnet/native
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.0.x

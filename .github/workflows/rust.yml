@@ -22,7 +22,7 @@ jobs:
           # The aarch64 SIMD paths.
           - { os: ubuntu-24.04-arm, toolchain: stable }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
@@ -51,7 +51,7 @@ jobs:
     name: fmt + clippy + docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

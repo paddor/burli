@@ -54,7 +54,7 @@ jobs:
         shell: bash
         working-directory: bindings/node
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The repo config tunes for the build CPU; packages must run on any.
       - name: Disable local Cargo configuration
         run: rm -f ../../.cargo/config.toml
@@ -63,7 +63,7 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: mlugg/setup-zig@v2
         if: matrix.cross
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -85,7 +85,7 @@ jobs:
           cp "burli.${{ matrix.platform }}.node" burli.node
           npm test
           rm burli.node
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.platform }}
           path: bindings/node/burli.${{ matrix.platform }}.node
@@ -101,8 +101,8 @@ jobs:
       run:
         working-directory: bindings/node
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -116,7 +116,7 @@ jobs:
             test "$GITHUB_REF_NAME" = "burli-node-v$version"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: native-*
           merge-multiple: true
@@ -136,7 +136,7 @@ jobs:
           done
           npm pack . --pack-destination packages
           ls -l packages
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: npm-packages
           path: bindings/node/packages/*.tgz
@@ -165,10 +165,10 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npm-packages
           path: packages
@@ -201,11 +201,11 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npm-packages
           path: packages
