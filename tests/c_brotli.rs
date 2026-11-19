@@ -122,6 +122,17 @@ fn unused_huffman_trees_match_c_decoder() {
 }
 
 #[test]
+fn max_width_distance_block_switches_match_c_decoder() {
+    let (encoded, expected) = fixtures::max_width_distance_block_switches();
+    let label = "max-width distance block switches";
+    let decoded = c_brotli_decompress(&encoded, expected.len()).unwrap();
+    assert!(decoded == expected, "{label}: wrong C output");
+    for chunk in [13, 4096] {
+        assert_stream_decodes(&encoded, &expected, label, chunk);
+    }
+}
+
+#[test]
 fn c_brotli_q0_to_q5_decode_through_burli() {
     for quality in 0..=5 {
         for input in representative_inputs() {

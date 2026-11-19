@@ -27,6 +27,20 @@ fn flushed_streams_decode_with_rust_brotli() {
     }
 }
 
+/// mbrotli 0.5.22 rejects these streams (GHSA-gf34-947h-27j2).
+#[test]
+fn max_width_distance_block_switches() {
+    let (encoded, expected) = fixtures::max_width_distance_block_switches();
+    let decoded = burli::decompress(&encoded).unwrap();
+    assert!(decoded == expected, "one-shot: wrong output");
+    let mut slice = vec![0; expected.len()];
+    assert_eq!(
+        burli::decompress_into_slice(&encoded, &mut slice).unwrap(),
+        expected.len()
+    );
+    assert!(slice == expected, "slice: wrong output");
+}
+
 #[test]
 fn valid_unused_huffman_trees() {
     for (unused_literal, unused_distance) in
